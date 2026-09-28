@@ -1,8 +1,8 @@
-# ww — "where was I" across repos and agent sessions
+# rollcall — "where was I" across repos and agent sessions
 
 **Status:** Design approved in brainstorming (Sections 1–4 + generic-discovery revision). Awaiting written-spec review.
 **Date:** 2026-09-29
-**Name:** `ww` is a working name; final name checked for crates.io / Homebrew availability before first release.
+**Name:** `rollcall` — takes attendance of every repo and agent session. crates.io and Homebrew names verified free on 2026-09-29. A short alias is offered as an opt-in shell snippet, never as a shipped binary.
 
 ## 1. Brief
 
@@ -18,8 +18,8 @@ Existing tools (claude-mem, `.remember`, `/handoff`, `/repo-debt-report`, graphi
 
 ### Generic by default
 
-- Point `ww` at **any folder**; it finds **every git repo** under it. No config, no assumed layout.
-- Agent sessions are an **optional enrichment**. With no agent logs on the machine, `ww` is a complete multi-repo git dashboard and shows no agent UI.
+- Point `rollcall` at **any folder**; it finds **every git repo** under it. No config, no assumed layout.
+- Agent sessions are an **optional enrichment**. With no agent logs on the machine, `rollcall` is a complete multi-repo git dashboard and shows no agent UI.
 
 ### Grounding data (author's machine, 2026-09-28)
 
@@ -42,7 +42,7 @@ Delightful UX (demo-able TUI), a hard technical core (repo discovery, incrementa
 |---|---|
 | Language | Rust |
 | Interfaces | TUI for humans + MCP/CLI for agents, one shared core |
-| Root | `ww [path]`, default = current directory |
+| Root | `rollcall [path]`, default = current directory |
 | Discovery | Any git repo at any depth under the root |
 | Agent sessions | Optional; v0 sources Claude Code + Codex behind a `SessionSource` trait |
 | Obsidian / notes | Deferred to a later adapter |
@@ -65,13 +65,13 @@ Delightful UX (demo-able TUI), a hard technical core (repo discovery, incrementa
 
 All commands take an optional `[path]` root; default is the current directory.
 
-- `ww [path]` — TUI.
-- `ww status [path] [--json]` — table for scripts/agents.
-- `ww scan [path]` — explicit rescan.
-- `ww doctor [path]` — discovery and parser diagnostics.
-- `ww mcp [--root <path>]` — stdio MCP server; root defaults to the server process's cwd. Tools `where_was_i(repo?)`, `list_stale()`.
+- `rollcall [path]` — TUI.
+- `rollcall status [path] [--json]` — table for scripts/agents.
+- `rollcall scan [path]` — explicit rescan.
+- `rollcall doctor [path]` — discovery and parser diagnostics.
+- `rollcall mcp [--root <path>]` — stdio MCP server; root defaults to the server process's cwd. Tools `where_was_i(repo?)`, `list_stale()`.
 
-Optional config (`$XDG_CONFIG_HOME/ww/config.toml`) only for: saved extra roots, extra skip patterns, `redact_prompts`, stale threshold. Never required.
+Optional config (`$XDG_CONFIG_HOME/rollcall/config.toml`) only for: saved extra roots, extra skip patterns, `redact_prompts`, stale threshold. Never required.
 
 ### Per repo → branch/worktree
 
@@ -84,11 +84,11 @@ Optional config (`$XDG_CONFIG_HOME/ww/config.toml`) only for: saved extra roots,
 
 | Crate | Responsibility |
 |---|---|
-| `ww-core` | Domain types (`Repo`, `Worktree`, `Session`, `Attention`), `Index` trait, query API. No I/O. |
-| `ww-git` | Repo discovery + status via `gix`, parallel via `rayon`. |
-| `ww-sessions` | `SessionSource` trait; `claude` and `codex` impls; offset-based JSONL reads; `cwd`+`gitBranch` → worktree match. Adding an agent = one new impl, no core changes. |
-| `ww-store` | SQLite (`rusqlite`) cache implementing `Index`; migrations. One cache file per root: `$XDG_CACHE_HOME/ww/<root-hash>.sqlite`. |
-| `ww-cli` | `clap` commands, `ratatui` TUI, `rmcp` MCP server — all over the same core query API. |
+| `rollcall-core` | Domain types (`Repo`, `Worktree`, `Session`, `Attention`), `Index` trait, query API. No I/O. |
+| `rollcall-git` | Repo discovery + status via `gix`, parallel via `rayon`. |
+| `rollcall-sessions` | `SessionSource` trait; `claude` and `codex` impls; offset-based JSONL reads; `cwd`+`gitBranch` → worktree match. Adding an agent = one new impl, no core changes. |
+| `rollcall-store` | SQLite (`rusqlite`) cache implementing `Index`; migrations. One cache file per root: `$XDG_CACHE_HOME/rollcall/<root-hash>.sqlite`. |
+| `rollcall-cli` | `clap` commands, `ratatui` TUI, `rmcp` MCP server — all over the same core query API. |
 
 ### Out of v0 (roadmap)
 
@@ -98,7 +98,7 @@ Daemon/watcher (B), LLM session summaries, Obsidian adapter, Cursor source, hook
 
 ### Scan pipeline
 
-Runs on `ww scan`, and implicitly before `status` / TUI / MCP queries when the cache is older than 30 s.
+Runs on `rollcall scan`, and implicitly before `status` / TUI / MCP queries when the cache is older than 30 s.
 
 1. **Discover repos** — parallel walk of the root, any depth:
    - `.git` **directory** → normal repo.
@@ -108,7 +108,7 @@ Runs on `ww scan`, and implicitly before `status` / TUI / MCP queries when the c
    - The walk continues **into** a discovered repo's working tree (to find nested repos) but not into its `.git` dir.
    - Symlinks are **not followed** by default (`--follow-symlinks` opts in, with a visited-inode set to break loops).
    - Skips: a built-in directory-name list (`node_modules`, `target`, `.venv`, `venv`, `dist`, `build`, `.cache`) extensible via config. `.gitignore` is **not** used for discovery, so repos cloned into ignored folders are still found. No max-depth cap.
-   - Unreadable directories are counted and reported by `ww doctor`; the walk continues.
+   - Unreadable directories are counted and reported by `rollcall doctor`; the walk continues.
    - Worktrees listed by `git worktree list` whose path is **outside** the root are shown, marked `external`.
 2. **Git status per worktree** via `gix`. A failing repo gets an `Error` state row with the message; the scan continues.
 3. **Sessions** (skipped entirely when no source finds logs): per source, list log files and compare stored `(path, inode, size, offset)`.
@@ -122,7 +122,7 @@ Runs on `ww scan`, and implicitly before `status` / TUI / MCP queries when the c
 
 - Unknown record types and malformed lines are skipped and counted.
 - Each source stores `parser_version`; bumping it forces re-parse from offset 0.
-- `ww doctor` reports per source: files, records, skipped lines, orphans — a format change shows as a spike, not silent bad data.
+- `rollcall doctor` reports per source: files, records, skipped lines, orphans — a format change shows as a spike, not silent bad data.
 
 ### Privacy
 
@@ -140,7 +140,7 @@ Runs on `ww scan`, and implicitly before `status` / TUI / MCP queries when the c
 ### TUI (`ratatui`)
 
 ```
- ww ─ ~/Projects ─ 15 repos · 29 worktrees · scanned 4s ago           [r]escan
+ rollcall ─ ~/Projects ─ 15 repos · 29 worktrees · scanned 4s ago           [r]escan
 ┌ Repos (by attention) ──────────────┐┌ CRM ───────────────────────────────────────────┐
 │▶ CRM            ↑3 ●2  2 stale wt  ││ Worktrees                                       │
 │  sutra          ●5     1 no-upstr  ││  main                         ✓ clean  ↑0       │
@@ -161,7 +161,7 @@ Runs on `ww scan`, and implicitly before `status` / TUI / MCP queries when the c
 - Semantic colours: unpushed = amber, dirty = blue, stale = dim, error = red. Must work on light and dark terminals.
 - Nested and bare repos show a small type badge; external worktrees are marked `ext`.
 
-### `ww status`
+### `rollcall status`
 
 Plain table matching the TUI; `--json` emits the same stable schema as the MCP tools.
 
@@ -179,7 +179,7 @@ Plain table matching the TUI; `--json` emits the same stable schema as the MCP t
 - **No-agent mode:** `HOME` pointed at an empty dir → no session UI, no errors, `sessions: []` in JSON.
 - **Store:** migrations, idempotent rescan (two scans → identical rows), simulated crash mid-scan leaves prior state intact.
 - **TUI:** `ratatui` `TestBackend` + `insta` snapshots, with and without session data.
-- **MCP:** integration test spawns `ww mcp` over stdio, calls both tools, asserts JSON schema and the token cap.
+- **MCP:** integration test spawns `rollcall mcp` over stdio, calls both tools, asserts JSON schema and the token cap.
 - **Bench:** `criterion` on a synthetic tree (~50 repos, ~5k logs) in CI; local-only script benchmarks real `~/Projects`, `~/.claude`, `~/.codex`.
 
 ## 7. Distribution and release
@@ -191,10 +191,10 @@ Plain table matching the TUI; `--json` emits the same stable schema as the MCP t
 
 ## 8. v0 acceptance criteria
 
-1. **Discovery is generic:** on the generated test tree (§6 Discovery), `ww status --json` reports exactly the expected repos with correct types (normal / worktree / external worktree / submodule-under-parent / bare / nested), terminates on the symlink loop, and excludes `node_modules` / `target` contents.
-2. **Real-data spot check:** `ww status ~/Projects --json` lists every repo and worktree that `find ~/Projects -name .git` finds outside the skip-list directories (submodules counted under their parent), and dirty / ahead / behind match `git status` on 5 sampled worktrees.
-3. **Session matching:** ≥ 95 % of Claude and Codex logs whose `cwd` is under the root match a worktree; the rest are listed by `ww doctor` as orphans.
+1. **Discovery is generic:** on the generated test tree (§6 Discovery), `rollcall status --json` reports exactly the expected repos with correct types (normal / worktree / external worktree / submodule-under-parent / bare / nested), terminates on the symlink loop, and excludes `node_modules` / `target` contents.
+2. **Real-data spot check:** `rollcall status ~/Projects --json` lists every repo and worktree that `find ~/Projects -name .git` finds outside the skip-list directories (submodules counted under their parent), and dirty / ahead / behind match `git status` on 5 sampled worktrees.
+3. **Session matching:** ≥ 95 % of Claude and Codex logs whose `cwd` is under the root match a worktree; the rest are listed by `rollcall doctor` as orphans.
 4. **Performance:** cold scan < 5 s and warm scan < 300 ms on the author's `~/Projects` + agent logs.
 5. **Resume:** `R` produces a command that resumes a real Claude session and a real Codex session.
-6. **MCP:** Claude Code with `ww mcp` registered answers "where was I in CRM?" with the correct branches and last session.
-7. **Zero-config, no-agent install:** on a clean machine (or clean `HOME`), `brew install` then `ww` in any folder runs with no config and no agent logs, shows the git dashboard, and shows no agent UI.
+6. **MCP:** Claude Code with `rollcall mcp` registered answers "where was I in CRM?" with the correct branches and last session.
+7. **Zero-config, no-agent install:** on a clean machine (or clean `HOME`), `brew install` then `rollcall` in any folder runs with no config and no agent logs, shows the git dashboard, and shows no agent UI.
