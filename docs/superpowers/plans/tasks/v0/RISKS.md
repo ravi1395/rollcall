@@ -9,3 +9,6 @@
 - P14 C-2 do-not-call list (obligation on P20/P21): `Repository::worktrees()` and `Proxy::*`, reflog APIs, `rev_parse` with `@{}`, `Platform::pseudo()`, `open_mailmap`.
 - P16 unverified locally: different-device skip (needs a second mount), SF_DATALESS on a real file (predicate only), wall-clock budget beyond zero duration. Dedup of the `untrusted_path` fixture's on-disk `.git` file against its admin dir (row path `$HOME`) is P07's oracle assumption — verify at P27b/P32.
 - P16 FIFO named `.git` → `bad gitdir:` error row (spec silent); P08 told to align the manifest.
+- P19 rule (d) literally makes the enclosing repo's worktree `untrusted worktree path` (its workdir is an ancestor of the root; spec §4.1 lists "enclosing" among the worktrees the rule applies to). Followed literally; oracles must match. Author may want to revisit.
+- P19 finding: at `Trust::Reduced` gix keeps repo-local sections and filters per lookup; plain snapshot getters ignore trust. P20 must use trust-filtered accessors.
+- P25 applies the §5.0 prompt filter to Codex `user_message` text too (orchestrator reading of "Common rules").
