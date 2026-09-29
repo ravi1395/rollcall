@@ -123,3 +123,30 @@ Scrub gaps (`github_pat_`, `npm_`, JWT, Stripe; emails optional); bidi/zero-widt
 ## Correction to orchestrator note
 
 The claim that the newest Codex rollouts lack `git` and `user_message` came from a size/mtime-ordered sample; ordered by `created_at`, 50/50 newest threads yield a prompt and 22/50 have `session_meta.git`.
+
+---
+
+# Round 3
+
+**Target:** revision 3 @ `6efcfd8`. Two lenses (the two that failed round 2), Fable 5.1, read-only.
+
+| Lens | Verdict |
+|---|---|
+| Testability / executor-readiness | Stands with fixes |
+| Security / privacy | **Does not stand** |
+
+All round-2 blockers fixed at the top level (`rc` eval, trust model, schemas, oracles, interfaces).
+
+## Security (verified against gitoxide `5708de4`)
+
+- **Blocker:** gix `status()` defaults to opening submodules itself with their own unstripped config → hostile submodule `filter=lfs` spawns `git-lfs`.
+- **Blocker:** unbounded reads of git-dir files (`config`, loose refs, `packed-refs`, `info/exclude`, `alternates`); symlinks to `/dev/zero` or FIFOs are committable inside a bare fixture → OOM or hang, bypassing alloc limit and interrupt flag.
+- Major: `core.worktree`, `commondir`, `$HOME/.git` escape the worktree guard; interrupt flag cannot fire in a blocked syscall and rev-walk has none; `R`/`rc` resolve the agent after `chdir` (relative `PATH` entry → planted binary); 20 Codex titles are truncated prompts classed `Thread`; hostile test partly vacuous (`/dev/tty` gives ENXIO in CI; no submodule/escape/symlink cases).
+- Minor: refused-root peek ignores skips/TCC; `ROLLCALL_RESUME_FILE` open flags; fish untested; more invisible Unicode characters.
+
+## Testability
+
+- Majors: store query cannot return enclosing/`external_main`/outside-root rows → membership table; no `Index` method for per-worktree sessions; shell-safety test vacuous; positive control satisfiable by the fake `git`; timed-out repo unsatisfiable in one run; error strings/row shape circular with hand-written oracles; exit-1 rule and `F_clean` membership undefined.
+- Minor: `scanned_at` null on empty cache; `title_kind` null rule; matching fixture counts; `/` suggestions environment-dependent; inode reuse untestable on real FS; PTY harness for `R`; zsh/fish on CI; `list_stale` truncation; `absent` meaning; cargo install location; native runners for `dist build`.
+
+All addressed in revision 4.

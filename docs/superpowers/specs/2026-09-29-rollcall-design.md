@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 3 — rewritten after red-team rounds 1 and 2 (`2026-09-29-rollcall-redteam.md`). Awaiting round-3 verification, then author review.
+**Status:** Revision 4 — after red-team rounds 1–3 (`2026-09-29-rollcall-redteam.md`). Awaiting round-4 security verification, then author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
@@ -97,7 +97,7 @@ Positional `PATH` is the root for every command except `mcp`, which takes `--roo
 
 Shared flags (TUI, `status`, `scan`, `doctor`, `mcp`): `--submodules`, `--follow-symlinks`. TUI / `status` / `scan` / `doctor` also: `--yes` (allow a refused root, §4.3), `--no-scan` (answer from cache only).
 
-Exit codes: `0` success (and TUI `q`); `1` completed with per-repo errors or a partial walk; `2` usage or config error; `3` root refused; `10` resume handed to the `rc` function (§8.1).
+Exit codes: `0` success (and TUI `q`); `1` completed but any `Repo.error` or `Worktree.error` is non-null, the walk was partial, or no scan has ever completed for the root and none could run now (`--no-scan` or lock held: output has `scanned_at: null`, `repos: []`); `2` usage or config error; `3` root refused; `10` resume handed to the `rc` function (§8.1).
 
 Environment: `NO_COLOR` honoured; `ROLLCALL_NOW` (RFC 3339) overrides "now" for every time computation (tests, demos); `CLAUDE_CONFIG_DIR`, `CODEX_HOME` honoured (§5); `ROLLCALL_RESUME_FILE` (§8.1).
 
@@ -176,8 +176,10 @@ struct SourceScan  { files: Vec<FileState>, sessions: Vec<Session>, diag: Source
 
 trait Index {
     fn source_state(&self, s: SourceKind) -> SourceState;
-    fn repos_under(&self, root: &Path) -> Vec<RepoRow>;
+    fn repos_for_root(&self, root: &Path) -> Vec<RepoRow>;      // via the root-membership table (§6.1)
+    fn sessions_for(&self, worktree: &Path) -> Vec<Session>;     // matched sessions, ended_at desc
     fn scanned_at(&self, root: &Path) -> Option<Timestamp>;
+    fn last_diagnostics(&self, root: &Path) -> Option<ScanDiagnostics>;  // for doctor under contention
     fn commit_scan(&mut self, root: &Path, scan: ScanResult) -> Result<()>;   // one transaction
 }
 fn match_sessions(worktrees: &[WorktreeKey], sessions: &[SessionLocation]) -> Vec<MatchResult>;
@@ -212,11 +214,13 @@ Parallel walk of the root, any depth, directories only. Every file opened during
 - **Bare repo**: a directory not named `.git` with a regular file `HEAD` and directories `objects/` and `refs/`, which gix opens as bare. Branch/ref info only. Fixtures inside other repos will appear; expected and documented.
 - **Nested repos**: the walk continues into a repo's working tree (never its `.git`); an inner repo is its own row, `kind: "nested"`.
 - **Submodules**: grouped under the parent; omitted unless `--submodules`.
-- **Linked worktrees** are enumerated from each repo's `.git/worktrees/*`. A worktree's git state is computed only if (a) its `.git` file's `gitdir:` resolves back to that same `.git/worktrees/<name>` entry, and (b) its realpath is not `/`, not `$HOME`, not an ancestor of the root, and not under a skipped path (§4.2). Otherwise it is listed with `error: "untrusted worktree path"` and null git fields.
+- **Linked worktrees** are enumerated from each repo's `.git/worktrees/*`.
+- **Worktree trust rule** (applies to every worktree: main, linked, enclosing, nested). Git state is computed only if all hold: (a) after the hardened open (§4.4), `repo.workdir()` realpath equals the directory discovery found (so `core.worktree` cannot redirect it); (b) the repo's common dir resolves to the `.git` of the repo that enumerated it (so `commondir` cannot redirect it); (c) for linked worktrees, the `.git` file's `gitdir:` resolves back to the same `.git/worktrees/<name>` entry; (d) the workdir realpath is not `/`, not `$HOME`, not an ancestor of the root, and not under a skipped path (§4.2). Otherwise the worktree is listed with `error: "untrusted worktree path"` and null git fields.
 - External cases:
   - **A — worktree outside root, main inside:** listed under its repo, `external: true`.
   - **B — worktree inside root, main outside:** its repo is a row with `kind: "external_main"`; worktrees outside the root carry `external: true`.
-- **Enclosing repo**: if the root itself lies inside a repo's working tree, that repo is included as a row with `contains_root: true` (found by walking up from the root to the nearest `.git`, stopping at `$HOME` or `/`).
+- **Enclosing repo**: if the root itself lies inside a repo's working tree, that repo is included as a row with `contains_root: true`. It is found by walking up from the root's parent with `lstat` only, checking each directory for `.git`, and stopping **before** examining `$HOME` or `/` (a `$HOME/.git` is never treated as an enclosing repo).
+- **Error strings** are fixed prefixes, compared by prefix in tests: `"open failed: "` (gix could not open the repo), `"bad gitdir: "` (unusable `.git` file), `"untrusted git dir"` (§4.4 pre-open checks), `"untrusted worktree path"`, `"timed out"`, `"git error: "` (any other gix error during state computation). A repo that fails to open is a `Repo` row with `error` set and `worktrees: []`; a worktree-level failure sets `Worktree.error` with git fields `null` / `0`.
 
 ### 4.2 Skips
 
@@ -228,7 +232,7 @@ Parallel walk of the root, any depth, directories only. Every file opened during
 ### 4.3 Guards
 
 - **Different device:** never descend into a directory whose `st_dev` differs from the root's. `doctor` lists skipped mount points. (On macOS this does not exclude iCloud — the path skip in §4.2 does.)
-- **Refused roots:** a root whose `(dev, inode)` equals that of `/` or `$HOME` → exit 3 unless `--yes` or listed in config `roots`. The message lists up to 5 immediate subdirectories of the root that contain a `.git` within 2 levels, as `rollcall <dir>` suggestions. MCP applies the same rule to each `--root`.
+- **Refused roots:** a root whose `(dev, inode)` equals that of `/` or `$HOME` → exit 3 unless `--yes` or listed in config `roots`. The message lists up to 5 immediate subdirectories of the root that contain a `.git` within 2 levels, as `rollcall <dir>` suggestions. This peek uses `lstat` only, applies the §4.2 skips (and additionally skips `Desktop`, `Documents`, `Downloads`, `Pictures`, `Movies`, `Music` directly under `$HOME` on macOS to avoid privacy prompts), `SF_DATALESS`, and the same-device rule, and stops after 2 s. MCP applies the same refusal to each `--root`.
 - **Walk budget:** stop after `walk_budget_entries` dirents or `walk_budget_secs`; `partial: true`; exit 1.
 - **Symlinks:** not followed by default. With `--follow-symlinks`, only targets whose realpath is under the root, with a visited `(dev, inode)` set.
 - **Unreadable directories** are counted and skipped.
@@ -238,13 +242,18 @@ Parallel walk of the root, any depth, directories only. Every file opened during
 
 rollcall must be safe on folders of cloned or unpacked repos that may be hostile, including committed bare repos such as `fixtures/foo.git`.
 
-- **No subprocesses** during scan. gix implements neither hooks nor fsmonitor; filter, diff and merge drivers are removed as below.
-- **Opening:** `gix::open_opts` with config permissions `env = false`, `git_binary = false`, `includes = false`. Immediately after opening, through `config_snapshot_mut()`, remove **every** `filter.*`, `diff.*` and `merge.*` section from **all** sources, then commit the snapshot. Set the object allocation limit (`alloc_limit_bytes` or its config key) to 64 MiB.
-- **Excludes:** because includes are off, rollcall reads the user's `core.excludesFile` itself (from `~/.gitconfig` / `$XDG_CONFIG_HOME/git/config`, no includes) and supplies it as a config override.
-- **Ownership:** repos owned by another uid open at reduced trust; repo-local config is dropped, so `upstream`/`ahead`/`behind` are `null`. Documented.
-- **Per-repo budget:** status/dirwalk and rev-walks for one repo stop after `repo_budget_secs` via gix's interrupt flag → `error: "timed out"`.
-- **Consequences (documented):** files using clean/smudge filters (e.g. Git LFS, custom eol) may count as dirty where `git status` says clean.
-- gix errors on one repo produce an `error` string on that row; the scan continues.
+Every repo — including each submodule and each linked worktree — is opened through the **hardened open** below; nothing is opened any other way.
+
+- **No subprocesses** during scan. gix implements neither hooks nor fsmonitor; filter, diff and merge drivers are removed below; submodules are never opened implicitly by gix.
+- **Pre-open checks** (before calling gix): in the git dir, `lstat` `config`, `HEAD`, `packed-refs`, `index`, `commondir`, `gitdir`, `info/exclude`, `info/attributes`, `objects/info/alternates`, and every entry under `refs/` (stop after 10,000 entries). Any of these that is a symlink, is not a regular file (or directory, for `refs/` subdirs), or exceeds its cap — `config`, `info/*`, `objects/info/alternates`, `commondir`, `gitdir` 1 MiB; `HEAD` and loose refs 4 KiB; `packed-refs` 64 MiB; `index` 256 MiB — makes the repo an `error: "untrusted git dir"` row with no open. Files that don't exist are fine.
+- **Config:** `gix::open_opts` with `Config::isolated()` permissions (no system, user, or environment config; no includes; no git-binary lookup). Repo-local config is still read. The user's `core.excludesFile` is read by rollcall itself (from `~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config`, no includes, same pre-open checks and 1 MiB cap) and passed as a config override.
+- **Config stripping:** immediately after opening, through `config_snapshot_mut()`, remove **all** sections named `filter`, `diff`, `merge` (every subsection, from every source — loop over section ids, since one removal call removes one section) and the keys `core.attributesFile`, `core.worktree`, `core.sshCommand`, `core.hooksPath`, `core.fsmonitor`; then commit the snapshot so the resolved config gix uses is the stripped one.
+- **Allocation limit:** `gitoxide.objects.allocLimit` = 64 MiB (via config override at open).
+- **Submodules:** status runs with submodule handling set to "given, ignore all" (`Submodule::Given { ignore: All, check_dirty: false }` in gix 0.86 terms), so gix never opens a submodule itself. Submodule rows (shown with `--submodules`) come from opening each submodule's git dir through this same hardened open.
+- **Ownership:** repos owned by another uid open at gix's reduced trust; repo-local config is then not used, so `upstream`/`ahead`/`behind` are `null`. Documented.
+- **Per-repo deadline:** `repo_state` for each repo runs on a worker thread with a deadline of `repo_budget_secs`. gix's interrupt flag is set at the deadline (stops status/dirwalk), and rollcall's own rev-walk loops check the deadline every 256 commits. If the thread has not returned at the deadline, the row gets `error: "timed out"`, the thread is abandoned (not joined), and `doctor` counts it in `repo_timeouts_abandoned`.
+- **Consequences (documented):** files using clean/smudge filters (e.g. Git LFS, custom eol) may count as dirty where `git status` says clean; repo-local `core.attributesFile` is ignored.
+- gix errors on one repo produce an `error` row (§4.1 prefixes); the scan continues.
 
 ## 5. Session sources
 
@@ -292,7 +301,7 @@ Sources are read-only on agent data: they never modify agent files or databases 
   - `rollout_path` must canonicalise to a path under the Codex root; otherwise the thread's rollout is ignored (counted).
   - `cwd` ← `threads.cwd` (the database's current cwd for the thread). `branch` ← `threads.git_branch`; if empty, the rollout's `session_meta.payload.git.branch`; else `null`.
   - `started_at` ← `created_at`, `ended_at` ← `updated_at` (Unix seconds; archiving does not change `updated_at`, which is intended).
-  - `title` ← `threads.title` when non-empty and different from `first_user_message` (`TitleKind::Thread`); else `first_user_message` after the §5.0 filter (`Prompt`); else `null`.
+  - `title` ← `threads.title` when non-empty. Its kind is `Prompt` if the title, trimmed and with a trailing `…`/`...` removed, is a prefix or substring of `first_user_message`, or is longer than 200 graphemes; otherwise `Thread`. Empty title → `first_user_message` after the §5.0 filter (`Prompt`); else `null`. (Measured: of 1,448 real threads, 989 titles equal the first message and 20 are a truncated prefix of it — all `Prompt`.)
   - `last_prompt`, `message_count` ← from the rollout (below), incremental; missing rollout → `null` / `0`.
 - **Fallback — rollouts only:** `sessions/**/rollout-*.jsonl` and `archived_sessions/*.jsonl`. `id`, `started_at` from the first `session_meta.payload` (`id`, `timestamp` RFC 3339); `cwd` from latest `turn_context.payload.cwd`, else `session_meta.payload.cwd`; `branch` from `session_meta.payload.git.branch`, else `null`; `ended_at` = max top-level `timestamp`; files whose `session_meta.payload.parent_thread_id` is set are children; a second `session_meta` with a different id is ignored (session belongs to the first). `title` = first human prompt (`Prompt`).
 - **Worked rollout records:**
@@ -312,7 +321,7 @@ Sources are read-only on agent data: they never modify agent files or databases 
 ### 6.1 Location and permissions
 
 - Cache directory via the `directories` crate: macOS `~/Library/Caches/rollcall`, Linux `$XDG_CACHE_HOME/rollcall` (default `~/.cache/rollcall`). Directory `0700`; `cache.sqlite` and its `-wal`/`-shm` files `0600`, set explicitly regardless of umask.
-- One database for all roots. Repos/worktrees keyed by canonical path; a root's view is the rows under it. Sessions keyed by `(source, id)`, shared across roots.
+- One database for all roots. Repos/worktrees keyed by canonical path. A **root-membership table** `(root, repo_path, kind, contains_root)` records which repos a root's scan produced — including the enclosing repo, `external_main` repos, and worktrees outside the root — since `kind` and `contains_root` depend on the root. `external` is computed per root from worktree path vs root. Sessions keyed by `(source, id)`, shared across roots. The last scan's diagnostics are stored per root for `doctor`.
 
 ### 6.2 What is stored
 
@@ -354,7 +363,7 @@ Timestamps are RFC 3339 UTC. JSON Schemas for every document below are committed
 
 ```
 StatusDoc {
-  schema_version: 1, root: string, scanned_at: string,
+  schema_version: 1, root: string, scanned_at: string | null,   // null: no scan ever completed
   stale: bool, partial: bool,
   repos: Repo[]                                  // sorted per §3.3
 }
@@ -388,33 +397,36 @@ Worktree {
 Session {
   source: "claude" | "codex", id: string, branch: string | null, cwd: string,
   started_at: string, ended_at: string,
-  title: string | null, title_kind: "custom" | "ai" | "thread" | "prompt" | null,
+  title: string | null,
+  title_kind: "custom" | "ai" | "thread" | "prompt" | null,   // null iff title is null
   last_prompt: string | null,
   message_count: int,
   resume: string | null                          // display line, §8.1; null if cwd gone
 }
 
 WhereWasIDoc {
-  schema_version: 1, root: string, scanned_at: string, stale: bool, partial: bool,
+  schema_version: 1, root: string, scanned_at: string | null, stale: bool, partial: bool,
   truncated: bool, repos: Repo[], recent_sessions: Session[]
 }
 
 ListStaleDoc {
-  schema_version: 1, root: string, scanned_at: string, stale: bool, partial: bool,
-  items: [{ repo: string, worktree_path: string, branch: string | null,
+  schema_version: 1, root: string, scanned_at: string | null, stale: bool, partial: bool,
+  truncated: bool,
+  items: [{ repo_name: string, repo_path: string, worktree_path: string, branch: string | null,
             stale_reason: "missing" | "merged" | "inactive" }]
 }
 
 DoctorDoc {
-  schema_version: 1, root: string, scanned_at: string,
+  schema_version: 1, root: string, scanned_at: string | null,   // from the last stored diagnostics
   walk: { entries: int, budget_hit: bool, stopped_at: string | null,
           unreadable_dirs: int, skipped_dirs: int, skipped_mounts: string[] },
   repos_by_kind: { normal: int, nested: int, bare: int, external_main: int },
   worktrees: { total: int, external: int, missing: int, untrusted_path: int },
-  submodules: int, repo_errors: int, repo_timeouts: int,
+  submodules: int, repo_errors: int, untrusted_git_dirs: int,
+  repo_timeouts: int, repo_timeouts_abandoned: int,
   sources: [{
     source: "claude" | "codex",
-    mode: "jsonl" | "db" | "rollouts" | "absent",
+    mode: "jsonl" | "db" | "rollouts" | "absent",   // absent: source root missing or contains no session files/DB
     db_version: int | null,
     files: int, records: int,
     skipped: { malformed: int, unknown_type: int, oversize: int, non_uuid: int, bad_rollout_path: int },
@@ -444,8 +456,9 @@ DoctorDoc {
 
 - **Each worktree row shows its `last_session` inline** (agent, age, title). The lower pane lists older sessions of the selected worktree.
 - Keys: `j`/`k`/arrows move; `enter` expands/collapses; `tab` switches pane; `/` filters repos and branches by case-insensitive substring (Esc clears); `r` rescans; `?` help; `q` quits (exit 0).
-- **`R` (resume, default):** restores the terminal, `chdir`s to the session cwd, and `execvp`s the agent directly — `claude --resume <id>` or `codex resume <id>` — with argv built from the validated id; no shell. The user's shell stays in its original directory after the agent exits (documented; `rc` changes that). Refused with a status message if the cwd no longer exists or the agent binary is not on `PATH`.
-- **`R` with `rc`:** `rollcall init <shell>` prints a function `rc` that creates a private temp file, runs `ROLLCALL_RESUME_FILE=<file> command rollcall "$@"`, and only if the exit code is 10 reads three NUL-separated fields (`cwd`, `source`, `id`) from the file, checks `source ∈ {claude, codex}` and `id` against the UUID regex, then runs `cd -- "$cwd" && claude --resume "$id"` (or `codex resume "$id"`) from those variables. The file is always removed. **No `eval` anywhere.** When `ROLLCALL_RESUME_FILE` is set, rollcall writes only to that path (which must already exist as a regular file owned by the user) and exits 10 on `R`.
+- **`R` (resume, default):** **before** changing directory, resolves the agent binary (`claude` or `codex`) to an absolute path by searching only the **absolute** entries of `PATH` (empty and relative entries are ignored). Then it restores the terminal, `chdir`s to the session cwd, and `execv`s that absolute path with `--resume <id>` (Claude) or `resume <id>` (Codex), argv built from the validated id; no shell. The user's shell stays in its original directory after the agent exits (documented; `rc` changes that). Refused with a status message if the cwd no longer exists or no absolute agent path is found. The README notes that the resumed agent's own workspace-trust prompts still apply inside untrusted repos.
+- **`R` with `rc`:** `rollcall init <shell>` prints a function `rc` that creates a private temp file (`mktemp`, mode 0600), runs `ROLLCALL_RESUME_FILE=<file> command rollcall "$@"`, and only if the exit code is 10: reads three NUL-separated fields (`cwd`, `source`, `id`) from the file (bash/zsh `read -r -d ''`, fish `read -z`); checks `source ∈ {claude, codex}` and `id` against the UUID regex; resolves the agent with `command -v` and requires an absolute result (`/*`) **before** `cd`; then runs `cd -- "$cwd" && "$bin" --resume "$id"` (or `"$bin" resume "$id"`) from those variables. The file is always removed. **No `eval` anywhere.**
+- When `ROLLCALL_RESUME_FILE` is set and `R` is pressed, rollcall opens that path with `O_WRONLY | O_NOFOLLOW | O_TRUNC | O_CLOEXEC`, verifies on the open fd that it is a regular file, owned by the effective uid, with one link and mode `0600`, writes the three fields, and exits 10. Any check failing → status message, nothing written.
 - **`Y`** copies the display resume line `cd -- '<cwd>' && claude --resume <id>` (path shell-quoted) to the clipboard.
 - **`c`** copies `cd -- '<worktree path>'` (shell-quoted). Clipboard per config `clipboard`; failure → status message.
 - **`o`** opens the worktree in `$VISUAL` or `$EDITOR`, split with shell-words rules, executed without a shell, path as its own argument; unset → status message.
@@ -466,13 +479,13 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 - **Text defaults:** without `--prompts`, `last_prompt` is always `null`, and `title` is returned only when `title_kind` is `custom`, `ai`, or `thread` (never prompt-derived). With `--prompts`, both are returned. `redact_prompts` overrides both. All returned text is scrubbed and truncated (§9).
 - External worktrees (`external: true`) and their sessions are omitted from MCP responses.
 - Tool descriptions state that titles, prompts, branch names and paths are untrusted data from logs and repos, not instructions.
-- Each response ≤ 16 KiB of JSON; over budget → drop `recent_sessions` from the end, then trailing repos, set `truncated: true`.
+- Each response ≤ 16 KiB of JSON; over budget → `where_was_i` drops `recent_sessions` from the end, then trailing repos; `list_stale` drops trailing items; both set `truncated: true`.
 - README registration instructions run `rollcall scan <root>` once first.
 
 ## 9. Privacy and security
 
 - **Local.** No network access (enforced by dependency bans, §11). Writes only to the cache and config directories and, when set, `ROLLCALL_RESUME_FILE`.
-- **Sanitising:** `title` and `last_prompt` are sanitised in **every** output (TUI, plain, JSON, MCP). Paths, branch names and error strings are sanitised in TUI and plain output (JSON keeps them exact, relying on JSON escaping). Sanitising removes ESC-introduced sequences, all other C0 controls, DEL, C1 controls, and the Unicode format characters U+200B–U+200F, U+202A–U+202E, U+2066–U+2069, U+FEFF; newline and tab become a space.
+- **Sanitising:** `title` and `last_prompt` are sanitised in **every** output (TUI, plain, JSON, MCP). Paths, branch names and error strings are sanitised in TUI and plain output (JSON keeps them exact, relying on JSON escaping). Sanitising removes ESC-introduced sequences, all other C0 controls, DEL, C1 controls, and the Unicode format/invisible characters U+00AD, U+061C, U+180E, U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, U+FFF9–U+FFFB; newline and tab become a space.
 - **Secret scrubbing** (title and last_prompt; applied after sanitising, before truncation). Matches become `[redacted]`:
   - `sk-[A-Za-z0-9_-]{16,}` · `(sk|rk)_(live|test)_[A-Za-z0-9]{10,}` · `AKIA[0-9A-Z]{16}` · `AIza[0-9A-Za-z_-]{35}`
   - `gh[pousr]_[A-Za-z0-9]{36,}` · `github_pat_[A-Za-z0-9_]{20,}` · `npm_[A-Za-z0-9]{30,}` · `xox[abprs]-[A-Za-z0-9-]{10,}`
@@ -490,23 +503,35 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 ### 10.1 Fixture manifest and oracles
 
 - `tests/fixtures/MANIFEST.toml` is **hand-written** and committed before the code it tests. It declares every fixture repo, worktree, commit (fixed author, committer and dates), remote, file state, and synthetic session (with its expected derived fields).
-- A generator (test-only code in `rollcall-cli/tests/support`, independent of rollcall's own logic) builds fixture roots `F` (full), `F_clean` (no corrupted repo, no unreadable dir), and `EXT` (outside-root targets) from the manifest in temp directories.
+- A generator (test-only code in `rollcall-cli/tests/support`, independent of rollcall's own logic) builds fixture roots from the manifest in temp directories: `F` (full), `F_clean` (`F` minus every fixture expected to carry an `error` or trigger `partial`: corrupted repo, bad `gitdir`, untrusted git dir, untrusted worktree path, hostile repos, hang probe, unreadable dir), `H` (hostile and hang-probe repos only, §10.2), and `EXT` (outside-root targets).
+- CI installs `zsh` and `fish` on Linux runners so shell tests run on both OSes.
 - Expected outputs `tests/expected/*.json` are **hand-written** from the manifest and the spec, never generated by running rollcall. Paths are written as `$F/…`, `$EXT/…`; the harness canonicalises both sides before substitution and comparison.
 - All tests set `ROLLCALL_NOW` to a fixed instant and `HOME`, `XDG_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` to temp directories.
 
 ### 10.2 Cases
 
 - **Discovery:** normal; linked worktree; case A; case B; missing worktree; worktree whose `gitdir` points at `$HOME` (untrusted path); modern and old-style submodule; bare; nested; repo in a `.gitignore`d folder; repos under `node_modules/` and `target/`; symlink loop; symlink to outside the root; unreadable dir (skipped with a logged reason when euid = 0); root inside a repo (enclosing row); refused-root suggestions.
-- **Git state:** dirty (staged, unstaged), untracked, user `core.excludesFile` honoured, ahead/behind, no upstream with remote, no remote, detached HEAD, merged, inactive, no default branch, corrupted repo, `repo_budget_secs` exceeded (config set to a tiny value → `error: "timed out"`).
-- **Hostile repo** (committed bare `hostile.git` plus a working tree in `F`): repo-local `filter.x.clean`, `diff.x.command`, `core.fsmonitor`, a hook, `include.path=/dev/tty`; a temp **global** gitconfig with `filter.lfs.clean` and `safe.directory=*`; `.gitattributes` `* filter=x` and `* filter=lfs`; the attributed file is modified after checkout; a loose object whose header claims 1 GiB. Every driver/hook points at a script that creates a marker; a fake `git` first on `PATH` does too. **Positive control:** real `git status` in the same fixture (sandboxed `HOME`) creates the marker. rollcall must complete within 10 s with no marker created.
+- **Git state:** dirty (staged, unstaged), untracked, user `core.excludesFile` honoured, ahead/behind, no upstream with remote, no remote, detached HEAD, merged, inactive, no default branch, corrupted repo.
+- **Deadline:** a **separate run** on `F_clean` with `repo_budget_secs = 0.001` → every repo row has an error starting `"timed out"`, exit 1.
+- **Hostile repos** (root `H`; a temp **global** gitconfig with `filter.lfs.clean`/`filter.lfs.process` and `safe.directory=*`; each driver, hook and fake binary writes a **distinct** marker file `marker-<vector>`):
+  - `drivers`: repo-local `filter.x.clean`, `diff.x.command`, `merge.x.driver`, `core.fsmonitor`, `core.hooksPath` + a hook; `.gitattributes` `* filter=x` and `*.bin filter=lfs`; attributed files modified after checkout.
+  - `submodule`: a repo with a submodule whose own `.gitattributes` names `filter=lfs`, attributed file modified after checkout.
+  - `worktree-escape`: repo-local `core.worktree=$HOME`, `core.bare=false`.
+  - `commondir-escape`: a linked worktree whose `commondir` points at another fixture repo.
+  - `symlinked-files`: committed bare `fixtures/foo.git` whose `config` and `packed-refs` are symlinks to a sparse 4 GiB file.
+  - `big-object`: a loose object whose header claims 1 GiB.
+  - `hang-probe` (separate repo): `include.path` pointing at a harness-created FIFO with no writer, and `packed-refs` replaced by a FIFO.
+  - A fake `git`, `git-lfs`, `claude`, `codex` first on `PATH`, each writing `marker-path-<name>`.
+  - **Positive controls:** running the **real** git by absolute path (resolved before the fake is installed) with `status` in `drivers` and `submodule` (sandboxed `HOME`, recursive submodule status) creates `marker-filter-x` and `marker-filter-lfs` respectively.
+  - **Assertions:** `rollcall scan H` exits within 10 s with peak RSS < 512 MB (`/usr/bin/time -v` on Linux, `-l` on macOS); no `marker-*` file exists; `symlinked-files` and `hang-probe` rows carry `"untrusted git dir"`; `worktree-escape` and `commondir-escape` rows carry `"untrusted worktree path"`.
 - **Claude fixtures:** each §5.1 rule, including `tool_result` as the last user record, `isMeta`, `<command-name>`, injected marker after user text, custom/ai/prompt title precedence, pre-truncated `lastPrompt`, `lastPrompt` with zero human prompts, multi-cwd, `"HEAD"`, subagent file, non-UUID id, oversize line, malformed line.
 - **Codex fixtures:** a `state_5.sqlite` with `threads` + `thread_spawn_edges`: spawn-edge child, `source` subagent child, `parent_thread_id` child, archived thread, empty title, title equal to `first_user_message`, empty `git_branch` with rollout branch, `rollout_path` outside `CODEX_HOME`; rollouts with `user_message` events, without them (`response_item` path, `[injection, user]` blocks); database absent → fallback; rollout moved to `archived_sessions`; second `session_meta`.
-- **Incremental reads:** append 3 lines + a partial → 3 new records, offset before the partial; truncate → re-read; truncate-then-regrow past offset → re-read (fingerprint); inode reused by a different file → re-read; `parser_version` bump; title upgraded from prompt to custom on append; vanished file → session dropped.
+- **Incremental reads:** append 3 lines + a partial → 3 new records, offset before the partial; truncate → re-read; truncate-then-regrow past offset → re-read (fingerprint); inode reuse and `parser_version` bump are **unit tests** that inject a prior `FileState` (different `head_fp`, or older `parser_version`) through the in-memory `Index`; title upgraded from prompt to custom on append; vanished file → session dropped.
 - **Pointer resolution:** log replaced after scan → text `null`; symlink swapped in → `null`.
-- **Matching:** fixture of 20 sessions: 16 matchable, 1 `non_repo`, 1 `path_gone`, 2 `outside_root`; one in a hidden submodule matches the parent.
+- **Matching:** fixture of 20 sessions: 16 matchable (distributed over worktrees so that at least one worktree has `older_sessions ≥ 1`, and one session sits in a hidden submodule and matches the parent), 1 `non_repo`, 1 `path_gone`, 2 `outside_root`.
 - **Privacy:** each scrub pattern; truncation (multi-byte grapheme, pre-ellipsised input); `redact_prompts`; MCP defaults (no `last_prompt`, `prompt`-kind titles null); cache modes under umask `022`; after asserting ≥ 16 session rows exist, no fixture prompt string appears in any cache file.
 - **Sanitising:** branch names and prompts containing `\x1b[2J`, `\x9b`, U+202E, U+200B render without them.
-- **Shell safety:** paths containing space, `$`, backtick, `;`, `'`; `Y`/`c` text round-trips through `sh -c 'printf %s "$0"'`. `rc` in bash and zsh on a fixture whose branch is `$(touch marker)` running `rc status`, `rc status --json`, `rc --help` → no marker. `R` with a stub `claude`/`codex` on `PATH` that records argv and cwd → exact expected argv and cwd.
+- **Shell safety:** for worktree paths containing space, `$`, backtick, `;`, `'`, and newline: the quoted fragment from `c` passed as `sh -c "printf '%s' <quoted>"` prints exactly the raw path; the `Y` line run as `sh -c "$line"` with a stub agent (absolute path on `PATH`) records exactly the session cwd and argv. `rc` in bash, zsh and fish on a fixture whose branch is `$(touch marker-rc)` running `rc status`, `rc status --json`, `rc --help`, and `rc` + `R` → no `marker-rc`, and the `R` case lands in the session cwd with the stub agent's recorded argv. `R` in the TUI is driven through a PTY harness (e.g. `expectrl`), with a stub agent that records argv and cwd; a relative `PATH` entry containing a planted `claude` is never used. `ROLLCALL_RESUME_FILE` pointing at a symlink, a file with mode `0644`, or a hard-linked file → nothing written.
 - **Store:** idempotent rescan (two scans → identical `status --json` for the same `ROLLCALL_NOW`); crash mid-scan (transaction dropped) → prior state; harness holds the scan lock → command answers `stale: true`; `user_version` mismatch → rebuild.
 - **TUI:** `ratatui` `TestBackend` 120×32 + `insta` snapshots with and without sessions, with fixed `ROLLCALL_NOW`.
 - **MCP:** spawn `rollcall mcp --root $F` over stdio; call both tools; validate against `schema/`; ≤ 16 KiB on a 200-session fixture with `truncated` set when over; `root` not configured → error; no root → exit 2; empty cache → first call waits and returns repos.
@@ -525,22 +550,22 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 
 ### 12.1 Gating (CI, generated fixtures, fixed `ROLLCALL_NOW`, oracles per §10.1)
 
-1. **Discovery:** `rollcall status $F --json | jq -S '[.repos[] | {path, kind, contains_root, worktrees: [.worktrees[] | {path, external, stale_reason, error}]}]'` equals `tests/expected/discovery.json` after path substitution; submodules only with `--submodules`; finishes < 10 s with the symlink loop, in default and `--follow-symlinks` modes.
-2. **Git state:** for every fixture worktree, `branch, detached, upstream, ahead, behind, unpushed, dirty_count, untracked_count, stale_reason, attention, error` equal `tests/expected/status.json`; the corrupted repo and timed-out repo have the expected `error`; all other rows present.
+1. **Discovery:** `rollcall status $F --json | jq -S '[.repos[] | {path, kind, contains_root, error, worktrees: [.worktrees[] | {path, external, stale_reason, error}]}]'` equals `tests/expected/discovery.json` after path substitution (error strings compared by their §4.1 prefix); submodules only with `--submodules`; finishes < 10 s with the symlink loop, in default and `--follow-symlinks` modes.
+2. **Git state:** for every fixture worktree, `branch, detached, upstream, ahead, behind, unpushed, dirty_count, untracked_count, stale_reason, attention, error` equal `tests/expected/status.json` (errors by prefix); the corrupted repo row has `error` starting `"open failed: "` and `worktrees: []`; all other rows present. The separate deadline run (§10.2) marks every row `"timed out"` and exits 1.
 3. **Sort and quiet:** repo order and each repo's `attention` / `last_activity_at` equal `tests/expected/order.json`.
 4. **Claude source:** per fixture session, `title, title_kind, last_prompt, branch, cwd, message_count, started_at, ended_at` equal `tests/expected/claude.json`; `doctor --json` `.sources[] | select(.source=="claude")` counts equal the manifest.
 5. **Codex source:** same for database mode (`tests/expected/codex_db.json`) and fallback mode (`tests/expected/codex_rollout.json`), including child exclusion counts and branch fallback.
-6. **Matching:** 16 worktrees carry the expected `last_session.id`; `doctor --json` reports `unmatched: {non_repo: 1, path_gone: 1, outside_root: 2}`.
+6. **Matching:** every worktree's `last_session.id` and `older_sessions` equal `tests/expected/matching.json` (16 matched sessions, at least one worktree with `older_sessions ≥ 1`); `doctor --json` reports `unmatched: {non_repo: 1, path_gone: 1, outside_root: 2}`.
 7. **Incremental reads & pointers:** every §10.2 incremental and pointer case yields the expected sessions, counts and offsets.
-8. **Hostile repo:** positive control creates the marker; `rollcall scan $F` completes < 10 s and creates none.
-9. **Guards & first run:** root `/` and `$HOME` exit 3 without `--yes` and list the expected suggestions; budget fixture → `partial: true`, exit 1; root inside a repo → enclosing repo row with `contains_root: true`.
+8. **Hostile repos:** both positive controls create their markers; `rollcall scan H` completes < 10 s with peak RSS < 512 MB, creates no `marker-*` file, and the four escape/untrusted rows carry the §10.2 error prefixes.
+9. **Guards & first run:** root `/` exits 3 without `--yes` (suggestions not asserted); a fixture `HOME` exits 3 and lists exactly the expected suggestions; budget fixture → `partial: true`, exit 1; root inside a repo → enclosing repo row with `contains_root: true`.
 10. **Privacy:** every scrub pattern redacted; every `title` / `last_prompt` ≤ 200 graphemes; `redact_prompts` → all null; MCP defaults per §8.3; cache modes `0700` / `0600`; with ≥ 16 session rows present, no fixture prompt string in the cache files.
 11. **Sanitising & shell safety:** all §10.2 sanitising, shell-safety, `rc`, and `R` stub tests pass.
 12. **Store:** idempotence, crash-safety, lock (`stale: true`), and rebuild tests pass.
 13. **No-agent mode:** with empty `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, `rollcall status $F_clean --json` exits 0, every `last_session` is null, `doctor` reports both sources `mode: "absent"`, and the TUI snapshot has no agent columns.
 14. **Schemas & MCP:** `status`, `doctor`, `where_was_i`, `list_stale` outputs validate against `schema/*.json`; MCP integration test (§10.2) passes; ≤ 16 KiB.
 15. **TUI:** snapshots match; every cell's `fg`/`bg` is `Reset` or a named ANSI colour (never `Rgb`/`Indexed`); with `NO_COLOR=1` every cell style is default.
-16. **Build & supply chain:** §11 CI jobs pass; `dist plan` and `dist build` succeed for macOS (arm64, x86_64) and Linux (x86_64, arm64); `HOME=$(mktemp -d) cargo install --path crates/rollcall-cli --locked && rollcall --version` succeeds on Linux.
+16. **Build & supply chain:** §11 CI jobs pass; `dist build` succeeds on native runners for macOS arm64 (`macos-14`), macOS x86_64 (`macos-13`), Linux x86_64 (`ubuntu-latest`) and Linux arm64 (`ubuntu-24.04-arm`); `d=$(mktemp -d) && cargo install --path crates/rollcall-cli --locked --root "$d" && "$d/bin/rollcall" --version` succeeds on Linux.
 17. **Performance** (CI corpus from the generator: 50 repos incl. 20 linked worktrees, 5,000 synthetic logs, 500 MB; `ubuntu-latest`): `hyperfine --prepare 'rollcall cache clear' -r 5 'rollcall scan $C'` median < 5 s (cold); `hyperfine -w 2 -r 10 'rollcall status --json $C'` median < 1 s (warm: git re-read, no log changes).
 18. **Demo:** `vhs demo.tape` renders the README GIF in CI from the synthetic demo root with stub agents, ending on a resumed session.
 
@@ -548,7 +573,7 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 
 - `rollcall status ~/Projects --json` lists the repos and worktrees `find ~/Projects -name .git` finds outside skipped dirs; dirty / ahead / behind match `git status` on 5 sampled worktrees.
 - `doctor` on real data: unmatched sessions fall into plausible classes; no parser errors beyond `unknown_type`.
-- Cold scan < 5 s, warm < 500 ms on the author's machine.
+- Cold scan < 5 s, warm < 500 ms on the author's machine. (`~/Projects` has ~2.2 M entries before skips; if the default `walk_budget_entries` of 500,000 is hit, record it and tune the default rather than treating it as a pass.)
 - `R` resumes a real Claude session and a real Codex session, including one whose cwd is under `.claude/worktrees/`.
 - Claude Code with `rollcall mcp --root ~/Projects` answers "where was I in CRM?" with CRM's worktrees and last sessions.
 - `brew install` from the published tap on a clean macOS user account, then `rollcall` in `~` (refusal with suggestions) and in `~/Projects`.
