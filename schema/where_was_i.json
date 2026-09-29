@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rollcall:where_was_i.json",
+  "title": "WhereWasIDoc",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "root", "scanned_at", "stale", "partial", "truncated", "repos", "recent_sessions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "root": { "type": "string" },
+    "scanned_at": { "type": ["string", "null"], "format": "date-time" },
+    "stale": { "type": "boolean" },
+    "partial": { "type": "boolean" },
+    "truncated": { "type": "boolean" },
+    "repos": { "type": "array", "items": { "$ref": "rollcall:status.json#/$defs/Repo" } },
+    "recent_sessions": { "type": "array", "items": { "$ref": "rollcall:status.json#/$defs/Session" } }
+  }
+}

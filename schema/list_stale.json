@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rollcall:list_stale.json",
+  "title": "ListStaleDoc",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "root", "scanned_at", "stale", "partial", "truncated", "items"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "root": { "type": "string" },
+    "scanned_at": { "type": ["string", "null"], "format": "date-time" },
+    "stale": { "type": "boolean" },
+    "partial": { "type": "boolean" },
+    "truncated": { "type": "boolean" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo_name", "repo_path", "worktree_path", "branch", "stale_reason"],
+        "properties": {
+          "repo_name": { "type": "string" },
+          "repo_path": { "type": "string" },
+          "worktree_path": { "type": "string" },
+          "branch": { "type": ["string", "null"] },
+          "stale_reason": { "enum": ["missing", "merged", "inactive"] }
+        }
+      }
+    }
+  }
+}
