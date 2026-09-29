@@ -116,7 +116,7 @@ Colours: the 16 named ANSI colours only.
 | `redact_emails` | `false` | Add email addresses to secret scrubbing (§9). |
 | `walk_budget_entries` | `500000` | Directory entries (dirents read) before the walk stops. |
 | `walk_budget_secs` | `20` | Wall-clock walk budget. |
-| `repo_budget_secs` | `5` | Per-repo git-state budget (§4.4). |
+| `repo_budget_secs` | `5.0` | Per-repo git-state budget in seconds (float, > 0) (§4.4). |
 | `clipboard` | `"system"` | `"system"` (arboard) or `"osc52"`. |
 
 Unknown keys → warning on stderr. Invalid TOML or wrong types → exit 2.
@@ -220,7 +220,7 @@ Parallel walk of the root, any depth, directories only. Every file opened during
   - **A — worktree outside root, main inside:** listed under its repo, `external: true`.
   - **B — worktree inside root, main outside:** its repo is a row with `kind: "external_main"`; worktrees outside the root carry `external: true`.
 - **Enclosing repo**: if the root itself lies inside a repo's working tree, that repo is included as a row with `contains_root: true`. It is found by walking up from the root's parent with `lstat` only, checking each directory for `.git`, and stopping **before** examining `$HOME` or `/` (a `$HOME/.git` is never treated as an enclosing repo).
-- **Error strings** are fixed prefixes, compared by prefix in tests: `"open failed: "` (gix could not open the repo), `"bad gitdir: "` (unusable `.git` file), `"untrusted git dir"` (§4.4 pre-open checks), `"untrusted worktree path"`, `"timed out"`, `"git error: "` (any other gix error during state computation). A repo that fails to open is a `Repo` row with `error` set and `worktrees: []`; a worktree-level failure sets `Worktree.error` with git fields `null` / `0`.
+- **Error strings** are fixed prefixes, compared by prefix in tests: `"open failed: "` (gix could not open the repo), `"bad gitdir: "` (unusable `.git` file), `"untrusted git dir"` (§4.4 pre-open checks), `"untrusted worktree path"`, `"timed out"`, `"git error: "` (any other gix error during state computation). Any repo-level failure (pre-open check, open, or timeout before worktrees were enumerated) is a `Repo` row with `error` set and `worktrees: []`; a worktree-level failure sets `Worktree.error` with git fields `null` / `0`.
 
 ### 4.2 Skips
 
