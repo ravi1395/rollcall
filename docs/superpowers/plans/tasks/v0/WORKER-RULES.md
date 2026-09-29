@@ -20,6 +20,12 @@ their work and touch only your phase's files.
 - **Build env:** `export CARGO_TARGET_DIR=/Users/ravichandrasekhar/Projects/rollcall/target`
   before any cargo command (shared across worktrees; cargo may print "Blocking waiting for file
   lock" — wait, don't kill it). First builds take minutes: use Bash timeouts of 600000 ms.
+- **Worktree base:** if you run in an isolated worktree, first check `git log --oneline -1`; if
+  HEAD is not the `impl/v0` commit named in your brief, run `git restore HANDOFF.md 2>/dev/null;
+  git merge --ff-only impl/v0` (the one git command you may run) and report it.
+- **Probe hygiene:** the target dir is shared, and cargo fingerprints by mtime. After reverting any
+  mutation probe, `touch` the reverted file before the next build, or you test a stale binary.
+  Never leave a probe in the tree; diff before reporting.
 - **Forbidden:** `std::env::set_var` / `remove_var` (edition 2024 `unsafe`; `unsafe_code` is
   forbidden) — vary env via `EnvPaths` or `Command::env`. Printing prompt text from real
   agent logs (`~/.claude`, `~/.codex`) — never read them. Network access in code.
