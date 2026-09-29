@@ -75,3 +75,51 @@
 - **v0.2:** cargo-dist + Homebrew, attestations, criterion bench, vhs GIF, crates.io.
 
 Suggested pitch: *"rollcall: every repo, every worktree, and the Claude Code or Codex session that left it dirty — one screen, one key to resume."*
+
+---
+
+# Round 2
+
+**Target:** revised spec @ `0e8cacc`. Same four lenses, Fable 5.1, read-only.
+
+| Lens | Verdict |
+|---|---|
+| Technical feasibility | Stands with fixes |
+| Product | Stands with fixes |
+| Testability / executor-readiness | **Does not stand** |
+| Security / privacy | **Does not stand** |
+
+Round-1 items mostly FIXED; remaining PARTIALs folded into the list below.
+
+## Blockers
+
+1. **§4.4 trust model is not expressible in gix** (feasibility + security, verified in local gitoxide source). Config trust is per file source, not per key; `include.path` is read before filtering (`/dev/tty` hangs); `status` builds a filter pipeline that spawns drivers from resolved config, including the user's global `filter.lfs.*` when a hostile `.gitattributes` names it; `safe.directory=*` promotes reduced trust to full. Fix: open with env/git-binary/includes off, strip every `filter.*`/`diff.*`/`merge.*` section from the in-memory config, set an allocation limit, pin `gix >= 0.88`; hostile fixture needs a positive control.
+2. **`rc` evals stdout** (security). Branch names may contain `$(…)`; `rc status` etc. would execute them. Fix: no `eval`; resume data passed through a file as NUL-separated fields, validated, and run from variables.
+3. **`doctor --json` and MCP responses have no schema** (testability).
+4. **Test oracles unbuildable/circular** (testability): expected JSON embeds tempdir paths; nothing says who writes oracles. Fix: hand-written fixture manifest + path placeholders.
+5. **Incremental reads vs derived fields; pointer resolution unowned** (testability): tail reads cannot recompute title/started_at; no crate reads text back. Fix: explicit `SessionSource` merge + `resolve` interfaces.
+
+## Major
+
+- Git-derived paths (`worktrees/*/gitdir`, `core.worktree`) escape the walk guards; no per-repo time budget (security).
+- macOS: `/`, `~`, iCloud share one `st_dev` → single-filesystem guard is a no-op there; refused-root check must use `(dev, inode)` (security, measured).
+- Pointer resolution TOCTOU and unbounded reads (`/dev/zero`); `rollout_path` must be under `CODEX_HOME` (security).
+- §6.3 misreads on inode reuse and truncate-then-regrow → fingerprint (feasibility).
+- Codex: 137 `guardian` subagent threads outside spawn edges; 549 threads lose branch available in rollout `session_meta.git.branch` (feasibility, measured).
+- Vanished logs/threads leave dangling sessions (feasibility).
+- Warm perf criterion measured the cache; `hyperfine -w 2` makes cold not cold (testability + feasibility).
+- Wall-clock leaks into snapshots → `ROLLCALL_NOW` (testability).
+- Vacuous/contradictory criteria (#8 no positive control, #10, #13 exit code, #16 assertion) (testability).
+- Truncation contradiction; Claude `lastPrompt` already ellipsised (testability + feasibility).
+- TUI doesn't render the session↔worktree join inline — the GIF frame (product).
+- MCP with prompts off is hollow; first MCP call on empty cache returns nothing (product).
+- First-run dead-ends: `$HOME` refused with no guidance, root inside a repo finds nothing, blank screen during cold scan (product).
+- `R` without `rc` is a confusing exit → exec the agent directly by default (product).
+
+## Minor
+
+Scrub gaps (`github_pat_`, `npm_`, JWT, Stripe; emails optional); bidi/zero-width chars; per-block prompt filtering and cut at injected markers; SQLite `mode=ro` still takes shared locks — never `immutable`; hidden-submodule matching; `ended_at` choice; MCP root exact match and external-worktree leakage; supply-chain additions (`default-features=false`, `cargo deny bans` on network crates, trusted publishing, `unsafe_code = "forbid"`); prior-art rows (xlaude 184★, agent-sessions 881★, nicknisi/sessions 36★); scope estimate revised to 5–7 weeks.
+
+## Correction to orchestrator note
+
+The claim that the newest Codex rollouts lack `git` and `user_message` came from a size/mtime-ordered sample; ordered by `created_at`, 50/50 newest threads yield a prompt and 22/50 have `session_meta.git`.
