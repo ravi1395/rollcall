@@ -183,3 +183,18 @@ The pre-open list is a denylist against gix internals; each security round found
 
 - §12.1 #16 named runner `macos-13`, which GitHub has retired. Current Intel macOS labels are `macos-15-intel` and `macos-26-intel` (GitHub-hosted runner reference, checked 2026-09-29). Spec now says `macos-15-intel`.
 - §8.1 opened `ROLLCALL_RESUME_FILE` with `O_TRUNC` before the ownership/link/mode checks, so a hard-linked or `0644` target was truncated even when the checks then refused it. Now: open without `O_TRUNC`, verify on the fd, then truncate through the fd. §10.2 test now asserts the bytes are unchanged, not just "nothing written".
+
+# Plan red-team round 1 → spec revision 7
+
+**Date:** 2026-09-29. **Target:** plan `2026-09-29-rollcall-v0-plan.md` @ `eeb8bc9`. **Reviewers:** five independent Opus 5.5 agents (`skeptical-reviewer`, `model: opus`), read-only, one lens each. Full findings and plan dispositions: `docs/superpowers/plans/2026-09-29-rollcall-v0-plan-redteam.md`.
+
+Spec-level defects, each re-verified by the orchestrator before editing (commands in the plan red-team doc):
+
+- **§11 `gix-transport` ban unsatisfiable.** gix 0.88 depends non-optionally on `gix-protocol` → `gix-transport` (`cargo tree -i gix-transport` on gix with only `sha1`). Only its `default` (empty) feature is enabled. Ban now targets the client features, not the crate.
+- **§4.4 missed read site: `config.worktree`.** gix 0.88.0 `config/cache/incubate.rs` loads `config.worktree` with `File::open` + `io::copy` (no cap, follows symlinks, blocks on a FIFO) when `extensions.worktreeConfig` is set. Added to the pre-open list and hostile fixtures; maintenance rule widened to `io::copy` and process-spawn sites.
+- **§3.3 `dirty_count` needs HEAD↔index status.** `index_worktree_status` alone misses staged changes; `tree_index_status` exists at 0.88. Union-by-path and rename-counts-once now stated.
+- **§8.1 resume file blocks on a FIFO.** Open without `O_NONBLOCK` blocks forever on a reader-less FIFO. Added `O_NONBLOCK`.
+- **§7 no field for `doctor` notes.** §5.2 ("report why in `doctor`") and §4.1 ("`doctor` notes the layout") had no `DoctorDoc` field. Added `notes: string[]`.
+- **§3.4/§6.1 matches not keyed by root.** A stale answer for root A could show root B's matching. `sessions_for` now takes the root; matches stored per root.
+- **§10.2 non-discriminating tests.** A single self-loop symlink ends by ELOOP with or without a visited set → fan-out fixture. Positive controls ran on the tree under test and only exercised real git → separate `H` builds plus a gix-default control. Size-changing edits skip clean filters → same-size edits; `diff=x` attribute added so `diff.x.command` can fire. `big-object` must be on a read path → HEAD root tree. 1 ms deadline could let trivial repos finish → 1 µs budget, deadline covers open, late results discarded.
+- **§3.3 `scanned_at`** now defined as "now" at scan start (idempotence and TUI snapshots depend on it).

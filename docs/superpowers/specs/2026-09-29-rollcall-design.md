@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 6 — after red-team rounds 1–4 and plan-time fixes (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
+**Status:** Revision 7 — after red-team rounds 1–4 and plan red-team round 1 (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
@@ -70,7 +70,7 @@ Delightful TUI, a hard technical core (safe discovery over hostile repos, increm
 ### Assumptions
 
 - Claude Code and Codex log/database formats are internal and change between versions. Every source detects unrecognised shapes, degrades to partial data, and reports it in `doctor`.
-- APIs named in §4.4 were checked against gitoxide source at `5708de4` (gix 0.86) and docs.rs for 0.88. If any named API differs in the pinned version, the implementer stops and reports; the safety rule is never weakened to fit.
+- APIs named in §4.4 were checked against gitoxide source at `5708de4` (gix 0.86) and the gix 0.88.0 crate source. If any named API differs in the pinned version, the implementer stops and reports; the safety rule is never weakened to fit.
 
 ## 2. Approaches considered
 
@@ -123,13 +123,13 @@ Unknown keys → warning on stderr. Invalid TOML or wrong types → exit 2.
 
 ### 3.3 Definitions
 
-"Now" is `ROLLCALL_NOW` if set, else the system clock. All git data is read in-process with gix (§4.4).
+"Now" is `ROLLCALL_NOW` if set, else the system clock. A scan's `scanned_at` is "now" taken at scan start; elapsed times (the `scan` summary, budgets, deadlines) use a monotonic clock. All git data is read in-process with gix (§4.4).
 
 - **Default branch** (reported as a short local name, e.g. `main`): target of `refs/remotes/origin/HEAD` mapped to its local name; else local branch `main`; else `master`; else `null`.
 - **Upstream**: `branch.<name>.remote` + `branch.<name>.merge` from repo config, resolved to a remote-tracking ref, reported as `<remote>/<branch>`. `null` if unset, unresolvable, or repo-local config is untrusted (repo owned by another user).
 - **ahead / behind**: commits reachable from the branch tip and not from upstream, and vice versa, via `rev_walk().with_hidden()`. Saturate at 10,000. `null` without upstream.
 - **unpushed**: with upstream → `ahead`. Without upstream but ≥ 1 remote → commits on the branch not reachable from any `refs/remotes/*` (saturating at 10,000). No remote → `null`.
-- **dirty_count**: tracked paths differing from HEAD (staged or unstaged; modified, added, deleted, renamed, type-changed, conflicted). Excludes untracked.
+- **dirty_count**: tracked paths differing from HEAD (staged or unstaged; modified, added, deleted, renamed, type-changed, conflicted), computed as the union by path of HEAD↔index changes (`tree_index_status`) and index↔worktree changes (`index_worktree_status`); a path changed in both counts once; a rename counts once (rename tracking enabled in code, not via config). Excludes untracked.
 - **untracked_count**: untracked, non-ignored files. Ignore rules include the user's `core.excludesFile` (§4.4).
 - **last_commit_at**: committer time of the worktree HEAD commit.
 - **merged**: a linked worktree on a branch other than the default branch whose tip is an ancestor of the default branch tip. Squash merges are not detected (documented).
@@ -177,7 +177,7 @@ struct SourceScan  { files: Vec<FileState>, sessions: Vec<Session>, diag: Source
 trait Index {
     fn source_state(&self, s: SourceKind) -> SourceState;
     fn repos_for_root(&self, root: &Path) -> Vec<RepoRow>;      // via the root-membership table (§6.1)
-    fn sessions_for(&self, worktree: &Path) -> Vec<Session>;     // matched sessions, ended_at desc
+    fn sessions_for(&self, root: &Path, worktree: &Path) -> Vec<Session>;  // sessions matched by this root's last scan, ended_at desc
     fn scanned_at(&self, root: &Path) -> Option<Timestamp>;
     fn last_diagnostics(&self, root: &Path) -> Option<ScanDiagnostics>;  // for doctor under contention
     fn commit_scan(&mut self, root: &Path, scan: ScanResult) -> Result<()>;   // one transaction
@@ -245,7 +245,7 @@ rollcall must be safe on folders of cloned or unpacked repos that may be hostile
 Every repo — including each submodule and each linked worktree — is opened through the **hardened open** below; nothing is opened any other way.
 
 - **No subprocesses** during scan. gix implements neither hooks nor fsmonitor; filter, diff and merge drivers are removed below; submodules are never opened implicitly by gix.
-- **Pre-open checks** (before calling gix): in the git dir, `lstat` `config`, `HEAD`, `packed-refs`, `index`, `commondir`, `gitdir`, `shallow`, `info/exclude`, `info/attributes`, `objects/info/alternates`, `objects/info/commit-graphs/commit-graph-chain`, and every entry under `refs/` (stop after 10,000 entries). In the worktree root (non-bare repos), `lstat` `.gitmodules`, `.gitignore`, `.gitattributes`. Any of these that is a symlink, is not a regular file (or directory, for `refs/` subdirs), or exceeds its cap — `config`, `shallow`, `info/*`, `objects/info/alternates`, `commit-graph-chain`, `commondir`, `gitdir`, and the three worktree-root files 1 MiB; `HEAD` and loose refs 4 KiB; `packed-refs` 64 MiB; `index` 256 MiB — makes the repo an `error: "untrusted git dir"` row with no open. Files that don't exist are fine.
+- **Pre-open checks** (before calling gix): in the git dir, `lstat` `config`, `HEAD`, `packed-refs`, `index`, `commondir`, `gitdir`, `shallow`, `info/exclude`, `info/attributes`, `objects/info/alternates`, `objects/info/commit-graphs/commit-graph-chain`, `config.worktree` (also in each `worktrees/<name>/` admin dir), and every entry under `refs/` (stop after 10,000 entries). In the worktree root (non-bare repos), `lstat` `.gitmodules`, `.gitignore`, `.gitattributes`. Any of these that is a symlink, is not a regular file (or directory, for `refs/` subdirs), or exceeds its cap — `config`, `config.worktree`, `shallow`, `info/*`, `objects/info/alternates`, `commit-graph-chain`, `commondir`, `gitdir`, and the three worktree-root files 1 MiB; `HEAD` and loose refs 4 KiB; `packed-refs` 64 MiB; `index` 256 MiB — makes the repo an `error: "untrusted git dir"` row with no open. Files that don't exist are fine.
 - **Alternates chain:** pre-open follows `objects/info/alternates` itself: each hop's `info/alternates` is checked as above (regular file ≤ 1 MiB), at most 8 hops; otherwise `untrusted git dir`.
 - **Commit-graph:** config override `core.commitGraph=false`, and rollcall's rev-walk platform disables commit-graph use.
 - **Config:** `gix::open_opts` with `Config::isolated()` permissions (no system, user, or environment config; no includes; no git-binary lookup). Repo-local config is still read. The user's `core.excludesFile` is read by rollcall itself (from `~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config`, no includes, same pre-open checks and 1 MiB cap) and passed as a config override.
@@ -256,7 +256,7 @@ Every repo — including each submodule and each linked worktree — is opened t
 - **Per-repo deadline:** `repo_state` for each repo runs on a worker thread with a deadline of `repo_budget_secs`. gix's interrupt flag is set at the deadline (stops status/dirwalk), and rollcall's own rev-walk loops check the deadline every 256 commits. If the thread has not returned at the deadline, the row gets `error: "timed out"`, the thread is abandoned (not joined), and `doctor` counts it in `repo_timeouts_abandoned`.
 - **Consequences (documented):** files using clean/smudge filters (e.g. Git LFS, custom eol) may count as dirty where `git status` says clean; repo-local `core.attributesFile` is ignored.
 - **Documented limitation:** untracked `.gitignore` / `.gitattributes` files in **subdirectories** of an unpacked (not cloned) hostile tree are read by gix without a size cap; a symlink there to `/dev/zero` can exhaust memory.
-- **Maintenance rule:** the pre-open list is a denylist against gix's internal read sites (verified at gitoxide `5708de4`). Any gix version bump requires re-auditing the `fs::read` / `read_to_end` / `BufReader::lines` call sites reachable from open, status and rev-walk before release.
+- **Maintenance rule:** the pre-open list is a denylist against gix's internal read sites. The round-4 audit at gitoxide `5708de4` missed `config.worktree` (read uncapped when `extensions.worktreeConfig` is set; found by the plan red-team and confirmed in gix 0.88.0 `config/cache/incubate.rs`), so the list is re-audited against the pinned version before implementation. Any gix version bump requires re-auditing the `fs::read` / `read_to_end` / `read_to_string` / `io::copy` / `BufReader::lines` call sites and the process-spawn sites (`gix-command`, filter drivers) reachable from open, `tree_index_status`, `index_worktree_status` and rev-walk before release.
 - gix errors on one repo produce an `error` row (§4.1 prefixes); the scan continues.
 
 ## 5. Session sources
@@ -325,7 +325,7 @@ Sources are read-only on agent data: they never modify agent files or databases 
 ### 6.1 Location and permissions
 
 - Cache directory via the `directories` crate: macOS `~/Library/Caches/rollcall`, Linux `$XDG_CACHE_HOME/rollcall` (default `~/.cache/rollcall`). Directory `0700`; `cache.sqlite` and its `-wal`/`-shm` files `0600`, set explicitly regardless of umask.
-- One database for all roots. Repos/worktrees keyed by canonical path. A **root-membership table** `(root, repo_path, kind, contains_root)` records which repos a root's scan produced — including the enclosing repo, `external_main` repos, and worktrees outside the root — since `kind` and `contains_root` depend on the root. `external` is computed per root from worktree path vs root. Sessions keyed by `(source, id)`, shared across roots. The last scan's diagnostics are stored per root for `doctor`.
+- One database for all roots. Repos/worktrees keyed by canonical path. A **root-membership table** `(root, repo_path, kind, contains_root)` records which repos a root's scan produced — including the enclosing repo, `external_main` repos, and worktrees outside the root — since `kind` and `contains_root` depend on the root. `external` is computed per root from worktree path vs root. Sessions keyed by `(source, id)`, shared across roots; session → worktree matches are stored per root, since candidates depend on the root (§6.5). The last scan's diagnostics are stored per root for `doctor`.
 
 ### 6.2 What is stored
 
@@ -428,6 +428,7 @@ DoctorDoc {
   worktrees: { total: int, external: int, missing: int, untrusted_path: int },
   submodules: int, repo_errors: int, untrusted_git_dirs: int,
   repo_timeouts: int, repo_timeouts_abandoned: int,
+  notes: string[],                              // e.g. why a source fell back or is absent; unusual repo layouts (§4.1)
   sources: [{
     source: "claude" | "codex",
     mode: "jsonl" | "db" | "rollouts" | "absent",   // absent: source root missing or contains no session files/DB
@@ -462,7 +463,7 @@ DoctorDoc {
 - Keys: `j`/`k`/arrows move; `enter` expands/collapses; `tab` switches pane; `/` filters repos and branches by case-insensitive substring (Esc clears); `r` rescans; `?` help; `q` quits (exit 0).
 - **`R` (resume, default):** **before** changing directory, resolves the agent binary (`claude` or `codex`) to an absolute path by searching only the **absolute** entries of `PATH` (empty and relative entries are ignored). Then it restores the terminal, `chdir`s to the session cwd, and `execv`s that absolute path with `--resume <id>` (Claude) or `resume <id>` (Codex), argv built from the validated id; no shell. The user's shell stays in its original directory after the agent exits (documented; `rc` changes that). Refused with a status message if the cwd no longer exists or no absolute agent path is found. The README notes that the resumed agent's own workspace-trust prompts still apply inside untrusted repos.
 - **`R` with `rc`:** `rollcall init <shell>` prints a function `rc` that creates a private temp file (`mktemp`, mode 0600), runs `ROLLCALL_RESUME_FILE=<file> command rollcall "$@"`, and only if the exit code is 10: reads three NUL-separated fields (`cwd`, `source`, `id`) from the file (bash/zsh `read -r -d ''`, fish `read -z`); checks `source ∈ {claude, codex}` and `id` against the UUID regex; resolves the agent with `command -v` and requires an absolute result (`/*`) **before** `cd`; then runs `cd -- "$cwd" && "$bin" --resume "$id"` (or `"$bin" resume "$id"`) from those variables. The file is always removed. **No `eval` anywhere.**
-- When `ROLLCALL_RESUME_FILE` is set and `R` is pressed, rollcall opens that path with `O_WRONLY | O_NOFOLLOW | O_CLOEXEC` (no `O_TRUNC`), verifies on the open fd that it is a regular file, owned by the effective uid, with one link and mode `0600`, then truncates through the fd, writes the three fields, and exits 10. Any check failing → status message; the file is neither truncated nor written.
+- When `ROLLCALL_RESUME_FILE` is set and `R` is pressed, rollcall opens that path with `O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC` (no `O_TRUNC`; `O_NONBLOCK` so a FIFO fails instead of blocking), verifies on the open fd that it is a regular file, owned by the effective uid, with one link and mode `0600`, then truncates through the fd, writes the three fields, and exits 10. Any check failing → status message; the file is neither truncated nor written.
 - **`Y`** copies the display resume line `cd -- '<cwd>' && claude --resume <id>` (path shell-quoted) to the clipboard.
 - **`c`** copies `cd -- '<worktree path>'` (shell-quoted). Clipboard per config `clipboard`; failure → status message.
 - **`o`** opens the worktree in `$VISUAL` or `$EDITOR`, split with shell-words rules, executed without a shell, path as its own argument; unset → status message.
@@ -507,26 +508,26 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 ### 10.1 Fixture manifest and oracles
 
 - `tests/fixtures/MANIFEST.toml` is **hand-written** and committed before the code it tests. It declares every fixture repo, worktree, commit (fixed author, committer and dates), remote, file state, and synthetic session (with its expected derived fields).
-- A generator (test-only code in `rollcall-cli/tests/support`, independent of rollcall's own logic) builds fixture roots from the manifest in temp directories: `F` (full), `F_clean` (`F` minus every fixture expected to carry an `error` or trigger `partial`: corrupted repo, bad `gitdir`, untrusted git dir, untrusted worktree path, hostile repos, hang probe, unreadable dir), `H` (hostile and hang-probe repos only, §10.2), and `EXT` (outside-root targets).
+- A generator (test-only code in `rollcall-cli/tests/it/support.rs`, independent of rollcall's own logic) builds fixture roots from the manifest in temp directories: `F` (full), `F_clean` (`F` minus every fixture expected to carry an `error` or trigger `partial`: corrupted repo, bad `gitdir`, untrusted git dir, untrusted worktree path, hostile repos, hang probe, unreadable dir), `H` (hostile and hang-probe repos only, §10.2), and `EXT` (outside-root targets).
 - CI installs `zsh` and `fish` on Linux runners so shell tests run on both OSes.
 - Expected outputs `tests/expected/*.json` are **hand-written** from the manifest and the spec, never generated by running rollcall. Paths are written as `$F/…`, `$EXT/…`; the harness canonicalises both sides before substitution and comparison.
 - All tests set `ROLLCALL_NOW` to a fixed instant and `HOME`, `XDG_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` to temp directories.
 
 ### 10.2 Cases
 
-- **Discovery:** normal; linked worktree; case A; case B; missing worktree; worktree whose `gitdir` points at `$HOME` (untrusted path); modern and old-style submodule; bare; nested; repo in a `.gitignore`d folder; repos under `node_modules/` and `target/`; symlink loop; symlink to outside the root; unreadable dir (skipped with a logged reason when euid = 0); root inside a repo (enclosing row); refused-root suggestions.
+- **Discovery:** normal; linked worktree; case A; case B; missing worktree; worktree whose `gitdir` points at `$HOME` (untrusted path); modern and old-style submodule; bare; nested; repo in a `.gitignore`d folder; repos under `node_modules/` and `target/`; symlink loop (a fan-out: two sibling links to an ancestor, which grows exponentially without the visited set); symlink to outside the root; unreadable dir (skipped with a logged reason when euid = 0); root inside a repo (enclosing row); refused-root suggestions.
 - **Git state:** dirty (staged, unstaged), untracked, user `core.excludesFile` honoured, ahead/behind, no upstream with remote, no remote, detached HEAD, merged, inactive, no default branch, corrupted repo.
-- **Deadline:** a **separate run** on `F_clean` with `repo_budget_secs = 0.001` → every repo row has an error starting `"timed out"`, exit 1.
+- **Deadline:** a **separate run** on `F_clean` with `repo_budget_secs = 0.000001` (the deadline covers the hardened open; a result that arrives at or after the deadline is discarded) → every repo row has an error starting `"timed out"`, exit 1.
 - **Hostile repos** (root `H`; a temp **global** gitconfig with `filter.lfs.clean`/`filter.lfs.process` and `safe.directory=*`; each driver, hook and fake binary writes a **distinct** marker file `marker-<vector>`):
-  - `drivers`: repo-local `filter.x.clean`, `diff.x.command`, `merge.x.driver`, `core.fsmonitor`, `core.hooksPath` + a hook; `.gitattributes` `* filter=x` and `*.bin filter=lfs`; attributed files modified after checkout.
-  - `submodule`: a repo with a submodule whose own `.gitattributes` names `filter=lfs`, attributed file modified after checkout.
+  - `drivers`: repo-local `filter.x.clean`, `diff.x.command`, `merge.x.driver`, `core.fsmonitor`, `core.hooksPath` + a hook; `.gitattributes` `* filter=x diff=x` and `*.bin filter=lfs`; attributed files modified after checkout with same-size content (so no size short-circuit skips the filter).
+  - `submodule`: a repo with a submodule whose own `.gitattributes` names `filter=lfs`, attributed file modified after checkout with same-size content.
   - `worktree-escape`: repo-local `core.worktree=$HOME`, `core.bare=false`.
   - `commondir-escape`: a linked worktree whose `commondir` points at another fixture repo.
-  - `symlinked-files`: committed bare `fixtures/foo.git` whose `config` and `packed-refs` are symlinks to a sparse 4 GiB file; separate bare repos whose `shallow`, `objects/info/commit-graphs/commit-graph-chain`, and second-hop `objects/info/alternates` are such symlinks; a non-bare repo whose worktree-root `.gitmodules` is such a symlink.
-  - `big-object`: a loose object whose header claims 1 GiB.
-  - `hang-probe` (separate repo): `include.path` pointing at a harness-created FIFO with no writer, and `packed-refs` replaced by a FIFO.
+  - `symlinked-files`: committed bare `fixtures/foo.git` whose `config` and `packed-refs` are symlinks to a sparse 4 GiB file; separate bare repos whose `shallow`, `objects/info/commit-graphs/commit-graph-chain`, and second-hop `objects/info/alternates` are such symlinks; a non-bare repo whose worktree-root `.gitmodules` is such a symlink; a repo with `extensions.worktreeConfig=true` whose `config.worktree` is such a symlink.
+  - `big-object`: the HEAD commit's root tree is a loose object whose header claims 1 GiB (so status and rev-walk must read it).
+  - `hang-probe` (separate repo): `include.path` pointing at a harness-created FIFO with no writer, `packed-refs` replaced by a FIFO, and a second repo with `extensions.worktreeConfig=true` and `config.worktree` a FIFO.
   - A fake `git`, `git-lfs`, `claude`, `codex` first on `PATH`, each writing `marker-path-<name>`.
-  - **Positive controls:** running the **real** git by absolute path (resolved before the fake is installed) with `status` in `drivers` and `submodule` (sandboxed `HOME`, recursive submodule status) creates `marker-filter-x` and `marker-filter-lfs` respectively.
+  - **Positive controls**, each on its own separate build of `H` so their markers never touch the tree under test: (1) the **real** git by absolute path (resolved before the fake is installed) running `status` in `drivers` and `submodule` (sandboxed `HOME`, recursive submodule status) creates `marker-filter-x` and `marker-filter-lfs` respectively; (2) gix opened with default (non-hardened) options and its built-in submodule status on `drivers` creates `marker-filter-x` — proving rollcall's config stripping, not gix's defaults, is what prevents it.
   - **Assertions:** `rollcall scan H` exits within 10 s with peak RSS < 512 MB (`/usr/bin/time -v` on Linux, `-l` on macOS); no `marker-*` file exists; every `symlinked-files` repo and the `hang-probe` row carry `"untrusted git dir"`; `worktree-escape` and `commondir-escape` rows carry `"untrusted worktree path"`.
 - **Claude fixtures:** each §5.1 rule, including `tool_result` as the last user record, `isMeta`, `<command-name>`, injected marker after user text, custom/ai/prompt title precedence, pre-truncated `lastPrompt`, `lastPrompt` with zero human prompts, multi-cwd, `"HEAD"`, subagent file, non-UUID id, oversize line, malformed line.
 - **Codex fixtures:** a `state_5.sqlite` with `threads` + `thread_spawn_edges`: spawn-edge child, `source` subagent child, `parent_thread_id` child, archived thread, empty title, title equal to `first_user_message`, empty `git_branch` with rollout branch, `rollout_path` outside `CODEX_HOME`; rollouts with `user_message` events, without them (`response_item` path, `[injection, user]` blocks); database absent → fallback; rollout moved to `archived_sessions`; second `session_meta`.
@@ -544,7 +545,7 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 ## 11. Distribution and release
 
 - **Build hygiene:** `Cargo.lock` committed; `unsafe_code = "forbid"` in all crates; `gix` with `default-features = false` and an explicit feature list (no transport/network features).
-- **CI (GitHub Actions, macOS + Linux, actions pinned by SHA, least-privilege tokens):** `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo test --locked`; `cargo deny check` (licenses, advisories, and `bans` denying `reqwest`, `hyper`, `curl`, `gix-transport`, `ureq`); `cargo audit` on every push and on a weekly schedule. Dependabot for cargo and actions.
+- **CI (GitHub Actions, macOS + Linux, actions pinned by SHA, least-privilege tokens):** `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo test --locked`; `cargo deny check` (licenses, advisories, and `bans` denying the crates `reqwest`, `hyper`, `curl`, `ureq`, and the `gix-transport` features `blocking-client`, `async-client`, `http-client*` — the `gix-transport` crate itself is a non-optional dependency of gix through `gix-protocol` and compiles with no client features); `cargo audit` on every push and on a weekly schedule. Dependabot for cargo and actions.
 - **Releases:** `cargo-dist` → GitHub Release binaries with SHA-256 checksums and GitHub artifact attestations, Homebrew tap, shell installer; crates.io via trusted publishing (OIDC).
 - **License:** dual MIT / Apache-2.0.
 - **README:** pitch; differentiator table (§1); install; `rollcall init` / `rc` setup; MCP registration for Claude Code and Codex with `--root` and a first `rollcall scan`; privacy notes; demo GIF recorded with `vhs` against a synthetic demo root and synthetic logs, with stub `claude`/`codex` on `PATH`.
