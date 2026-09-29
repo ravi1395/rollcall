@@ -1,0 +1,34 @@
+# Worker rules — every rollcall v0 phase
+
+You implement exactly one plan phase. Sources of truth, in order: the spec
+`docs/superpowers/specs/2026-09-29-rollcall-design.md` (rev 10, the contract), the plan
+`docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md` (rev 5) — read its § Execution rules
+R1–R6, § Interfaces, § Fixture manifest schema, and your phase section in full, plus every
+spec section your phase names. Other workers share the codebase in other worktrees; preserve
+their work and touch only your phase's files.
+
+- **Files:** only the files your phase lists (plus `mech:` files it names). R1: never edit a
+  `Cargo.toml`, `Cargo.lock`, a `mod` list, or a pinned § Interfaces signature after P01/P04.
+  If you need one changed, stop and report `blocked` with the exact text you need.
+- **Test-first (R3):** write the phase's tests, run them, see them fail on an assertion (or
+  `unimplemented!()` panic), then implement. Every check must be able to fail.
+- **Verification:** `cargo clippy -p <crate> --all-targets --locked -- -D warnings`, `cargo fmt
+  -p <crate> -- --check` (or `rustfmt --check` on your files), plus the phase's
+  "Expected test outputs" command. Never `--workspace` builds/tests unless your phase says so.
+  Quote the full `test result: ok. N passed; 0 failed; …` line; a filtered run with `0 passed`
+  is a failure.
+- **Build env:** `export CARGO_TARGET_DIR=/Users/ravichandrasekhar/Projects/rollcall/target`
+  before any cargo command (shared across worktrees; cargo may print "Blocking waiting for file
+  lock" — wait, don't kill it). First builds take minutes: use Bash timeouts of 600000 ms.
+- **Forbidden:** `std::env::set_var` / `remove_var` (edition 2024 `unsafe`; `unsafe_code` is
+  forbidden) — vary env via `EnvPaths` or `Command::env`. Printing prompt text from real
+  agent logs (`~/.claude`, `~/.codex`) — never read them. Network access in code.
+- **Ponytail (R4):** simplest code that meets the spec; no unrequested abstractions. It never
+  cuts spec scope.
+- **Blocking tests:** anything that runs rollcall, opens FIFOs, or could hang runs under a
+  watchdog (R3).
+- **No git:** never `git add/commit/stash/checkout/reset/push`. Leave edits in the tree.
+- **Receipt (final message):** JSON with `phase`, `model_id` (your exact model id),
+  `status` (`passed` | `failed` | `blocked`), `files_changed`, `tests_run` (each command with
+  the quoted result line), `criteria` (each phase acceptance criterion → how it is proven:
+  test name or command + output), `decisions` (any choice the plan left open), `blockers`.
