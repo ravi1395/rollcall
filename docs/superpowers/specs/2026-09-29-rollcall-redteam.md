@@ -176,3 +176,10 @@ All addressed in revision 4.
 ## Residual risk
 
 The pre-open list is a denylist against gix internals; each security round found the next uncapped read site. It is now documented as a maintenance rule, but a future gix change can reopen it.
+
+# Plan-time corrections (revision 6)
+
+**Date:** 2026-09-29, found while writing the implementation plan.
+
+- §12.1 #16 named runner `macos-13`, which GitHub has retired. Current Intel macOS labels are `macos-15-intel` and `macos-26-intel` (GitHub-hosted runner reference, checked 2026-09-29). Spec now says `macos-15-intel`.
+- §8.1 opened `ROLLCALL_RESUME_FILE` with `O_TRUNC` before the ownership/link/mode checks, so a hard-linked or `0644` target was truncated even when the checks then refused it. Now: open without `O_TRUNC`, verify on the fd, then truncate through the fd. §10.2 test now asserts the bytes are unchanged, not just "nothing written".
