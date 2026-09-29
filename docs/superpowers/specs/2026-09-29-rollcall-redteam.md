@@ -198,3 +198,17 @@ Spec-level defects, each re-verified by the orchestrator before editing (command
 - **§3.4/§6.1 matches not keyed by root.** A stale answer for root A could show root B's matching. `sessions_for` now takes the root; matches stored per root.
 - **§10.2 non-discriminating tests.** A single self-loop symlink ends by ELOOP with or without a visited set → fan-out fixture. Positive controls ran on the tree under test and only exercised real git → separate `H` builds plus a gix-default control. Size-changing edits skip clean filters → same-size edits; `diff=x` attribute added so `diff.x.command` can fire. `big-object` must be on a read path → HEAD root tree. 1 ms deadline could let trivial repos finish → 1 µs budget, deadline covers open, late results discarded.
 - **§3.3 `scanned_at`** now defined as "now" at scan start (idempotence and TUI snapshots depend on it).
+
+# Plan red-team round 2 → spec revision 8
+
+**Date:** 2026-09-29. Three Opus reviewers on plan revision 2 / spec revision 7 @ `031051e`. Record: `docs/superpowers/plans/2026-09-29-rollcall-v0-plan-redteam.md` (round 2 section).
+
+- **Revision 7 regression: HEAD tree expansion unbounded.** Counting staged changes via `tree_index_status` expands the whole HEAD tree (`index_from_tree`) with no interrupt parameter (orchestrator read gix 0.88.0 `status/tree_index.rs`). Reviewer-reported measurement: 3 nested 200-entry trees → 8,000,000 paths, ~3 GB peak RSS. §4.4 now bounds the HEAD tree walk (1,000,000 entries, deadline-checked) before calling it; `tree-bomb` hostile fixture added; the "interrupt stops status" sentence corrected.
+- **Rename tracking scope.** Index↔worktree rename tracking pairs deletions with untracked files and changes `untracked_count` (reviewer-measured). Now HEAD↔index only, keyed by destination path.
+- **Deadline rules** moved from a §10.2 parenthetical into normative §4.4.
+- **`SourceScan.notes`** added so session sources can feed `DoctorDoc.notes`; `WorktreeKey.missing` recorded in §3.4.
+- **Matches keyed by root and `--submodules`**; a cache answer with a different flag is stale.
+- **`doctor` notes sanitised** in plain/TUI output.
+- **§11 feature ban** names `blocking-client`, `async-client` (the `http-client*` features imply `blocking-client`).
+- **`repo_budget_secs`** must be finite and representable (NaN passed `≤ 0`; `Duration::from_secs_f64` panics on NaN/inf/overflow).
+- Wording: positive control (2) is default open + `index_worktree_status`; `big-object` is read by the HEAD tree walk, not rev-walk.

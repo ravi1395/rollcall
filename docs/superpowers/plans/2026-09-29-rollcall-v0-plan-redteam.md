@@ -84,3 +84,57 @@ Not applied: none rejected outright. P's suggestion to keep only safety rules in
 - 4 GiB sparse files on runner temp filesystems; PTY stability on `macos-14`; `fish read -z` → first CI run.
 - §12.1 #17 medians on `ubuntu-latest` → P40.
 - Whether any further uncovered gix 0.88 read or spawn site exists → P14/P15.
+
+---
+
+# Round 2
+
+**Target:** plan revision 2 / spec revision 7 @ `031051e`. **Reviewers:** three Opus 5.5 `skeptical-reviewer` agents, read-only, ≤ 35 tool calls each.
+**Result:** plan revision 3 and spec revision 8.
+
+| Lens | Verdict |
+|---|---|
+| Executor readiness (round-1 closure + new gaps) | Does not stand — 1 blocker, 13 majors, all local edits |
+| Lanes and green tree | Stands with fixes |
+| Fresh correctness of the round-1 edits | **Does not stand** — spec rev 7 introduced a memory hole |
+
+Round-1 items: the executor reviewer reported items 4, 5, 6, 10, 25 and 26 as only partly closed; the round-2 fixes below cover them.
+
+## Orchestrator re-verification
+
+| Claim | Source / command | Result |
+|---|---|---|
+| `tree_index_status` has no interrupt and expands HEAD fully | gix-0.88.0 `status/tree_index.rs` `tree_index_status` | signature has no `should_interrupt`; body calls `self.index_from_tree(tree_id)` first |
+| audit crate lists missed the actual readers | grep in the locked registry sources | `gix-glob-0.28.0` `search/pattern.rs` `File::open` + `read_to_end`; `gix-shallow-0.14.0` `lib.rs` `std::fs::read(shallow_file)`; `gix-diff-0.68.0` `blob/pipeline.rs` `File::open` + `read_to_end` |
+
+Accepted as reported (reviewer-run, not re-run here): tree bomb of 3 × 200-entry nested trees → 8,000,000 paths, ~3 GB peak RSS (release build); default-options gix + `index_worktree_status` on a same-size edit spawns `filter.x.clean`; index↔worktree rename tracking removes an untracked file from the untracked set; `std::env::set_var` fails to compile under edition 2024 + `forbid(unsafe_code)`; clap parses a bare `frobnicate` as `[PATH]`; `repositoryformatversion = 7` fails gix open and `git fsck`, garbage `HEAD` does not fail open; jsonschema 0.58.2 rejects relative refs against an opaque `rollcall:` base; unused stub parameters warn under `-D warnings`; `O_WRONLY|O_NONBLOCK` on a reader-less FIFO → `ENXIO` on macOS.
+
+## Findings → disposition
+
+Blocker / security:
+1. **HEAD tree expansion unbounded (rev 7 regression).** → Spec rev 8 §4.4 HEAD tree bound (1,000,000 entries, deadline-checked); `tree-bomb` fixture; P20 unit test; P35 gate; P15c lists non-interruptible memory-growth paths.
+2. **`set_var` unusable; env not injectable** (both reviewers). → R3 rule; `EnvPaths` pinned; `Model.no_color`; `handle_key` takes `&EnvPaths` and returns `Action`; `resume` takes `&EnvPaths` and a `uid`; `find_agent` takes the `PATH` value.
+3. **`display_line` stub until P38 but rendered from P31** (lanes). → Moved to `output.rs`, P31.
+
+Major:
+4. `lib.rs` entry points without an owning phase (both). → P04 writes one-line delegations to module `pub fn`s; later phases never touch `lib.rs`.
+5. P19 criteria computed by P20 (lanes). → Moved to P20; P19's positive control runs status on the hardened repo explicitly.
+6. `check-manifest.py count` unowned, circular, parallel edits (both). → P07 writes the whole script; counts are hand-written `[expect_counts]`.
+7. Rebase after R1 edits not conflict-free (lanes). → R1: edits to open-lane files go through that lane's worker at a phase boundary.
+8. P31 non-TTY criterion needs the binary; unit tests can't reach `validate` (lanes). → Moved to P32; `output.rs` tests build their own validator.
+9. `corrupted` fixture opens fine in gix (executor). → Pinned as format version 7; P21 tightened to `open failed: `.
+10. Audit crate lists miss real readers (executor). → Mechanical list from `cargo tree`; P15 split into 15a/15b/15c.
+11. Session corpora, incremental steps, path tokens, and several keys undefined (executor). → Manifest schema: `corpus`, `steps` (carries #7's oracle), path tokens, `target`, `edit`, `rollout_id`, `[home].files`, `[[big_log]]`, `[expect_counts]`, commit-index scope, per-gate corpus list.
+12. `WaitAtMost` semantics unpinned (executor). → Pinned in § Interfaces; P30 tests it.
+13. Test-crate dead code (both). → `#![allow(dead_code)]` in `tests/it/main.rs`; builders exercised by `build_all_*` self-tests.
+14. `matched`/`unmatched` fill unowned (executor). → P30.
+15. P27 too big (executor). → Split into 27a/27b.
+16. Rename-tracking scope changes `untracked_count` (correctness). → Spec rev 8 §3.3; P20 cases.
+17. No carrier for source notes (correctness). → Spec rev 8 `SourceScan.notes`.
+18. `frobnicate` parses as PATH (executor). → P04 tests `status --frobnicate`.
+
+Minor (all applied): stub params `_`-prefixed; `[[bin]] name = "rollcall"`; root-relative test paths; P01 `[lints]` grep and P02 path fixed, count ≥ 5; pass floors on P21/P25; single-mutation invalid schema examples; absolute `rollcall:` refs, `resolve-file` dropped; snapshot creation reviewed by the orchestrator; `Model` fields pinned; parallel sub-chains get their own worktrees; FIFO writer released after assertion; deadline rules normative in §4.4; matches stored with the `--submodules` flag; `doctor` notes sanitised; §11 feature list; `repo_budget_secs` finite; `ScanDiagnostics = DoctorDoc`; `WorktreeKey.missing` in spec; trust (d) uses path skips only (plan decision, noted in § Interfaces); SHA-1 collision `Err` → re-read; P28 checks the Codex DB column list.
+
+## Still unverified (owner phase)
+
+Carried from round 1, plus: Linux `O_NONBLOCK` behaviour on the resume file (P38, CI); rebuild under `--locked` after a lane rebase (first R1 edit); `derive(Deserialize)` dead-code behaviour outside `support.rs` (covered by the crate-level allow).
