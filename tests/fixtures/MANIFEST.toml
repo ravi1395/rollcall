@@ -1,0 +1,1026 @@
+# rollcall fixture manifest. Hand-written; committed before the code it tests (spec 10.1).
+# P07 wrote the git half (this file: [meta], [home], [[repo]], git [expect_counts]).
+# P08 adds sessions, perf and demo. scripts/check-manifest.py checks coverage; it is complete already.
+#
+# ---- Schema summary (plan "Fixture manifest schema") ----
+# [meta]       now (RFC 3339; ROLLCALL_NOW of every gating test), author, committer ({ name, email }).
+# [[repo]]     id (unique) | root (F | EXT | H | budget | home | perf | demo) | path (relative to its root)
+#              | kind (normal | bare | nested | submodule | submodule_old | special)
+#              | special (kind = "special" only; the enum below) | in_clean (absent = true; false => not in F_clean)
+#              | target | covers (array of bullet names, exact strings from check-manifest.py) | parent
+#              | commits [{ branch, message, date, files = { path = content } }] | branches | head
+#              | remotes [{ name, target_repo_id }] | upstreams { branch = "remote/branch" } | origin_head
+#              | worktrees [{ path, branch, missing, external }] | state { staged, unstaged, untracked, ignored }
+#              | edit { path = replacement } | config { "section.key" = "value" }
+# [home]       files { relpath = content } for the sandboxed HOME; expected_suggestions (refused-root list).
+# [[claude]] [[codex_thread]] [[codex_rollout]] [[big_log]] [matching] [perf] [mcp_200] [demo]: P08.
+# [expect_counts]  hand-counted F_repos, F_worktrees (below); P08 adds <source>_sessions.
+# Path tokens in any value: $F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS and $FIFO:<name> (a FIFO the harness creates).
+# special enum: fifo_git symlink_fanout symlink_out_of_root unreadable_dir corrupted bad_gitdir untrusted_path drivers
+#   submodule_lfs worktree_escape commondir_escape symlinked_files worktree_config_symlink big_object hang_probe
+#   hang_probe_worktree_config enclosing_root tree_bomb tree_bomb_long excludes_file   (excludes_file added by P07, spec rev 11)
+#
+# ---- Conventions the schema left open (fixed by P07; P27b builds to these) ----
+# Build order per repo: init (initial branch = first commit's branch), commits, branches, worktrees, state and edit, then
+#   `config` (written by editing the config file directly, never via a git command, so drivers never run during build), then
+#   `target` replacement (symlink / FIFO / rewrite) as the very last step: no git command runs in that repo afterwards.
+#   Cross-repo order: submodule children and EXT repos are built before the parents and the remote fetches that use them.
+# commits: made in array order, each on its `branch`. A commit on a branch that does not exist yet forks that branch from
+#   the commit of the previous array entry; on an existing branch it continues that branch. Author, committer and dates are
+#   fixed from [meta] and the commit's `date`, so identical entries in different repos give identical commit ids.
+# branches { name = i }: extra branch ref pointing at commits[i].   head: branch name, or "detached:<i>" (commits[i]).
+# Files whose content starts with "#!" are created executable.
+# remotes: url = absolute path of the target repo; after every repo is built, `git fetch <name>` creates the
+#   remote-tracking refs. origin_head = "main" makes refs/remotes/origin/HEAD point at origin/main. upstreams also sets
+#   branch.<b>.remote and branch.<b>.merge.
+# worktrees[].path: relative to the repo's root, or an explicit $TOKEN path. It is created with `git worktree add`
+#   (the branch is created from HEAD if no commit made it). missing = true removes the directory afterwards.
+#   external = true means the worktree lies outside F (expected `external: true` in rollcall output).
+# state: staged = edit then `git add`; unstaged = edit only; untracked = new file "untracked\n"; ignored = new file
+#   "ignored\n" (ignored by [home]'s global excludes file). edit values keep the committed byte length (checked).
+# kind = "special" repos are non-bare unless config has core.bare = "true" (then `git init --bare`; commits still apply).
+# Special repos that are directory fixtures, not repos (no commits, no row): symlink_fanout (creates <path>/d1/d2/loop-a
+#   and loop-b, both symlinks to the root being built), symlink_out_of_root (symlink <path> -> target), unreadable_dir
+#   (mode 000; discovery skips it, or the test skips when euid = 0), fifo_git (<path>/.git is a FIFO).
+# target by special: symlinked_files = the file that becomes a symlink to a sparse 4 GiB file the builder creates
+#   (path relative to the git dir; "worktree:<f>" = worktree root; "objects/info/alternates#2" = second-hop alternates:
+#   builder adds a hop-1 alternates entry to a helper dir whose own objects/info/alternates is the symlink;
+#   "HEAD:<NAME>" = pseudo-ref: HEAD is rewritten to "ref: <NAME>" and <git dir>/<NAME> is the symlink; expected row
+#   error "untrusted git dir", spec rev 11);
+#   excludes_file (spec rev 11): target = a path relative to the repo's work tree that becomes the symlink, and `config`
+#   sets repo-local core.excludesFile to it; expected row has NO error (the key is stripped), so P35 must scan H with a HOME
+#   that has no core.excludesFile (an empty tempdir HOME, not the `home` root, whose .gitconfig sets one);
+#   symlink_out_of_root = link destination; commondir_escape = id of the repo the worktree's commondir is redirected to;
+#   untrusted_path = "$HOME": the linked worktree's admin gitdir file is rewritten to "$HOME/.git". Oracle decision: the
+#   worktree row's path comes from that admin file (spec 4.1 enumerates from .git/worktrees/*), so it is `$HOME`, with
+#   external: true and error "untrusted worktree path"; discovery dedups the on-disk untrusted-path-wt/.git file against
+#   the same admin dir, so there is one row. It counts in F_worktrees. Oracles may write the `$HOME` token;
+#   hang_probe / hang_probe_worktree_config = a $FIFO:<name> that replaces packed-refs / config.worktree;
+#   worktree_config_symlink: the linked worktree's admin config.worktree is the symlink.
+# bad_gitdir: <path>/.git is a file "gitdir: ../does-not-exist". corrupted: config sets core.repositoryformatversion = 7.
+# Submodules are synthesized by the builder; neither parent's `commits` lists a gitlink or .gitmodules, and a child is never
+#   discovered as `nested`. kind = "submodule": `git submodule add` of a scratch clone of the child over file://
+#   (protocol.file.allow=always; child path minus the parent path is the submodule path). kind = "submodule_old": a gitlink
+#   and .gitmodules entry committed in the parent, and the child kept as an in-place repo with a real .git directory.
+#   Both kinds are excluded from F_repos (rows only with --submodules). submodule_lfs: the parent; its child is kind submodule.
+# kind = "bare" repos with commits are built by scratch-clone-then-push.
+# enclosing_root: the repo's working tree contains sub/dir; the scan root is <repo>/sub/dir.
+# EXT is built alongside each F and F_clean build (case B registers a worktree inside EXT's repo).
+# external_main (case B) row: lists both worktrees, the external main (external: true) and the linked one inside F (2 rows).
+# Budget root: about 100 dirents, so tests set walk_budget_entries <= 50 to get `partial`.
+# in_clean = false exactly for: root H or budget, or special in {corrupted bad_gitdir untrusted_path unreadable_dir
+#   symlinked_files worktree_config_symlink drivers submodule_lfs worktree_escape commondir_escape big_object tree_bomb
+#   tree_bomb_long hang_probe hang_probe_worktree_config fifo_git excludes_file} (spec 10.1 exclusion list; budget produces
+#   `partial`).
+# The sandboxed HOME is the `home` root. P08 adds shell-hostile [[repo]] entries to root F and updates [expect_counts] itself.
+
+[meta]
+now = "2026-09-28T12:00:00Z"
+author = { name = "Ada Fixture", email = "ada@fixtures.test" }
+committer = { name = "Ada Fixture", email = "ada@fixtures.test" }
+
+# Sandboxed HOME. The global excludes file makes *.localignore ignored everywhere.
+# expected_suggestions is OS-independent on purpose: no Documents/Desktop/Downloads/Pictures/Movies/Music/Library, which the
+# refused-root peek skips on macOS only (P17's own tempdir test covers Documents/x). Excluded here: golf (repo at depth 3,
+# beyond "within 2 levels"), .cache (skip dir name, all OSes) and foxtrot (6th candidate, cut by the cap of 5). Order = path order.
+[home]
+files = { ".gitconfig" = "[core]\n\texcludesFile = $HOME/.gitignore_global\n", ".gitignore_global" = "*.localignore\n" }
+expected_suggestions = ["$HOME/alpha", "$HOME/bravo", "$HOME/charlie", "$HOME/delta", "$HOME/echo"]
+
+# Counting rule for `rollcall status $F --json` (same for the discovery.json projection and status.json):
+# F_repos = repo rows: normal, bare, nested (incl. the ones under .gitignore'd folders), external_main (case B), and
+#   error rows (corrupted, bad gitdir, untrusted git dir). Not counted: submodules (only with --submodules), the enclosing
+#   fixture (lives in EXT and F is not inside a repo), repos under node_modules/ or target/ (skipped), directory fixtures
+#   (fan-out, symlink out of root, unreadable dir), anything reachable only through a symlink (identical in both symlink
+#   modes), and everything in EXT/H/budget/home except case B's external main.
+# F_worktrees = worktree rows over those repos: main + linked, including external (case A), the external main of case B,
+#   missing, and the untrusted-path worktree (its row exists with an error). Bare = 0; repo-level error rows = 0.
+[expect_counts]
+F_repos = 26
+F_worktrees = 29
+
+# ============================== root F ==============================
+
+[[repo]]
+id = "f-normal"
+root = "F"
+path = "normal"
+kind = "normal"
+covers = ["discovery: normal", "git state: no remote", "deadline: F_clean timed-out run"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# normal\n", "src/lib.rs" = "pub fn a() {}\n" } },
+  { branch = "main", message = "second", date = "2026-09-20T09:00:00Z", files = { "src/lib.rs" = "pub fn b() {}\n" } },
+]
+
+[[repo]]
+id = "f-linked"
+root = "F"
+path = "linked"
+kind = "normal"
+covers = ["discovery: linked worktree", "deadline: F_clean timed-out run"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# linked\n" } },
+  { branch = "feat-linked", message = "feature work", date = "2026-09-22T09:00:00Z", files = { "feature.txt" = "f\n" } },
+]
+worktrees = [ { path = "linked-wt", branch = "feat-linked" } ]
+
+# Case A: main inside F, worktree outside (in EXT).
+[[repo]]
+id = "f-case-a"
+root = "F"
+path = "case-a-main"
+kind = "normal"
+covers = ["discovery: case A"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# case a\n" } },
+  { branch = "feat-a", message = "feature a", date = "2026-09-22T09:00:00Z", files = { "a.txt" = "a\n" } },
+]
+worktrees = [ { path = "$EXT/case-a-wt", branch = "feat-a", external = true } ]
+
+[[repo]]
+id = "f-missing"
+root = "F"
+path = "missing"
+kind = "normal"
+covers = ["discovery: missing worktree"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# missing\n" } },
+  { branch = "feat-missing", message = "feature", date = "2026-09-22T09:00:00Z", files = { "m.txt" = "m\n" } },
+]
+worktrees = [ { path = "missing-wt", branch = "feat-missing", missing = true } ]
+
+# Worktree whose gitdir points at $HOME: the worktree row carries "untrusted worktree path"; the repo row has no error.
+[[repo]]
+id = "f-untrusted-path"
+root = "F"
+path = "untrusted-path"
+kind = "special"
+special = "untrusted_path"
+in_clean = false
+target = "$HOME"
+covers = ["discovery: untrusted path"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# untrusted path\n" } },
+  { branch = "feat-up", message = "feature", date = "2026-09-22T09:00:00Z", files = { "u.txt" = "u\n" } },
+]
+worktrees = [ { path = "untrusted-path-wt", branch = "feat-up" } ]
+
+[[repo]]
+id = "f-bad-gitdir"
+root = "F"
+path = "bad-gitdir"
+kind = "special"
+special = "bad_gitdir"
+in_clean = false
+covers = ["extra: bad gitdir"]
+
+# A repo whose git dir has a symlinked file: row error "untrusted git dir", worktrees [].
+[[repo]]
+id = "f-untrusted-gitdir"
+root = "F"
+path = "untrusted-gitdir"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "shallow"
+covers = ["extra: untrusted git dir"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# untrusted gitdir\n" } },
+]
+
+[[repo]]
+id = "f-sub-modern"
+root = "F"
+path = "sub-parent"
+kind = "normal"
+covers = ["discovery: modern submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# sub parent\n" } },
+]
+
+[[repo]]
+id = "f-sub-modern-child"
+root = "F"
+path = "sub-parent/libs/child"
+kind = "submodule"
+parent = "f-sub-modern"
+covers = ["discovery: modern submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "child init", date = "2026-09-10T09:00:00Z", files = { "child.txt" = "c\n" } },
+]
+
+[[repo]]
+id = "f-sub-old"
+root = "F"
+path = "sub-old-parent"
+kind = "normal"
+covers = ["discovery: old-style submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# sub old parent\n" } },
+]
+
+[[repo]]
+id = "f-sub-old-child"
+root = "F"
+path = "sub-old-parent/vendor/lib"
+kind = "submodule_old"
+parent = "f-sub-old"
+covers = ["discovery: old-style submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "lib init", date = "2026-09-10T09:00:00Z", files = { "lib.txt" = "l\n" } },
+]
+
+[[repo]]
+id = "f-bare"
+root = "F"
+path = "bare/proj.git"
+kind = "bare"
+covers = ["discovery: bare", "deadline: F_clean timed-out run"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# bare\n" } },
+  { branch = "dev", message = "dev branch", date = "2026-09-15T09:00:00Z", files = { "dev.txt" = "d\n" } },
+]
+
+# Nested repos live in the outer working tree; the outer .gitignore hides them from the outer's untracked count.
+# The walk ignores .gitignore, so both are discovered. `vendor/` is the .gitignore'd-folder case.
+[[repo]]
+id = "f-nest-outer"
+root = "F"
+path = "nest-outer"
+kind = "normal"
+covers = ["discovery: nested"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# outer\n", ".gitignore" = "inner/\nvendor/\n" } },
+]
+
+[[repo]]
+id = "f-nest-inner"
+root = "F"
+path = "nest-outer/inner"
+kind = "nested"
+parent = "f-nest-outer"
+covers = ["discovery: nested"]
+head = "main"
+commits = [
+  { branch = "main", message = "inner init", date = "2026-09-10T09:00:00Z", files = { "inner.txt" = "i\n" } },
+]
+
+[[repo]]
+id = "f-nest-vendor"
+root = "F"
+path = "nest-outer/vendor/proj"
+kind = "nested"
+parent = "f-nest-outer"
+covers = ["discovery: nested", "discovery: gitignored folder"]
+head = "main"
+commits = [
+  { branch = "main", message = "vendored init", date = "2026-09-10T09:00:00Z", files = { "v.txt" = "v\n" } },
+]
+
+# Skipped directory names: these repos exist on disk and must NOT be discovered.
+[[repo]]
+id = "f-skip-node-modules"
+root = "F"
+path = "skipdirs/node_modules/dep"
+kind = "normal"
+covers = ["discovery: node_modules"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "index.js" = "1\n" } },
+]
+
+[[repo]]
+id = "f-skip-target"
+root = "F"
+path = "skipdirs/target/crate"
+kind = "normal"
+covers = ["discovery: target dir"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "lib.rs" = "1\n" } },
+]
+
+# Directory fixtures (no row): fan-out of two sibling symlinks to the root at depth 3; a symlink to a repo in EXT; an unreadable dir.
+[[repo]]
+id = "f-fanout"
+root = "F"
+path = "fanout"
+kind = "special"
+special = "symlink_fanout"
+covers = ["discovery: symlink fan-out"]
+
+[[repo]]
+id = "f-out-of-root"
+root = "F"
+path = "out-of-root"
+kind = "special"
+special = "symlink_out_of_root"
+target = "$EXT/outside-repo"
+covers = ["discovery: symlink out of root"]
+
+[[repo]]
+id = "f-unreadable"
+root = "F"
+path = "unreadable"
+kind = "special"
+special = "unreadable_dir"
+in_clean = false
+covers = ["discovery: unreadable dir"]
+
+# ---- git state (one repo per case; expected values are in the P09 oracle) ----
+
+[[repo]]
+id = "f-dirty-staged"
+root = "F"
+path = "dirty-staged"
+kind = "normal"
+covers = ["git state: staged"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "a.txt" = "alpha\n", "b.txt" = "beta\n" } },
+]
+edit = { "a.txt" = "ALPHA\n" }
+state = { staged = ["a.txt"] }
+
+[[repo]]
+id = "f-dirty-unstaged"
+root = "F"
+path = "dirty-unstaged"
+kind = "normal"
+covers = ["git state: unstaged"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "a.txt" = "alpha\n", "b.txt" = "beta\n" } },
+]
+edit = { "a.txt" = "ALPHA\n" }
+state = { unstaged = ["a.txt"] }
+
+[[repo]]
+id = "f-dirty-mixed"
+root = "F"
+path = "dirty-mixed"
+kind = "normal"
+covers = ["git state: staged", "git state: unstaged"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "a.txt" = "alpha\n", "b.txt" = "beta\n" } },
+]
+edit = { "a.txt" = "ALPHA\n", "b.txt" = "BETA\n" }
+state = { staged = ["a.txt"], unstaged = ["b.txt"] }
+
+[[repo]]
+id = "f-untracked"
+root = "F"
+path = "untracked"
+kind = "normal"
+covers = ["git state: untracked"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# untracked\n" } },
+]
+state = { untracked = ["new1.txt", "sub/new2.txt"] }
+
+# kept.txt counts; scratch.localignore is ignored only through [home]'s core.excludesFile.
+[[repo]]
+id = "f-excludes"
+root = "F"
+path = "excludes"
+kind = "normal"
+covers = ["git state: excludesFile"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# excludes\n" } },
+]
+state = { untracked = ["kept.txt"], ignored = ["scratch.localignore"] }
+
+# Local main is 2 ahead of and 1 behind origin/main (x-origin-b has "remote one"; the shared first commit is identical).
+[[repo]]
+id = "f-ahead-behind"
+root = "F"
+path = "ahead-behind"
+kind = "normal"
+covers = ["git state: ahead/behind"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-01T09:00:00Z", files = { "README.md" = "# remote demo\n" } },
+  { branch = "main", message = "local one", date = "2026-09-05T09:00:00Z", files = { "l1.txt" = "1\n" } },
+  { branch = "main", message = "local two", date = "2026-09-06T09:00:00Z", files = { "l2.txt" = "2\n" } },
+]
+remotes = [ { name = "origin", target_repo_id = "x-origin-b" } ]
+upstreams = { main = "origin/main" }
+origin_head = "main"
+
+# Remote exists (x-origin-a: only the shared first commit); feat-up has no upstream and 2 commits not on any remote ref.
+[[repo]]
+id = "f-no-upstream"
+root = "F"
+path = "no-upstream"
+kind = "normal"
+covers = ["git state: no upstream with remote"]
+head = "feat-up"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-01T09:00:00Z", files = { "README.md" = "# remote demo\n" } },
+  { branch = "feat-up", message = "up one", date = "2026-09-10T09:00:00Z", files = { "u1.txt" = "1\n" } },
+  { branch = "feat-up", message = "up two", date = "2026-09-11T09:00:00Z", files = { "u2.txt" = "2\n" } },
+]
+remotes = [ { name = "origin", target_repo_id = "x-origin-a" } ]
+origin_head = "main"
+
+[[repo]]
+id = "f-detached"
+root = "F"
+path = "detached"
+kind = "normal"
+covers = ["git state: detached HEAD"]
+head = "detached:0"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# detached\n" } },
+  { branch = "main", message = "second", date = "2026-09-20T09:00:00Z", files = { "two.txt" = "2\n" } },
+]
+
+# feat-merged points at the first main commit, an ancestor of main's tip, so its worktree is stale_reason "merged".
+[[repo]]
+id = "f-merged"
+root = "F"
+path = "merged"
+kind = "normal"
+covers = ["git state: merged"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# merged\n" } },
+  { branch = "main", message = "second", date = "2026-09-20T09:00:00Z", files = { "two.txt" = "2\n" } },
+]
+branches = { "feat-merged" = 0 }
+worktrees = [ { path = "merged-wt", branch = "feat-merged" } ]
+
+# feat-old has its own commit (so not merged), 58 days before meta.now (> stale_days 14), clean, no remote: "inactive".
+[[repo]]
+id = "f-inactive"
+root = "F"
+path = "inactive"
+kind = "normal"
+covers = ["git state: inactive"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-07-20T09:00:00Z", files = { "README.md" = "# inactive\n" } },
+  { branch = "feat-old", message = "old feature", date = "2026-08-01T09:00:00Z", files = { "old.txt" = "o\n" } },
+  { branch = "main", message = "recent main", date = "2026-09-15T09:00:00Z", files = { "new.txt" = "n\n" } },
+]
+worktrees = [ { path = "inactive-wt", branch = "feat-old" } ]
+
+# Only `trunk`: no origin/HEAD, no main, no master => default branch null.
+[[repo]]
+id = "f-no-default"
+root = "F"
+path = "no-default"
+kind = "normal"
+covers = ["git state: no default branch"]
+head = "trunk"
+commits = [
+  { branch = "trunk", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# no default\n" } },
+]
+
+[[repo]]
+id = "f-corrupted"
+root = "F"
+path = "corrupted"
+kind = "special"
+special = "corrupted"
+in_clean = false
+covers = ["git state: corrupted"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# corrupted\n" } },
+]
+config = { "core.repositoryformatversion" = "7" }
+
+# ============================== root EXT (outside-root targets) ==============================
+
+# Remote for f-no-upstream.
+[[repo]]
+id = "x-origin-a"
+root = "EXT"
+path = "origin-a.git"
+kind = "bare"
+covers = ["git state: no upstream with remote"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-01T09:00:00Z", files = { "README.md" = "# remote demo\n" } },
+]
+
+# Remote for f-ahead-behind: one commit the local main lacks.
+[[repo]]
+id = "x-origin-b"
+root = "EXT"
+path = "origin-b.git"
+kind = "bare"
+covers = ["git state: ahead/behind"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-01T09:00:00Z", files = { "README.md" = "# remote demo\n" } },
+  { branch = "main", message = "remote one", date = "2026-09-07T09:00:00Z", files = { "r1.txt" = "1\n" } },
+]
+
+# Case B: main outside F, worktree inside F. Scanning F yields this repo as kind "external_main".
+[[repo]]
+id = "x-case-b-main"
+root = "EXT"
+path = "case-b-main"
+kind = "normal"
+covers = ["discovery: case B"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# case b\n" } },
+  { branch = "feat-b", message = "feature b", date = "2026-09-22T09:00:00Z", files = { "b.txt" = "b\n" } },
+]
+worktrees = [ { path = "$F/case-b-wt", branch = "feat-b" } ]
+
+# Enclosing repo: the scan root is $EXT/enclosing/sub/dir.
+[[repo]]
+id = "x-enclosing"
+root = "EXT"
+path = "enclosing"
+kind = "special"
+special = "enclosing_root"
+covers = ["discovery: enclosing root"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "sub/dir/keep.txt" = "keep\n" } },
+]
+
+# Target of F's symlink-out-of-root (never followed).
+[[repo]]
+id = "x-outside-target"
+root = "EXT"
+path = "outside-repo"
+kind = "normal"
+covers = ["discovery: symlink out of root"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# outside\n" } },
+]
+
+# ============================== root H (hostile; every marker file is marker-<vector> under $H) ==============================
+
+# Four of the five stripped keys (core.worktree is in h-worktree-escape), two subsections of each of filter / diff / merge,
+# attributed same-size unstaged edits.
+[[repo]]
+id = "h-drivers"
+root = "H"
+path = "drivers"
+kind = "special"
+special = "drivers"
+in_clean = false
+covers = ["hostile: drivers"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "a.txt" = "alpha\n", "b.bin" = "0123\n", ".gitattributes" = "* filter=x diff=x\n*.bin filter=lfs\n", ".hooks/pre-commit" = "#!/bin/sh\ntouch $H/marker-hook\n" } },
+]
+edit = { "a.txt" = "bravo\n", "b.bin" = "4567\n" }
+state = { unstaged = ["a.txt", "b.bin"] }
+config = { "filter.x.clean" = "sh -c 'touch $H/marker-filter-x; cat'", "filter.y.smudge" = "sh -c 'touch $H/marker-filter-y; cat'", "diff.x.command" = "sh -c 'touch $H/marker-diff-x'", "diff.y.textconv" = "sh -c 'touch $H/marker-diff-y; cat'", "merge.x.driver" = "sh -c 'touch $H/marker-merge-x' %O %A %B", "merge.y.driver" = "sh -c 'touch $H/marker-merge-y' %O %A %B", "core.fsmonitor" = "sh -c 'touch $H/marker-fsmonitor'", "core.hooksPath" = ".hooks", "core.attributesFile" = "$H/attrs-file", "core.sshCommand" = "sh -c 'touch $H/marker-ssh'" }
+
+[[repo]]
+id = "h-submodule-lfs"
+root = "H"
+path = "submodule-lfs"
+kind = "special"
+special = "submodule_lfs"
+in_clean = false
+covers = ["hostile: submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# submodule lfs\n" } },
+]
+
+# The submodule's own .gitattributes names filter=lfs; big.dat is modified after checkout with the same size.
+[[repo]]
+id = "h-submodule-lfs-child"
+root = "H"
+path = "submodule-lfs/lfs-child"
+kind = "submodule"
+parent = "h-submodule-lfs"
+in_clean = false
+covers = ["hostile: submodule"]
+head = "main"
+commits = [
+  { branch = "main", message = "child init", date = "2026-09-10T09:00:00Z", files = { ".gitattributes" = "* filter=lfs\n", "big.dat" = "aaaa\n" } },
+]
+edit = { "big.dat" = "bbbb\n" }
+state = { unstaged = ["big.dat"] }
+
+[[repo]]
+id = "h-worktree-escape"
+root = "H"
+path = "worktree-escape"
+kind = "special"
+special = "worktree_escape"
+in_clean = false
+covers = ["hostile: worktree-escape"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# worktree escape\n" } },
+]
+config = { "core.worktree" = "$HOME", "core.bare" = "false" }
+
+[[repo]]
+id = "h-commondir-victim"
+root = "H"
+path = "commondir-victim"
+kind = "normal"
+in_clean = false
+covers = ["hostile: commondir-escape"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# victim\n" } },
+]
+
+# A linked worktree whose commondir points at h-commondir-victim.
+[[repo]]
+id = "h-commondir-escape"
+root = "H"
+path = "commondir-escape"
+kind = "special"
+special = "commondir_escape"
+in_clean = false
+target = "h-commondir-victim"
+covers = ["hostile: commondir-escape"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# commondir escape\n" } },
+  { branch = "feat-cd", message = "feature", date = "2026-09-22T09:00:00Z", files = { "cd.txt" = "c\n" } },
+]
+worktrees = [ { path = "commondir-escape-wt", branch = "feat-cd" } ]
+
+# symlinked_files: one repo per symlinked file, each a 4 GiB sparse target (row error "untrusted git dir").
+[[repo]]
+id = "h-sym-config"
+root = "H"
+path = "fixtures/foo.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "config"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# foo\n" } },
+]
+
+[[repo]]
+id = "h-sym-packed-refs"
+root = "H"
+path = "fixtures/foo-packed.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "packed-refs"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# foo packed\n" } },
+]
+
+[[repo]]
+id = "h-sym-shallow"
+root = "H"
+path = "fixtures/shallow.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "shallow"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# shallow\n" } },
+]
+
+[[repo]]
+id = "h-sym-commit-graph-chain"
+root = "H"
+path = "fixtures/graph.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "objects/info/commit-graphs/commit-graph-chain"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# graph\n" } },
+]
+
+[[repo]]
+id = "h-sym-alternates-hop2"
+root = "H"
+path = "fixtures/alternates.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "objects/info/alternates#2"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# alternates\n" } },
+]
+
+# Non-bare: the worktree-root .gitmodules is the symlink.
+[[repo]]
+id = "h-sym-gitmodules"
+root = "H"
+path = "sym-gitmodules"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "worktree:.gitmodules"
+covers = ["hostile: symlinked-files"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# gitmodules\n" } },
+]
+
+# extensions.worktreeConfig=true (needs repositoryformatversion 1) with config.worktree a symlink.
+[[repo]]
+id = "h-sym-config-worktree"
+root = "H"
+path = "sym-config-worktree"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "config.worktree"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.repositoryformatversion" = "1", "extensions.worktreeConfig" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# config worktree\n" } },
+]
+
+# Spec rev 11: HEAD is "ref: EVIL" and <git dir>/EVIL is the symlink (pseudo-ref names of A-Z and _ are pre-open checked).
+[[repo]]
+id = "h-sym-head-pseudo"
+root = "H"
+path = "fixtures/head-pseudo.git"
+kind = "special"
+special = "symlinked_files"
+in_clean = false
+target = "HEAD:EVIL"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.bare" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# head pseudo\n" } },
+]
+
+# Spec rev 11: repo-local core.excludesFile names a symlink to the 4 GiB sparse file. Scanned with no user excludes
+# file, the row has NO error (the key is stripped and excludesFile is set to /dev/null).
+[[repo]]
+id = "h-excludes-file"
+root = "H"
+path = "excludes-file"
+kind = "special"
+special = "excludes_file"
+in_clean = false
+target = "excludes-link"
+covers = ["hostile: excludes-file"]
+head = "main"
+config = { "core.excludesFile" = "$H/excludes-file/excludes-link" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# excludes file\n" } },
+]
+
+# The linked worktree's admin-dir config.worktree is the symlink (pre-open also checks worktrees/<name>/).
+[[repo]]
+id = "h-worktree-config-symlink"
+root = "H"
+path = "worktree-config-symlink"
+kind = "special"
+special = "worktree_config_symlink"
+in_clean = false
+target = "config.worktree"
+covers = ["hostile: symlinked-files"]
+head = "main"
+config = { "core.repositoryformatversion" = "1", "extensions.worktreeConfig" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# wt config symlink\n" } },
+  { branch = "feat-wc", message = "feature", date = "2026-09-22T09:00:00Z", files = { "wc.txt" = "w\n" } },
+]
+worktrees = [ { path = "worktree-config-symlink-wt", branch = "feat-wc" } ]
+
+# HEAD commit's root tree is a loose object whose header claims 1 GiB (zlib stream built via python3).
+[[repo]]
+id = "h-big-object"
+root = "H"
+path = "big-object"
+kind = "special"
+special = "big_object"
+in_clean = false
+covers = ["hostile: big-object"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# big object\n" } },
+]
+
+# Three nested levels, each a tree of 200 entries pointing at the same subtree (8,000,000 expanded paths).
+[[repo]]
+id = "h-tree-bomb"
+root = "H"
+path = "tree-bomb"
+kind = "special"
+special = "tree_bomb"
+in_clean = false
+covers = ["hostile: tree-bomb"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# tree bomb\n" } },
+]
+
+# One subtree of 1,000 entries with 500-byte names, reached from 999 top-level 500-byte names.
+[[repo]]
+id = "h-tree-bomb-long"
+root = "H"
+path = "tree-bomb-long"
+kind = "special"
+special = "tree_bomb_long"
+in_clean = false
+covers = ["hostile: tree-bomb-long"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# tree bomb long\n" } },
+]
+
+# include.path -> FIFO with no writer, and packed-refs replaced by a FIFO.
+[[repo]]
+id = "h-hang-probe"
+root = "H"
+path = "hang-probe"
+kind = "special"
+special = "hang_probe"
+in_clean = false
+target = "$FIFO:hang-packed-refs"
+covers = ["hostile: hang-probe"]
+head = "main"
+config = { "include.path" = "$FIFO:hang-include" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# hang probe\n" } },
+]
+
+# extensions.worktreeConfig=true and config.worktree a FIFO.
+[[repo]]
+id = "h-hang-probe-worktree-config"
+root = "H"
+path = "hang-probe-worktree-config"
+kind = "special"
+special = "hang_probe_worktree_config"
+in_clean = false
+target = "$FIFO:hang-config-worktree"
+covers = ["hostile: hang-probe"]
+head = "main"
+config = { "core.repositoryformatversion" = "1", "extensions.worktreeConfig" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# hang probe wt\n" } },
+]
+
+# <path>/.git is a FIFO: the walk must never open it. It yields no repo row.
+[[repo]]
+id = "h-fifo-git"
+root = "H"
+path = "fifo-git"
+kind = "special"
+special = "fifo_git"
+in_clean = false
+covers = ["extra: fifo-git"]
+
+# ============================== root home (refused-root suggestions; 7 repos at depth 1-3 + one under a skip dir) ==============================
+
+[[repo]]
+id = "home-alpha"
+root = "home"
+path = "alpha"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# alpha\n" } },
+]
+
+[[repo]]
+id = "home-bravo"
+root = "home"
+path = "bravo"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# bravo\n" } },
+]
+
+[[repo]]
+id = "home-charlie"
+root = "home"
+path = "charlie/app"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# charlie\n" } },
+]
+
+[[repo]]
+id = "home-delta"
+root = "home"
+path = "delta/app"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# delta\n" } },
+]
+
+[[repo]]
+id = "home-echo"
+root = "home"
+path = "echo/app"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# echo\n" } },
+]
+
+# Sixth candidate: dropped by the cap of 5.
+[[repo]]
+id = "home-foxtrot"
+root = "home"
+path = "foxtrot/app"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# foxtrot\n" } },
+]
+
+# Depth 3: excluded.
+[[repo]]
+id = "home-golf"
+root = "home"
+path = "golf/one/two"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# golf\n" } },
+]
+
+# Top-level `.cache` is a skipped directory name: excluded.
+[[repo]]
+id = "home-cache-tool"
+root = "home"
+path = ".cache/tool"
+kind = "normal"
+covers = ["discovery: refused-root suggestions"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# cache tool\n" } },
+]
+
+# ============================== root budget (exceeds a small walk_budget_entries; tests use <= 50) ==============================
+
+[[repo]]
+id = "b-a"
+root = "budget"
+path = "a"
+kind = "normal"
+in_clean = false
+covers = ["extra: walk budget"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "d0/f00.txt" = "00\n", "d0/f01.txt" = "01\n", "d0/f02.txt" = "02\n", "d0/f03.txt" = "03\n", "d0/f04.txt" = "04\n", "d0/f05.txt" = "05\n", "d0/f06.txt" = "06\n", "d0/f07.txt" = "07\n", "d0/f08.txt" = "08\n", "d0/f09.txt" = "09\n", "d0/f10.txt" = "010\n", "d0/f11.txt" = "011\n", "d0/f12.txt" = "012\n", "d0/f13.txt" = "013\n", "d0/f14.txt" = "014\n", "d1/f00.txt" = "10\n", "d1/f01.txt" = "11\n", "d1/f02.txt" = "12\n", "d1/f03.txt" = "13\n", "d1/f04.txt" = "14\n", "d1/f05.txt" = "15\n", "d1/f06.txt" = "16\n", "d1/f07.txt" = "17\n", "d1/f08.txt" = "18\n", "d1/f09.txt" = "19\n", "d1/f10.txt" = "110\n", "d1/f11.txt" = "111\n", "d1/f12.txt" = "112\n", "d1/f13.txt" = "113\n", "d1/f14.txt" = "114\n", "d2/f00.txt" = "20\n", "d2/f01.txt" = "21\n", "d2/f02.txt" = "22\n", "d2/f03.txt" = "23\n", "d2/f04.txt" = "24\n", "d2/f05.txt" = "25\n", "d2/f06.txt" = "26\n", "d2/f07.txt" = "27\n", "d2/f08.txt" = "28\n", "d2/f09.txt" = "29\n", "d2/f10.txt" = "210\n", "d2/f11.txt" = "211\n", "d2/f12.txt" = "212\n", "d2/f13.txt" = "213\n", "d2/f14.txt" = "214\n" } },
+]
+
+[[repo]]
+id = "b-b"
+root = "budget"
+path = "b"
+kind = "normal"
+in_clean = false
+covers = ["extra: walk budget"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "d0/f00.txt" = "00\n", "d0/f01.txt" = "01\n", "d0/f02.txt" = "02\n", "d0/f03.txt" = "03\n", "d0/f04.txt" = "04\n", "d0/f05.txt" = "05\n", "d0/f06.txt" = "06\n", "d0/f07.txt" = "07\n", "d0/f08.txt" = "08\n", "d0/f09.txt" = "09\n", "d0/f10.txt" = "010\n", "d0/f11.txt" = "011\n", "d0/f12.txt" = "012\n", "d0/f13.txt" = "013\n", "d0/f14.txt" = "014\n", "d1/f00.txt" = "10\n", "d1/f01.txt" = "11\n", "d1/f02.txt" = "12\n", "d1/f03.txt" = "13\n", "d1/f04.txt" = "14\n", "d1/f05.txt" = "15\n", "d1/f06.txt" = "16\n", "d1/f07.txt" = "17\n", "d1/f08.txt" = "18\n", "d1/f09.txt" = "19\n", "d1/f10.txt" = "110\n", "d1/f11.txt" = "111\n", "d1/f12.txt" = "112\n", "d1/f13.txt" = "113\n", "d1/f14.txt" = "114\n", "d2/f00.txt" = "20\n", "d2/f01.txt" = "21\n", "d2/f02.txt" = "22\n", "d2/f03.txt" = "23\n", "d2/f04.txt" = "24\n", "d2/f05.txt" = "25\n", "d2/f06.txt" = "26\n", "d2/f07.txt" = "27\n", "d2/f08.txt" = "28\n", "d2/f09.txt" = "29\n", "d2/f10.txt" = "210\n", "d2/f11.txt" = "211\n", "d2/f12.txt" = "212\n", "d2/f13.txt" = "213\n", "d2/f14.txt" = "214\n" } },
+]
