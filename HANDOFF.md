@@ -1,17 +1,20 @@
 # HANDOFF — 2026-09-29 main (~/Projects/rollcall)
 
-**Next session's job:** get answers to plan Q1–Q3 from the user, then run `/executor-grade-plan-audit` on the plan, then `/pchunker`. No code exists yet.
+**Next session's job:** run `/executor-grade-plan-audit` on the plan, then `/pchunker`, then start lane A (P01). Q1–Q3 are answered. No code exists yet.
 
 ## Done (verified)
 
-- **Implementation plan, revision 4** — `docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md`, committed `b398e26`. It has 45 phases in 9 lanes (`grep -c '^## Phase'` → 45), a §12.1 coverage table, pinned interfaces, a fixture manifest schema, and the ponytail rules (R4/R5).
-- **Spec, revision 9** — `docs/superpowers/specs/2026-09-29-rollcall-design.md`, committed `b398e26`. Revisions 6–9 were made this session; the changelog is at the end of `docs/superpowers/specs/2026-09-29-rollcall-redteam.md`.
+- **Implementation plan, revision 5** — `docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md`, committed `d8e2d51`. Revision 5 only records the Q1–Q3 answers. It has 45 phases in 9 lanes (`grep -c '^## Phase'` → 45), a §12.1 coverage table, pinned interfaces, a fixture manifest schema, and the ponytail rules (R4/R5).
+- **Spec, revision 10** — `docs/superpowers/specs/2026-09-29-rollcall-design.md`, committed `d8e2d51`. Revisions 6–10 were made this session; 10 records the Q3 trims; the changelog is at the end of `docs/superpowers/specs/2026-09-29-rollcall-redteam.md`.
 - **Plan red-team, 3 rounds of Opus 5.5 `skeptical-reviewer` agents (5, then 3, then 2)** — record in `docs/superpowers/plans/2026-09-29-rollcall-v0-plan-redteam.md`, committed `b398e26`.
   - Round 1: two lenses DOES NOT STAND.
   - Round 2: two lenses DOES NOT STAND, one of them a security regression introduced by a rev-7 fix.
   - Round 3: both STANDS WITH FIXES. The fixes were applied as plan rev 4 / spec rev 9.
   - Evidence: each round's verdict table and orchestrator re-verification table are in that doc.
 - **Fact probe** — `scripts/probe-plan-facts.sh`, committed `eeb8bc9`. It re-measures the toolchain, crate versions, gix transitive dependencies and the git remote count.
+- **Author answers (2026-09-29):** Q1 private GitHub repo; Q2 install tools locally; Q3 (a) drop `directories`, (b) SHA-1 lock name, (d) drop `criterion`, keep `arboard`; claimd stays off. Recorded in plan § Open questions.
+- **Private GitHub repo** `https://github.com/ravi1395/rollcall` created; `main` pushed and tracking `origin/main` (`gh repo view` → `visibility: PRIVATE`). Pushed commits `8129b22..d8e2d51`; later commits in this file's history are local until the next push.
+- **Local tools installed via Homebrew:** hyperfine 1.20.0, fish 4.9.3, cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-dist 0.33.0 (`--version` output checked).
 - **Consumed handoffs archived** under `.handoffs/`, bytes checked with `cmp`: the session-start handoff (`20260929-224036-HANDOFF.md`) and three hook-written ones.
 
 ## In progress
@@ -60,6 +63,5 @@ No code and no tests yet. Acceptance: spec §12.1 (18 gating criteria) and §12.
 
 ## Not started
 
-- Answers to plan **Q1** (GitHub remote), **Q2** (install cargo-deny, cargo-audit, hyperfine, fish, cargo-dist locally, or leave them CI-only) and **Q3** (ponytail dependency trims a–d). Q3 blocks P01.
-- Everything from P01 on: `git worktree add ../rollcall-v0 -b impl/v0`, then lane A.
-- No GitHub remote exists and nothing has been pushed.
+- Everything from P01 on: `git worktree add ../rollcall-v0 -b impl/v0`, then lane A. Push `impl/v0` after each lane merge (Q1).
+- The first CI run: nothing has run on GitHub Actions yet; P02 writes the workflow.
