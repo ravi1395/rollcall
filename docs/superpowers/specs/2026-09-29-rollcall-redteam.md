@@ -225,3 +225,11 @@ Spec-level defects, each re-verified by the orchestrator before editing (command
 # Revision 10 — author decisions on plan Q3 (2026-09-29)
 
 The author chose three ponytail dependency trims: the cache path is computed directly (no `directories` crate, same paths); the lock file name uses SHA-1 from `gix-hash` instead of SHA-256 (no `sha2`); `criterion` micro-benchmarks dropped (the gating performance check is `hyperfine`). The clipboard keeps `arboard` for `clipboard = "system"`.
+
+# P14 gix read-site audit → spec revision 11
+
+**Date:** 2026-09-30. Implementation run, phase P14 (`docs/audits/gix-0.88-read-sites.md`), Sonnet auditor; orchestrator (Opus) re-read the gix 0.88.0 / gix-ref 0.68.0 sources for each site before revising. All changes tighten §4.4; none weakens it. Made without author review under the run's `/goal`.
+
+- **U-1 `commondir` redirect.** `gix/src/open/repository.rs:open_from_paths` follows `<git_dir>/commondir` before any trust check, then reads `config`, `packed-refs`, `refs/**`, `info/*` from the target unbounded. Trust rule (b) is now evaluated before open from rollcall's own read of the (capped) `commondir` file; the pre-open list also runs on linked admin dirs and the resolved common dir. The `commondir-escape` fixture keeps its `untrusted worktree path` error.
+- **U-2 pseudo-refs escape `refs/`.** `gix-ref` `name.rs:is_pseudo_ref` accepts any all-caps name, so `HEAD: ref: EVIL` reads `<git_dir>/EVIL` uncapped. All-caps entries in the git dir, common dir and `worktrees/<name>/` (and `worktrees/<name>/refs/**`) are now pre-open checked as loose refs; `symlinked-files` gains a `HEAD → ref: EVIL` variant.
+- **U-3 repo-local `core.excludesFile`.** `gix/src/config/cache/access.rs:assemble_exclude_globals` reads a repo-local `core.excludesFile` (or the XDG default) whenever no override is given. The key is now stripped and always overridden (user file, else `/dev/null`); new `excludes-file` hostile fixture.
