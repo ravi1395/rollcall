@@ -1,0 +1,41 @@
+[package]
+name = "rollcall-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "rollcall"
+path = "src/main.rs"
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+rollcall-core = { path = "../rollcall-core" }
+rollcall-git = { path = "../rollcall-git" }
+rollcall-sessions = { path = "../rollcall-sessions" }
+rollcall-store = { path = "../rollcall-store" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+shell-words = "1"
+libc = "0.2"
+arboard = { version = "3", default-features = false }
+
+[dev-dependencies]
+rollcall-git = { path = "../rollcall-git", features = ["test-hooks"] }
+tempfile = "3"
+rusqlite = "0.40"
+toml = "1"
+serde = { version = "1", features = ["derive"] }
+insta = "1"
+expectrl = "0.9"
+jsonschema = { version = "0.58", default-features = false }

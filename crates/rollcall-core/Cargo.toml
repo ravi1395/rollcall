@@ -1,0 +1,15 @@
+[package]
+name = "rollcall-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+jiff = { version = "0.2", features = ["serde"] }
+regex = "1"
+unicode-segmentation = "1"

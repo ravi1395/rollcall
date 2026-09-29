@@ -1,0 +1,21 @@
+[package]
+name = "rollcall-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Enables the P21 delay seam outside cfg(test).
+test-hooks = []
+
+[dependencies]
+rollcall-core = { path = "../rollcall-core" }
+gix = { version = "0.88", default-features = false, features = ["sha1", "status", "revision"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
