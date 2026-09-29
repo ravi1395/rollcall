@@ -150,3 +150,29 @@ All round-2 blockers fixed at the top level (`rc` eval, trust model, schemas, or
 - Minor: `scanned_at` null on empty cache; `title_kind` null rule; matching fixture counts; `/` suggestions environment-dependent; inode reuse untestable on real FS; PTY harness for `R`; zsh/fish on CI; `list_stale` truncation; `absent` meaning; cargo install location; native runners for `dist build`.
 
 All addressed in revision 4.
+
+---
+
+# Round 4
+
+**Target:** revision 4 @ `1cab7cc`. Two lenses, Fable 5.1, read-only. Both first attempts stalled (10-min watchdog, no output); both were retried. The testability retry stalled again; the orchestrator did that check itself.
+
+| Lens | Verdict |
+|---|---|
+| Security / privacy (Fable, verified against gitoxide `5708de4`) | Stands with fixes |
+| Testability (orchestrator self-check, **not** an independent Fable verdict) | Stands after two clarifications (`5e2b428`) |
+
+## Security
+
+- All round-3 findings FIXED except unbounded git-dir reads (PARTIAL).
+- §4.4 verified implementable in gix 0.86: `Config::isolated()` still reads repo-local config; `commit()` replaces the resolved config the filter pipeline reads; `gitoxide.objects.allocLimit` exists; `Submodule::Given` returns before opening.
+- Majors (same class — uncapped reads that abort the process via allocation failure, which thread abandonment cannot contain): `shallow`; commit-graph chain; alternates chain hops; worktree `.gitmodules` (read unconditionally by the builtin submodule status) and `.gitignore`/`.gitattributes`.
+- Fixes applied verbatim in revision 5: pre-open list extended, alternates chain walked by pre-open (≤ 8 hops), `core.commitGraph=false`, custom `SubmoduleStatus` returning `Ok(None)`, worktree-root file checks, documented limitation for subdirectory ignore/attribute files in unpacked trees, and a maintenance rule to re-audit gix read sites on version bumps.
+
+## Testability (self-check)
+
+- Round-3 items resolved. Two outcome-changing gaps fixed: `repo_budget_secs` is a float (the deadline test uses 0.001); repo-level failures of any kind yield `worktrees: []`.
+
+## Residual risk
+
+The pre-open list is a denylist against gix internals; each security round found the next uncapped read site. It is now documented as a maintenance rule, but a future gix change can reopen it.
