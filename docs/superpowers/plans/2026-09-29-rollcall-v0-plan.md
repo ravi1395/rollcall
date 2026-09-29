@@ -4,7 +4,7 @@
 
 **Deviation from the `/phases` house format:** the house format asks for 3–5 phases. This is a 5–7 week greenfield project with 18 gating criteria and a psurgeon cap of 2 substantive files per task, so it has 37 phases grouped into 5 waves. Every other house rule holds (criteria first, ≤ 2 substantive files, tree green after every phase, open questions asked).
 
-**Explorer pass:** not applicable. The repo holds only docs; there is no code and no `graphify-out/`. Every source path below is `(new)`. External facts were checked on 2026-09-29: toolchain `rustc 1.97.1`; crates.io latest `gix 0.88.0`, `rusqlite 0.40.2`, `ratatui 0.30.2`, `crossterm 0.29.0`, `jiff 0.2.37`, `clap 4.6.7`; gix 0.88 already depends on `jiff`, `libc`, `crossbeam-channel`; GitHub-hosted runner labels (see spec revision 6).
+**Explorer pass:** not applicable. The repo holds only docs; there is no code and no `graphify-out/`. Every source path below is `(new)`. External facts were checked on 2026-09-29: toolchain `rustc 1.97.1`; crates.io latest `gix 0.88.0`, `rusqlite 0.40.2`, `ratatui 0.30.2`, `crossterm 0.29.0`, `jiff 0.2.37`, `clap 4.6.7`; the gitoxide checkout at `5708de4` (gix 0.86) depends non-optionally on `jiff` (gix-date), `libc` (gix-features), `crossbeam-channel` (gix-fs) — P01 re-confirms these for 0.88 with `cargo tree -i`; GitHub-hosted runner labels (see spec revision 6).
 
 **Setup (once, before P01):** `git worktree add ../rollcall-v0 -b impl/v0` from `main`. All phases run there. One commit per phase, message `P<nn>: <title>`. Nothing is pushed without authorization (Q1).
 
@@ -22,7 +22,7 @@ Each phase writes its tests, runs them red, then implements. Unit tests live in 
 
 ### R3. Every check must be able to fail
 
-- Any filtered `cargo test` run must report `> 0` tests run; a filter that matches nothing is a failed check.
+- Any filtered `cargo test` run must report `> 0` tests run; a filter that matches nothing is a failed check. Pass counts are read from the full line `test result: ok. N passed; 0 failed`. One positional filter per cargo invocation; several filters go after `--`.
 - Tests that need an optional tool (`fish`, `zsh`, `hyperfine`, `vhs`) skip locally when the tool is absent, and **fail** instead of skipping when `ROLLCALL_REQUIRE_TOOLS=1` (set in CI).
 - Every phase's verification includes `cargo clippy --all-targets --locked -- -D warnings` and `cargo test --locked` for the whole workspace, green.
 
@@ -256,7 +256,7 @@ Four lanes, file-disjoint, each depending only on Wave A (+ Wave B oracles for t
 - [ ] Budget: `budget_entries = 10` on a 100-dir tree → `partial = true` and walk stops ≤ 10 + workers entries.
 - [ ] A FIFO named `.git` is never opened (test creates one; walk completes, no hang, counted as non-repo).
 - [ ] `$HOME/.git` exists in the test `HOME` → not reported as enclosing repo.
-**Expected test outputs:** `cargo test -p rollcall-git walk:: classify:: --locked` → ≥ 14 passed.
+**Expected test outputs:** `cargo test -p rollcall-git --locked -- walk:: classify::` → ≥ 14 passed.
 
 ## Phase 15 — Root refusal and suggestions
 **Description:** §4.3 refused roots (`/`, `$HOME` by `(dev, inode)`), `--yes` / config `roots` override, suggestion peek (lstat only, 2 levels, skips incl. the macOS privacy dirs, same-device, 2 s cap, max 5).
@@ -275,7 +275,7 @@ Four lanes, file-disjoint, each depending only on Wave A (+ Wave B oracles for t
 - [ ] Alternates: 8 hops ok, 9 → untrusted; a hop's `info/alternates` symlinked → untrusted.
 - [ ] After open, the resolved config has zero `filter.*`, `diff.*`, `merge.*` sections even with two subsections each across repo config (asserted by iterating the snapshot), and none of the five stripped keys.
 - [ ] `core.worktree=$HOME` → trust rule (a) fails → `untrusted worktree path`; `commondir` to another repo → (b) fails; linked `gitdir` mismatch → (c) fails; workdir = `$HOME` → (d) fails.
-- [ ] Repo owned by another uid: covered by a unit test on the reduced-trust branch using gix's trust API directly (can't chown in CI without root); documented as such.
+- [ ] Repo owned by another uid: covered by a unit test on the reduced-trust branch using gix's trust API directly ; an extra CI-only case chowns a fixture repo with `sudo` on Linux runners if P02's workflow grants it, otherwise the unit test alone stands and the gap is documented.
 **Expected test outputs:** `cargo test -p rollcall-git open:: --locked` → ≥ 25 passed.
 
 ## Phase 18 — Per-worktree git state
@@ -415,7 +415,7 @@ Lanes: D1 (P26→P27→P28→P29) is serial and first. After P28, lanes D2 (TUI)
 ## Phase 29 — Gates: discovery, git state, order, guards, no-agent (§12.1 #1, #2, #3, #9, #13)
 **Files:** `crates/rollcall-cli/tests/it/discovery.rs`, `crates/rollcall-cli/tests/it/no_agent.rs`.
 **Acceptance criteria:** exactly §12.1 #1, #2 (incl. separate `F_clean` run with `repo_budget_secs = 0.001`), #3, #9, #13 as written in the spec, against P08 oracles; #1's `< 10 s` with the symlink loop in both symlink modes; #13's TUI no-agent snapshot deferred to P32 and cross-referenced there.
-**Expected test outputs:** `cargo test -p rollcall-cli --test it discovery:: no_agent:: --locked` → ≥ 9 passed, 0 failed.
+**Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- discovery:: no_agent::` → ≥ 9 passed, 0 failed.
 
 ## Phase 30 — Gates: sessions, matching, incremental, pointers (§12.1 #4, #5, #6, #7)
 **Files:** `crates/rollcall-cli/tests/it/sessions.rs`.
@@ -427,7 +427,7 @@ Lanes: D1 (P26→P27→P28→P29) is serial and first. After P28, lanes D2 (TUI)
 **Acceptance criteria:**
 - [ ] §12.1 #8 as written, incl. both positive controls creating `marker-filter-x` and `marker-filter-lfs` with the real git resolved **before** the fake `git` is installed on `PATH`; the positive controls run first and the test fails if they don't produce markers (proves the vectors are live).
 - [ ] §12.1 #10 and #12 as written.
-**Expected test outputs:** `cargo test -p rollcall-cli --test it hostile:: privacy:: store:: --locked` → ≥ 20 passed.
+**Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- hostile:: privacy:: store::` → ≥ 20 passed.
 
 ## Phase 32 — TUI
 **Description:** §8.1 layout, keys, filter, first paint from cache with `stale`, background scan via `std::thread` + `mpsc`, badges and named colours, no agent UI when no source has data; `c`, `Y`, `o`, clipboard per config. `R` calls into P33's `resume` module (stubbed to a status message until P33 lands in the same wave — P33 owns `resume.rs`).
