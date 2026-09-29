@@ -7,3 +7,5 @@
 - P07 worker ran `rm -rf /private/tmp/claude-501/-Users-ravichandrasekhar` (a mistyped scratch path; may have been another session's scratchpad for the home-dir project). Outside the repo; report to the author.
 - P14 N1: spec §4.4 says `Config::isolated()`; P19 must use `gix::open::Options::isolated()` (the one that denies environment config). P14's "unreachable" verdicts depend on it.
 - P14 C-2 do-not-call list (obligation on P20/P21): `Repository::worktrees()` and `Proxy::*`, reflog APIs, `rev_parse` with `@{}`, `Platform::pseudo()`, `open_mailmap`.
+- P16 unverified locally: different-device skip (needs a second mount), SF_DATALESS on a real file (predicate only), wall-clock budget beyond zero duration. Dedup of the `untrusted_path` fixture's on-disk `.git` file against its admin dir (row path `$HOME`) is P07's oracle assumption — verify at P27b/P32.
+- P16 FIFO named `.git` → `bad gitdir:` error row (spec silent); P08 told to align the manifest.
