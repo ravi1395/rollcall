@@ -45,7 +45,7 @@ It governs **how**. It never cuts **what** the spec decides: v0 scope, the 5-cra
 
 | Crate | Normal deps | Dev deps |
 |---|---|---|
-| `rollcall-core` | `serde` (`derive`), `jiff` (`serde`), `regex`, `unicode-segmentation` | — |
+| `rollcall-core` | `serde` (`derive`), `jiff` (`serde`), `regex`, `unicode-segmentation` | `serde_json` (R1 orchestrator edit at P03: §7 key-set tests need a JSON value type) |
 | `rollcall-git` | core, `gix` (`default-features = false`, `features = ["sha1", "status", "revision"]`; **not** `interrupt`), `libc` (constants only); feature `test-hooks = []` (enables the P21 delay seam outside `cfg(test)`) | `tempfile` |
 | `rollcall-sessions` | core, `serde`, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`), `libc` | `tempfile` |
 | `rollcall-store` | core, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`) | `tempfile` |

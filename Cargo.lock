@@ -2432,6 +2432,7 @@ dependencies = [
  "jiff",
  "regex",
  "serde",
+ "serde_json",
  "unicode-segmentation",
 ]
 
