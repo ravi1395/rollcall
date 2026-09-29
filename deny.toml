@@ -1,0 +1,45 @@
+# cargo-deny 0.20. Spec §11: rollcall never touches the network, so HTTP/transport
+# stacks are banned outright.
+
+[graph]
+all-features = true
+
+[advisories]
+# Defaults: RustSec DB, vulnerabilities and unmaintained/yanked crates are errors.
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "curl" },
+    { crate = "ureq" },
+]
+
+# gix-transport is a non-optional dependency of gix (via gix-protocol) but must
+# compile with no client features; every http-client* feature implies blocking-client.
+[[bans.features]]
+crate = "gix-transport"
+deny = ["blocking-client", "async-client", "http-client-curl", "http-client-reqwest"]
+
+[licenses]
+# Only what the lockfile needs; all are permissive and compatible with MIT OR Apache-2.0.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
