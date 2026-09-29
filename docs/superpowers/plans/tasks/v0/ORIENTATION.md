@@ -28,6 +28,9 @@
 
 - A session hook rewrites `HANDOFF.md` (on push and other events). `git update-index --skip-worktree HANDOFF.md` is set for the run — unset it (`--no-skip-worktree`) before writing the run-end handoff. Never `git commit -a`; stage explicit paths.
 - `block-dangerous-git.sh` blocks `reset --hard`, `branch -D`, `clean -f`, `checkout .`, `restore .`, force pushes. Use `git branch -d` after merges, `git worktree remove` for clean worktrees.
+- Agent worktree isolation does NOT reliably fork from `impl/v0`: P14's worktree came from `19bfdee` (old `main`). After every isolated dispatch check `git worktree list`; fast-forward a stale one (`git -C <wt> restore HANDOFF.md && git -C <wt> merge --ff-only impl/v0`) and message the agent. Worktrees live under `.claude/worktrees/` (locally excluded via `.git/info/exclude`).
+- claimd Stop hook blocked every turn end; author chose (2026-09-30) to ignore it via a local, uncommitted `.claims/config.json` with `lint.ignore = ["**"]` (excluded in `.git/info/exclude`). A committed ignore would trip claimd's monotone-tighten check.
+- Always `cd /Users/ravichandrasekhar/Projects/rollcall &&` — a `cd` into a worktree moves the session's cwd.
 - Edition 2024 `set_var` is `unsafe`; `unsafe_code` is forbidden (R3/R6).
 - Never print prompt text from real logs.
 
