@@ -13,7 +13,7 @@
   - Evidence: each round's verdict table and orchestrator re-verification table are in that doc.
 - **Fact probe** — `scripts/probe-plan-facts.sh`, committed `eeb8bc9`. It re-measures the toolchain, crate versions, gix transitive dependencies and the git remote count.
 - **Author answers (2026-09-29):** Q1 private GitHub repo; Q2 install tools locally; Q3 (a) drop `directories`, (b) SHA-1 lock name, (d) drop `criterion`, keep `arboard`; claimd stays off. Recorded in plan § Open questions.
-- **Private GitHub repo** `https://github.com/ravi1395/rollcall` created; `main` pushed and tracking `origin/main` (`gh repo view` → `visibility: PRIVATE`). Pushed commits `8129b22..d8e2d51`; later commits in this file's history are local until the next push.
+- **Private GitHub repo** `https://github.com/ravi1395/rollcall` created; `main` pushed and tracking `origin/main` (`gh repo view` → `visibility: PRIVATE`). Check `git status -sb` for anything unpushed.
 - **Local tools installed via Homebrew:** hyperfine 1.20.0, fish 4.9.3, cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-dist 0.33.0 (`--version` output checked).
 - **Consumed handoffs archived** under `.handoffs/`, bytes checked with `cmp`: the session-start handoff (`20260929-224036-HANDOFF.md`) and three hook-written ones.
 
