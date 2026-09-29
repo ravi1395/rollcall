@@ -1,14 +1,14 @@
-# Plan: rollcall v0 — revision 4  (45 phases in 9 lanes, branch: `impl/v0`, worktrees under `../rollcall-v0*`)
+# Plan: rollcall v0 — revision 5  (45 phases in 9 lanes, branch: `impl/v0`, worktrees under `../rollcall-v0*`)
 
-**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 9). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 10). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
 
-**Revision 4** folds in plan red-team rounds 1–3 (Opus reviewers; findings and dispositions in `2026-09-29-rollcall-v0-plan-redteam.md`). Spec-level defects went to spec revisions 7–9. Phases P15 and P27 are split into lettered parts, so numbering stays stable.
+**Revision 5** records the author's answers to Q1–Q3 (§ Open questions). Revision 4 folded in plan red-team rounds 1–3 (Opus reviewers; findings and dispositions in `2026-09-29-rollcall-v0-plan-redteam.md`). Spec-level defects went to spec revisions 7–9; revision 10 records the author's Q3 answers. Phases P15 and P27 are split into lettered parts, so numbering stays stable.
 
 **Deviation from the `/phases` house format:** 45 phases, not 3–5. This is a 5–7 week greenfield project with 18 gating criteria and a 2-substantive-file cap per worker. Every other house rule holds.
 
 **Explorer pass:** not applicable — the repo holds only docs; every source path below is new. External facts are re-measurable with `scripts/probe-plan-facts.sh`.
 
-**Setup (once):** `git worktree add ../rollcall-v0 -b impl/v0` from `main`. One commit per phase, message `P<nn>: <title>`. Nothing is pushed without authorization (Q1).
+**Setup (once):** `git worktree add ../rollcall-v0 -b impl/v0` from `main`. One commit per phase, message `P<nn>: <title>`. `impl/v0` is pushed to the private GitHub repo (`origin`) after each lane merge (Q1).
 
 ---
 
@@ -48,10 +48,10 @@ It governs **how**. It never cuts **what** the spec decides: v0 scope, the 5-cra
 | `rollcall-core` | `serde` (`derive`), `jiff` (`serde`), `regex`, `unicode-segmentation` | — |
 | `rollcall-git` | core, `gix` (`default-features = false`, `features = ["sha1", "status", "revision"]`; **not** `interrupt`), `libc` (constants only); feature `test-hooks = []` (enables the P21 delay seam outside `cfg(test)`) | `tempfile` |
 | `rollcall-sessions` | core, `serde`, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`), `libc` | `tempfile` |
-| `rollcall-store` | core, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`) [+ `sha2` unless Q3b = SHA-1; + `directories` unless Q3a = drop] | `tempfile` |
-| `rollcall-cli` | all four (dev-dependency on `rollcall-git` with `features = ["test-hooks"]`), `clap` (`derive`), `serde`, `serde_json`, `toml`, `ratatui` (`default-features = false`, `features = ["crossterm"]`), `shell-words`, `libc` [+ `arboard` (`default-features = false`) unless Q3c = OSC 52 only] | `tempfile`, `rusqlite`, `toml`, `serde`, `insta`, `expectrl`, `jsonschema` (`default-features = false`) [+ `criterion` (`default-features = false`, `features = ["cargo_bench_support"]`) unless Q3d = drop] |
+| `rollcall-store` | core, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`) | `tempfile` |
+| `rollcall-cli` | all four (dev-dependency on `rollcall-git` with `features = ["test-hooks"]`), `clap` (`derive`), `serde`, `serde_json`, `toml`, `ratatui` (`default-features = false`, `features = ["crossterm"]`), `shell-words`, `libc`, `arboard` (`default-features = false`) | `tempfile`, `rusqlite`, `toml`, `serde`, `insta`, `expectrl`, `jsonschema` (`default-features = false`) |
 
-Ladder notes: `jiff`, `libc`, `tempfile`, `gix-hash` are already pulled in by gix (rung 5). Fingerprints (§6.3 "e.g. xxh3-128") use the first 16 bytes of SHA-1 from `gix-hash` — no `xxhash-rust`. Terminal I/O uses `ratatui::crossterm` and `ratatui::init` / `restore` (panic-safe restore included) — no direct `crossterm`. Threads: `std::thread::scope` for the walk; `std::thread::spawn` (detached) for per-repo workers, because §4.4 abandons timed-out threads; `std::sync::mpsc` for channels. Scan lock: `File::try_lock` (stable since Rust 1.89 → `rust-version = "1.89"`). UUID check: hand-written. MCP: hand-written JSON-RPC 2.0 over stdio, no `rmcp` / `tokio`. Fixture repos: the real `git` binary resolved to an absolute path; the `big_object` zlib stream via `python3 -c 'import zlib …'` in the generator.
+Ladder notes: `jiff`, `libc`, `tempfile`, `gix-hash` are already pulled in by gix (rung 5). Fingerprints (§6.3 "e.g. xxh3-128") use the first 16 bytes of SHA-1 from `gix-hash` — no `xxhash-rust`. The scan-lock file name is the hex SHA-1 of the canonical root (spec rev 10) and the cache path is computed directly (no `directories`). Terminal I/O uses `ratatui::crossterm` and `ratatui::init` / `restore` (panic-safe restore included) — no direct `crossterm`. Threads: `std::thread::scope` for the walk; `std::thread::spawn` (detached) for per-repo workers, because §4.4 abandons timed-out threads; `std::sync::mpsc` for channels. Scan lock: `File::try_lock` (stable since Rust 1.89 → `rust-version = "1.89"`). UUID check: hand-written. MCP: hand-written JSON-RPC 2.0 over stdio, no `rmcp` / `tokio`. Fixture repos: the real `git` binary resolved to an absolute path; the `big_object` zlib stream via `python3 -c 'import zlib …'` in the generator.
 
 Measured 2026-09-29 in a scratch resolve (gix 0.88 with `sha1`): with `jsonschema` trimmed, `cargo tree -i reqwest` and `-i hyper` match nothing; `gix-transport` is present with only its empty `default` feature (spec §11, revision 7).
 
@@ -151,7 +151,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 01 — Workspace scaffold
 **Description:** The workspace skeleton with every manifest, dependency, feature, module list and test-module list final (R1).
-**Files:** `Cargo.toml` (new), `CLAUDE.md` (new); mech: five crate `Cargo.toml`s; every module as an empty stub — core `lib.rs mem.rs rank.rs matching.rs text.rs`; git `lib.rs walk.rs classify.rs root.rs open.rs trust.rs state.rs testgit.rs` (`testgit` under `#[cfg(test)]`); sessions `lib.rs jsonl.rs claude.rs codex_db.rs codex_rollout.rs`; store `lib.rs fs.rs`; cli `lib.rs main.rs cli.rs config.rs scan.rs output.rs mcp.rs tui.rs app.rs resume.rs` and `benches/scan.rs` (`fn main() {}`, only if Q3d = keep); `tests/it/main.rs` (`#![allow(dead_code)]`) + stubs `support.rs`, `build_git.rs`, `build_sessions.rs`, `selftest.rs`, `materialize.rs`, `discovery.rs`, `no_agent.rs`, `sessions.rs`, `mcp.rs`, `hostile.rs`, `privacy.rs`, `store.rs`, `shell.rs`; `.gitignore`, `LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.lock`.
+**Files:** `Cargo.toml` (new), `CLAUDE.md` (new); mech: five crate `Cargo.toml`s; every module as an empty stub — core `lib.rs mem.rs rank.rs matching.rs text.rs`; git `lib.rs walk.rs classify.rs root.rs open.rs trust.rs state.rs testgit.rs` (`testgit` under `#[cfg(test)]`); sessions `lib.rs jsonl.rs claude.rs codex_db.rs codex_rollout.rs`; store `lib.rs fs.rs`; cli `lib.rs main.rs cli.rs config.rs scan.rs output.rs mcp.rs tui.rs app.rs resume.rs`; `tests/it/main.rs` (`#![allow(dead_code)]`) + stubs `support.rs`, `build_git.rs`, `build_sessions.rs`, `selftest.rs`, `materialize.rs`, `discovery.rs`, `no_agent.rs`, `sessions.rs`, `mcp.rs`, `hostile.rs`, `privacy.rs`, `store.rs`, `shell.rs`; `.gitignore`, `LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.lock`.
 **Changes:** cli `[[bin]] name = "rollcall"`; `cli.rs` handles `--version` only (P04 completes it); test paths to `schema/`, `tests/` resolve from `env!("CARGO_MANIFEST_DIR")/../..`. Workspace `resolver = "3"`, `edition = "2024"`, `rust-version = "1.89"`, `license = "MIT OR Apache-2.0"`, `[workspace.lints.rust] unsafe_code = "forbid"`, every crate `[lints] workspace = true`; R5 exactly; every library module declared `pub mod` so items consumed by later phases are not dead code. `CLAUDE.md`: pointers to spec and plan, R1–R4 in one line each, the ponytail ladder with attribution, and two safety rules — never print prompt text from real logs; re-audit gix read and spawn sites on any gix bump (§4.4).
 **Acceptance criteria:**
 - [ ] `cargo build --workspace --locked` and `cargo clippy --workspace --all-targets --locked -- -D warnings` succeed.
@@ -167,7 +167,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Acceptance criteria:**
 - [ ] `grep -cE 'uses: [^@ ]+@[0-9a-f]{40}' .github/workflows/ci.yml` equals `grep -c 'uses:' .github/workflows/ci.yml`, and that count is ≥ 5.
 - [ ] `grep -cE 'package-ecosystem: "(cargo|github-actions)"' .github/dependabot.yml` → 2.
-- [ ] If Q2 allows installing `cargo-deny`: `cargo deny check` passes, and a scratch copy with `gix-transport/blocking-client` enabled fails `cargo deny check bans` (proves the feature ban works). Otherwise: **UNVERIFIABLE until CI (Q1)**.
+- [ ] `cargo deny check` passes locally, and a scratch copy with `gix-transport/blocking-client` enabled fails `cargo deny check bans` (proves the feature ban works).
 **Expected test outputs:** `cargo deny check` → `advisories ok, bans ok, licenses ok, sources ok`.
 
 ## Phase 03 — Core types and in-memory Index
@@ -523,7 +523,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 37 — TUI app: event loop, keys, clipboard, editor
 **Files:** `crates/rollcall-cli/src/app.rs`.
-**Changes:** `ratatui::init` / `restore`; first paint from cache, background scan on `std::thread` + `mpsc`; keys per §8.1 through `handle_key`; `c` / `Y` via the configured clipboard (arboard or OSC 52 per Q3c); `o` via `shell-words`, `$VISUAL` before `$EDITOR`; `R` → `resume::resume`.
+**Changes:** `ratatui::init` / `restore`; first paint from cache, background scan on `std::thread` + `mpsc`; keys per §8.1 through `handle_key`; `c` / `Y` via the configured clipboard (`arboard` for `system`, OSC 52 for `osc52`, §3.2); `o` via `shell-words`, `$VISUAL` before `$EDITOR`; `R` → `resume::resume`.
 **Acceptance criteria (through `handle_key` on a `TestBackend` model):**
 - [ ] `j` / `k` / arrows, `enter`, `tab`, `/` (case-insensitive substring over repos and branches), `Esc` clears, `r` rescans, `?`, `q` → exit 0.
 - [ ] `c` yields `Action::Copy("cd -- '<path>'")`; `Y` yields `Action::Copy(<§8.1 display line>)`; `apply_copy` with a failing writer sets the status message.
@@ -550,7 +550,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 ## Lane E — performance, release, demo (after D)
 
 ## Phase 40 — Performance gate (§12.1 #17)
-**Files:** `.github/workflows/ci.yml` (edit: `perf` job); `crates/rollcall-cli/benches/scan.rs` (only if Q3d = keep).
+**Files:** `.github/workflows/ci.yml` (edit: `perf` job).
 **Acceptance criteria:** on `ubuntu-latest`, release build, corpus via `materialize_perf`: `hyperfine --prepare 'rollcall cache clear' -r 5 --export-json cold.json 'rollcall scan $C'` median < 5 s; `hyperfine -w 2 -r 10 --export-json warm.json 'rollcall status --json $C'` median < 1 s; a `jq` step fails the job on breach.
 **Expected test outputs:** CI `perf` job green with both medians printed.
 
@@ -602,14 +602,8 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - **Permissions:** unreadable dir (P16), umask 000 / 022 (P26, P35), resume-file owner / mode / links (P38), other-uid repos (P19, unit-level via forced trust).
 - **Crash safety:** a mid-commit panic keeps the prior state (P26).
 
-## Open questions
+## Open questions — answered 2026-09-29
 
-Q3 must be answered before P01 (it fixes the dependency set). Q1 and Q2 must be answered before the phases they name.
-
-1. **GitHub remote** (gates P02's CI checks and P40–P42). No remote exists; pushing needs your authorization. (a) Private GitHub repo now, push `impl/v0` after each lane merge; (b) local-only until lane E; (c) public from the start.
-2. **Local tool installs** (P02, P39's fish case, P40, P41). `cargo-deny`, `cargo-audit`, `hyperfine`, `fish`, `cargo-dist` are not installed here. (a) Install locally (Homebrew / `cargo install`); (b) CI-only — local runs skip those checks with the R3 message.
-3. **Ponytail trims.**
-   - (a) Drop `directories`; hand-code the cache path (same paths as §6.1). No behavior change; §6.1's wording "via the `directories` crate" would change.
-   - (b) Lock file name via SHA-1 from `gix-hash` instead of SHA-256 (drops `sha2`). Spec deviation: §6.4 names `sha256`, so this needs a spec edit.
-   - (c) Clipboard: keep `arboard` for `clipboard = "system"`, or make OSC 52 the only mechanism (drops `arboard` and its X11/Wayland tree on Linux). **Behavior change** to §3.2.
-   - (d) `criterion` benches: drop (the gating perf check is `hyperfine`) or keep. Spec deviation: §10.2 names `criterion`, so dropping needs a spec edit.
+1. **GitHub remote:** private GitHub repo now; push `impl/v0` after each lane merge.
+2. **Local tools:** install `cargo-deny`, `cargo-audit`, `hyperfine`, `fish`, `cargo-dist` locally; R3's skip path remains for machines without them.
+3. **Ponytail trims:** (a) drop `directories` — yes; (b) SHA-1 lock name — yes; (c) keep `arboard` (no OSC 52-only); (d) drop `criterion` — yes. Spec revision 10 records (a), (b), (d).

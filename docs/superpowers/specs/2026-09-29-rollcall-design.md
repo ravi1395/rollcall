@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 9 — after red-team rounds 1–4 and plan red-team rounds 1–3 (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
+**Status:** Revision 10 — after red-team rounds 1–4 and plan red-team rounds 1–3 (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
@@ -326,7 +326,7 @@ Sources are read-only on agent data: they never modify agent files or databases 
 
 ### 6.1 Location and permissions
 
-- Cache directory via the `directories` crate: macOS `~/Library/Caches/rollcall`, Linux `$XDG_CACHE_HOME/rollcall` (default `~/.cache/rollcall`). Directory `0700`; `cache.sqlite` and its `-wal`/`-shm` files `0600`, set explicitly regardless of umask.
+- Cache directory (computed directly, no directory crate): macOS `~/Library/Caches/rollcall`, Linux `$XDG_CACHE_HOME/rollcall` (default `~/.cache/rollcall`). Directory `0700`; `cache.sqlite` and its `-wal`/`-shm` files `0600`, set explicitly regardless of umask.
 - One database for all roots. Repos/worktrees keyed by canonical path. A **root-membership table** `(root, repo_path, kind, contains_root)` records which repos a root's scan produced — including the enclosing repo, `external_main` repos, and worktrees outside the root — since `kind` and `contains_root` depend on the root. `external` is computed per root from worktree path vs root. Sessions keyed by `(source, id)`, shared across roots; session → worktree matches are stored per root together with that scan's `--submodules` flag, since candidates depend on both (§6.5); an answer from the cache whose flag differs from the current invocation's is `stale: true`. The last scan's diagnostics are stored per root for `doctor`.
 
 ### 6.2 What is stored
@@ -349,7 +349,7 @@ For each log file, compare with the prior `FileState` of the same `(dev, inode)`
 
 - Every command except `--no-scan` runs a scan before answering: git state is always re-read; logs are read incrementally (§6.3).
 - SQLite WAL, `busy_timeout = 5000 ms`. Each scan commits in one transaction; a crash mid-scan leaves the prior state.
-- One scanner per root: `flock` on `<cache>/scan-<sha256(canonical root)>.lock`. A process that cannot take the lock answers from the cache.
+- One scanner per root: `flock` on `<cache>/scan-<hex SHA-1 of the canonical root>.lock` (SHA-1 from `gix-hash`, already a dependency). A process that cannot take the lock answers from the cache.
 - **`stale: true`** when the answer did not come from a scan completed by this invocation (lock held elsewhere, `--no-scan`, or MCP budget exceeded).
 - **TUI first paint:** if the cache has rows for the root, render them immediately with `stale` shown, then refresh when the scan completes; otherwise show a `scanning… <N> repos found` line until it completes.
 - **MCP:** if the cache already has rows for the root, a tool call waits ≤ 2 s for the scan, else answers stale. If it has none, the call waits for the first scan (bounded by `walk_budget_secs` + 30 s).
@@ -543,7 +543,7 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 - **Store:** idempotent rescan (two scans → identical `status --json` for the same `ROLLCALL_NOW`); crash mid-scan (transaction dropped) → prior state; harness holds the scan lock → command answers `stale: true`; `user_version` mismatch → rebuild.
 - **TUI:** `ratatui` `TestBackend` 120×32 + `insta` snapshots with and without sessions, with fixed `ROLLCALL_NOW`.
 - **MCP:** spawn `rollcall mcp --root $F` over stdio; call both tools; validate against `schema/`; ≤ 16 KiB on a 200-session fixture with `truncated` set when over; `root` not configured → error; no root → exit 2; empty cache → first call waits and returns repos.
-- **Bench:** `criterion` for JSONL parsing and matching; `hyperfine` end-to-end (§12.1 #17).
+- **Bench:** `hyperfine` end-to-end (§12.1 #17); no micro-benchmark harness in v0.
 
 ## 11. Distribution and release
 

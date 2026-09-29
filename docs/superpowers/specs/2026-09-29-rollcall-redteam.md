@@ -221,3 +221,7 @@ Spec-level defects, each re-verified by the orchestrator before editing (command
 - **Rename similarity is not bounded by the tree walk.** Now stated: `Rewrites { copies: None, percentage: Some(0.5), limit: 1000 }` (gix-diff-0.68.0 defaults, orchestrator-read) plus the allocation limit.
 - **`--submodules` flag had no carrier.** `Index::scanned_submodules` added to §3.4.
 - Conflicted and intent-to-add paths are counted from the index↔worktree side only (reviewer-read from gix-diff / gix-status sources).
+
+# Revision 10 — author decisions on plan Q3 (2026-09-29)
+
+The author chose three ponytail dependency trims: the cache path is computed directly (no `directories` crate, same paths); the lock file name uses SHA-1 from `gix-hash` instead of SHA-256 (no `sha2`); `criterion` micro-benchmarks dropped (the gating performance check is `hyperfine`). The clipboard keeps `arboard` for `clipboard = "system"`.
