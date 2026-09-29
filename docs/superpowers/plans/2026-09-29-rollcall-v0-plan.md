@@ -1,4 +1,4 @@
-# Plan: rollcall v0 — revision 5  (45 phases in 9 lanes, branch: `impl/v0`, worktrees under `../rollcall-v0*`)
+# Plan: rollcall v0 — revision 5  (45 phases in 9 lanes, branch: `impl/v0` in the main checkout; lane worktrees from agent isolation)
 
 **Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 10). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
 
@@ -8,7 +8,7 @@
 
 **Explorer pass:** not applicable — the repo holds only docs; every source path below is new. External facts are re-measurable with `scripts/probe-plan-facts.sh`.
 
-**Setup (once):** `git worktree add ../rollcall-v0 -b impl/v0` from `main`. One commit per phase, message `P<nn>: <title>`. `impl/v0` is pushed to the private GitHub repo (`origin`) after each lane merge (Q1).
+**Setup (once):** `git checkout -b impl/v0` from `main` **in the main checkout** (not `../rollcall-v0`): agent-tool worktree isolation forks from the session checkout's HEAD, so `impl/v0` must be checked out there for lane worktrees to branch from it. Workers leave edits uncommitted; the orchestrator commits one commit per phase, message `P<nn>: <title>`. `impl/v0` is pushed to the private GitHub repo (`origin`) after each lane merge (Q1).
 
 ---
 
