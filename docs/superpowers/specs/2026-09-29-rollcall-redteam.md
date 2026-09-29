@@ -212,3 +212,12 @@ Spec-level defects, each re-verified by the orchestrator before editing (command
 - **§11 feature ban** names `blocking-client`, `async-client` (the `http-client*` features imply `blocking-client`).
 - **`repo_budget_secs`** must be finite and representable (NaN passed `≤ 0`; `Duration::from_secs_f64` panics on NaN/inf/overflow).
 - Wording: positive control (2) is default open + `index_worktree_status`; `big-object` is read by the HEAD tree walk, not rev-walk.
+
+# Plan red-team round 3 → spec revision 9
+
+**Date:** 2026-09-29. Two Opus reviewers on the rev 8 / plan rev 3 diffs @ `cf54ac5`.
+
+- **Rev 8's HEAD tree bound counted entries, not bytes.** `index_from_tree` stores each entry's full path (gix-index-0.56.0 `init.rs` `push_entry`: `path_backing.extend_from_slice`, orchestrator-read). Reviewer-measured: 999,999 entries with 500-byte names from 24 KiB of objects → ~1 GB of path bytes, 564 MB peak RSS (macOS). Bound now also caps cumulative path bytes (128 MiB) and depth (4,096), requires an iterative walk, and a `tree-bomb-long` fixture joins §10.2.
+- **Rename similarity is not bounded by the tree walk.** Now stated: `Rewrites { copies: None, percentage: Some(0.5), limit: 1000 }` (gix-diff-0.68.0 defaults, orchestrator-read) plus the allocation limit.
+- **`--submodules` flag had no carrier.** `Index::scanned_submodules` added to §3.4.
+- Conflicted and intent-to-add paths are counted from the index↔worktree side only (reviewer-read from gix-diff / gix-status sources).

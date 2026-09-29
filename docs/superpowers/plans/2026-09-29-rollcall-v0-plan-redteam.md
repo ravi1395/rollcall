@@ -138,3 +138,23 @@ Minor (all applied): stub params `_`-prefixed; `[[bin]] name = "rollcall"`; root
 ## Still unverified (owner phase)
 
 Carried from round 1, plus: Linux `O_NONBLOCK` behaviour on the resume file (P38, CI); rebuild under `--locked` after a lane rebase (first R1 edit); `derive(Deserialize)` dead-code behaviour outside `support.rs` (covered by the crate-level allow).
+
+---
+
+# Round 3 (final)
+
+**Target:** diffs `031051e..cf54ac5` (spec rev 8, plan rev 3). **Reviewers:** two Opus 5.5 `skeptical-reviewer` agents — delta correctness (≤ 30 calls) and round-2 closure (≤ 25 calls).
+**Result:** plan revision 4 and spec revision 9. Stop rule set before the round: no round 4 unless a new spec-level hole appears; local majors are applied and the plan ships.
+
+| Lens | Verdict |
+|---|---|
+| Delta correctness | Stands with fixes — 2 high (one spec-level) |
+| Round-2 closure | Stands with fixes — 4 major, 6 minor, all local |
+
+Orchestrator re-verification: gix-index-0.56.0 `init.rs` `push_entry` extends `path_backing` with each entry's full path; gix-diff-0.68.0 `Rewrites` defaults `copies: None, percentage: Some(0.5), limit: 1000`. Accepted as reported: the long-name tree bomb (999,999 entries, 500-byte names, 24 KiB of objects → 564 MB peak RSS on macOS); a realistic 990,000-entry tree ≈ 115 B/entry in `index_from_tree`; `ChangeRef::location()` gives the rename destination; conflict / intent-to-add handling in gix-diff and gix-status.
+
+Dispositions:
+- **Spec-level:** HEAD tree bound counted entries only → spec rev 9 adds path-byte (128 MiB) and depth (4,096) caps, iterative walk, `tree-bomb-long`; rename similarity bound stated; `Index::scanned_submodules`. Plan P20/P35/P07 updated.
+- **Local (plan rev 4):** `ScanResult.submodules`; `lib.rs` rule scoped with the two named exceptions and P04's delegation targets listed; `test-hooks` feature for the P21 seam (declared in P01, enabled via cli dev-dependency) so P30 can use it; `Model.scanning`; `apply_copy` seam for the clipboard criterion; `resume`'s uid as a lazily called closure; `tree_bomb` / `tree_bomb_long` in the manifest enum; `[expect_counts]` key names and P10 corpus scope pinned; `[[big_log]]` built in P28 and listed for P33; P08's ≥ 16 prompts scoped to corpus `privacy`; `mcp_200` / `demo` removed from the corpus enum (their tables own them); crate pass floors set to the sums (git ≥ 80, sessions ≥ 49, P28 ≥ 7); non-TTY dispatch owned by P04 via a pure `dispatch_target`; `Rewrites` literal pinned in P20; resource-cache growth added to P15a.
+
+Residual risk after round 3 (not re-reviewed): plan revision 4's own edits have had no independent review. They are local (field additions, scoping sentences, counts). The spec rev 9 caps (128 MiB, depth 4,096) are chosen, not measured against a corpus of real repos; §12.2's author smoke on `~/Projects` is the first real-data check.

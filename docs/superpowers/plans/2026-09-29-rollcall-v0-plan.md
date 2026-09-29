@@ -1,8 +1,8 @@
-# Plan: rollcall v0 — revision 3  (45 phases in 9 lanes, branch: `impl/v0`, worktrees under `../rollcall-v0*`)
+# Plan: rollcall v0 — revision 4  (45 phases in 9 lanes, branch: `impl/v0`, worktrees under `../rollcall-v0*`)
 
-**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 8). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 9). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
 
-**Revision 3** folds in plan red-team rounds 1 and 2 (Opus reviewers; findings and dispositions in `2026-09-29-rollcall-v0-plan-redteam.md`). Spec-level defects went to spec revisions 7 and 8. Phases P15 and P27 are split into lettered parts, so numbering stays stable.
+**Revision 4** folds in plan red-team rounds 1–3 (Opus reviewers; findings and dispositions in `2026-09-29-rollcall-v0-plan-redteam.md`). Spec-level defects went to spec revisions 7–9. Phases P15 and P27 are split into lettered parts, so numbering stays stable.
 
 **Deviation from the `/phases` house format:** 45 phases, not 3–5. This is a 5–7 week greenfield project with 18 gating criteria and a 2-substantive-file cap per worker. Every other house rule holds.
 
@@ -46,10 +46,10 @@ It governs **how**. It never cuts **what** the spec decides: v0 scope, the 5-cra
 | Crate | Normal deps | Dev deps |
 |---|---|---|
 | `rollcall-core` | `serde` (`derive`), `jiff` (`serde`), `regex`, `unicode-segmentation` | — |
-| `rollcall-git` | core, `gix` (`default-features = false`, `features = ["sha1", "status", "revision"]`; **not** `interrupt`), `libc` (constants only) | `tempfile` |
+| `rollcall-git` | core, `gix` (`default-features = false`, `features = ["sha1", "status", "revision"]`; **not** `interrupt`), `libc` (constants only); feature `test-hooks = []` (enables the P21 delay seam outside `cfg(test)`) | `tempfile` |
 | `rollcall-sessions` | core, `serde`, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`), `libc` | `tempfile` |
 | `rollcall-store` | core, `serde_json`, `rusqlite` (`bundled`), `gix-hash` (`sha1`) [+ `sha2` unless Q3b = SHA-1; + `directories` unless Q3a = drop] | `tempfile` |
-| `rollcall-cli` | all four, `clap` (`derive`), `serde`, `serde_json`, `toml`, `ratatui` (`default-features = false`, `features = ["crossterm"]`), `shell-words`, `libc` [+ `arboard` (`default-features = false`) unless Q3c = OSC 52 only] | `tempfile`, `rusqlite`, `toml`, `serde`, `insta`, `expectrl`, `jsonschema` (`default-features = false`) [+ `criterion` (`default-features = false`, `features = ["cargo_bench_support"]`) unless Q3d = drop] |
+| `rollcall-cli` | all four (dev-dependency on `rollcall-git` with `features = ["test-hooks"]`), `clap` (`derive`), `serde`, `serde_json`, `toml`, `ratatui` (`default-features = false`, `features = ["crossterm"]`), `shell-words`, `libc` [+ `arboard` (`default-features = false`) unless Q3c = OSC 52 only] | `tempfile`, `rusqlite`, `toml`, `serde`, `insta`, `expectrl`, `jsonschema` (`default-features = false`) [+ `criterion` (`default-features = false`, `features = ["cargo_bench_support"]`) unless Q3d = drop] |
 
 Ladder notes: `jiff`, `libc`, `tempfile`, `gix-hash` are already pulled in by gix (rung 5). Fingerprints (§6.3 "e.g. xxh3-128") use the first 16 bytes of SHA-1 from `gix-hash` — no `xxhash-rust`. Terminal I/O uses `ratatui::crossterm` and `ratatui::init` / `restore` (panic-safe restore included) — no direct `crossterm`. Threads: `std::thread::scope` for the walk; `std::thread::spawn` (detached) for per-repo workers, because §4.4 abandons timed-out threads; `std::sync::mpsc` for channels. Scan lock: `File::try_lock` (stable since Rust 1.89 → `rust-version = "1.89"`). UUID check: hand-written. MCP: hand-written JSON-RPC 2.0 over stdio, no `rmcp` / `tokio`. Fixture repos: the real `git` binary resolved to an absolute path; the `big_object` zlib stream via `python3 -c 'import zlib …'` in the generator.
 
@@ -76,12 +76,12 @@ Measured 2026-09-29 in a scratch resolve (gix 0.88 with `sha1`): with `jsonschem
 
 ## Interfaces (pinned by P03/P04; bodies `unimplemented!()` until their phase)
 
-Names below are fixed; executors may add private helpers but not change these. Every `lib.rs` entry point is a one-line delegation to a `pub fn` in its owning module, written by P04 (e.g. git `check_root` → `root::check_root`, sessions `impl SessionSource for Claude` → `claude::scan` / `claude::resolve`, core `match_sessions` → `matching::match_sessions`); later phases fill module bodies only and never touch `lib.rs`.
+Names below are fixed; executors may add private helpers but not change these. Every `lib.rs` entry point is a one-line delegation to a `pub fn` in its owning module, written by P04 (e.g. git `check_root` → `root::check_root`, sessions `impl SessionSource for Claude` → `claude::scan` / `claude::resolve`, core `match_sessions` → `matching::match_sessions`); later phases fill module bodies only and never touch `lib.rs` — except rollcall-git `lib.rs` (P21 owns the `discover` / `repo_state` bodies) and rollcall-store `lib.rs` (P26 owns `SqliteIndex`). P04's delegation targets: core `matching.rs`; git `root.rs`, `open.rs`; sessions `claude.rs`, `codex_rollout.rs` (Codex dispatch).
 
 **`rollcall-core`** (P03):
 - `type Timestamp = jiff::Timestamp; type Error = Box<dyn std::error::Error + Send + Sync>; type Result<T> = std::result::Result<T, Error>;`
 - `struct Uuid(String)` with `Uuid::parse(&str) -> Option<Uuid>` and `as_str()`.
-- §3.4 verbatim: `SourceKind`, `TextRef`, `TextField`, `TitleKind`, `Session`, `FileState`, `SourceState`, `SourceScan`, `trait Index` (`sessions_for(&self, root: &Path, worktree: &Path)`, spec rev 7; matches stored with the scan's `--submodules` flag, rev 8), `fn match_sessions`.
+- §3.4 verbatim: `SourceKind`, `TextRef`, `TextField`, `TitleKind`, `Session`, `FileState`, `SourceState`, `SourceScan`, `trait Index` (`sessions_for(&self, root: &Path, worktree: &Path)`, spec rev 7; `scanned_submodules(&self, root: &Path) -> Option<bool>`, spec rev 9), `fn match_sessions`.
 - `Backing { LogFile { dev, inode, path }, CodexThread { db_path, thread_id: Uuid } }`; `RepoKind { Normal, Nested, Bare, ExternalMain }`; `StaleReason { Missing, Merged, Inactive }`.
 - `WorktreeState { path, is_main, branch, detached, head, last_commit_at, upstream, ahead, behind, unpushed, dirty_count, untracked_count, missing, merged, error }` (optional counts `Option<u32>`, others `u32`).
 - `RepoState { default_branch, has_remote, error, worktrees: Vec<WorktreeState>, pending: Option<Arc<AtomicBool>> }` — `pending` is set only for a timed-out repo; the abandoned worker stores `true` when it finishes (serde-skipped).
@@ -91,7 +91,7 @@ Names below are fixed; executors may add private helpers but not change these. E
 - `WalkDiag` = the `DoctorDoc.walk` object; `Discovery { repos, walk: WalkDiag, partial, notes: Vec<String> }`.
 - `WorktreeKey { canonical_path, hidden, missing }`; `SessionLocation { cwd_canonical, cwd_exists, under_root }`; `MatchResult { Matched(usize), OutsideRoot, PathGone, NonRepo }`.
 - `SourceDiagnostics` = one `DoctorDoc.sources[]` entry; sources leave `matched` / `unmatched` at 0 and P30 fills them after matching. `SourceScan` carries `notes: Vec<String>` (spec rev 8). `type ScanDiagnostics = DoctorDoc`.
-- `ScanResult { scanned_at, partial, repos: Vec<RepoRow>, sources: Vec<SourceScan>, matches: Vec<(SourceKind, Uuid, Option<PathBuf>)>, diagnostics: DoctorDoc }`.
+- `ScanResult { scanned_at, submodules: bool, partial, repos: Vec<RepoRow>, sources: Vec<SourceScan>, matches: Vec<(SourceKind, Uuid, Option<PathBuf>)>, diagnostics: DoctorDoc }`.
 - §7 documents with `Serialize + Deserialize`: `StatusDoc`, `Repo`, `Worktree`, `SessionOut`, `WhereWasIDoc`, `ListStaleDoc`, `DoctorDoc` (incl. revision 7 `notes`). Timestamps serialise via `jiff::Timestamp` `Display` (`Z` suffix, fraction only when non-zero — measured with jiff 0.2.37).
 - `pub struct MemIndex` (plain `pub`, not `cfg(test)`) implementing `Index`.
 
@@ -107,23 +107,23 @@ Names below are fixed; executors may add private helpers but not change these. E
 - `scan.rs`: `scan(ctx: &Ctx, root: &Path, mode: ScanMode) -> ScanOutcome { index: SqliteIndex, stale: bool, exit: ExitCode }` with `ScanMode::{Fresh, NoScan, WaitAtMost(Duration)}`. `WaitAtMost(d)`: if the lock is free, run the scan on a spawned thread and wait up to `d` on a channel; on timeout return a second `SqliteIndex::open` with `stale = true` while the detached thread commits later. If the lock is held elsewhere, poll up to `d`, then answer stale.
 - `output.rs`: `status(ctx, &ScanOutcome, root, json: bool, out: &mut dyn Write) -> ExitCode`; `doctor(…)`; `scan_summary(…)`; `build_status(ctx, index, root, stale, policy: TextPolicy) -> StatusDoc`; `render_session(&Session, &dyn SessionSource, TextPolicy) -> SessionOut`; `ResumeTarget { source, id, cwd }`; `display_line(&ResumeTarget) -> String` (the §8.1 `Y` line; lives here so every session renderer has it from P31).
 - `mcp.rs`: `serve(ctx, roots: Vec<PathBuf>, prompts: bool, input: impl BufRead, output: impl Write) -> ExitCode`.
-- `tui.rs`: `draw(frame: &mut Frame, model: &Model)`; `Model { doc: StatusDoc, selected, expanded, pane, filter, status_message: Option<String>, show_help, no_color: bool, now: Timestamp }` (pinned by P04 so P37 needs no `tui.rs` edit).
-- `app.rs`: `run(ctx, root) -> ExitCode` (terminal, event loop, background scan); `handle_key(&mut Model, &EnvPaths, KeyEvent) -> Action` where `Action::{None, Quit, Rescan, Copy(String), Spawn { program, args }, Resume(ResumeTarget)}` (the unit-testable seam; `run` performs the action).
-- `resume.rs`: `resume(target: &ResumeTarget, env: &EnvPaths, uid: u32) -> Result<ExitCode, String>` (execs on the direct path, so it returns only on refusal or with exit 10 after the file protocol; `uid` comes from `rollcall_store::effective_uid(&ctx.cache_dir)` and is a plain value so tests can pass another); `find_agent(path_var: &OsStr, name: &str) -> Option<PathBuf>`; `init_script(shell: Shell) -> &'static str`.
+- `tui.rs`: `draw(frame: &mut Frame, model: &Model)`; `Model { doc: StatusDoc, selected, expanded, pane, filter, status_message: Option<String>, show_help, no_color: bool, now: Timestamp, scanning: Option<usize> }` (`scanning` = repos found so far during a first scan) (pinned by P04 so P37 needs no `tui.rs` edit).
+- `app.rs`: `run(ctx, root) -> ExitCode` (terminal, event loop, background scan); `handle_key(&mut Model, &EnvPaths, KeyEvent) -> Action` where `Action::{None, Quit, Rescan, Copy(String), Spawn { program, args }, Resume(ResumeTarget)}` (the unit-testable seam; `run` performs the action); `apply_copy(&mut Model, text: &str, write: impl FnOnce(&str) -> Result<(), String>)` sets the status message on failure.
+- `resume.rs`: `resume(target: &ResumeTarget, env: &EnvPaths, uid: &dyn Fn() -> Result<u32>) -> Result<ExitCode, String>` (execs on the direct path, so it returns only on refusal or with exit 10 after the file protocol; `uid` is called only in the resume-file branch — production passes `|| rollcall_store::effective_uid(&ctx.cache_dir)`, tests pass a constant); `find_agent(path_var: &OsStr, name: &str) -> Option<PathBuf>`; `init_script(shell: Shell) -> &'static str`.
 
 ---
 
 ## Fixture manifest schema (`tests/fixtures/MANIFEST.toml`; written by P07/P08, parsed by P27a–P28)
 
 - `[meta]`: `now` (RFC 3339; the `ROLLCALL_NOW` of every gating test), `author`, `committer` (`{ name, email }`).
-- `[[repo]]`: `id` (unique); `root` (`F` | `EXT` | `H` | `budget` | `home` | `perf` | `demo`); `path` (relative to its root); `kind` (`normal` | `bare` | `nested` | `submodule` | `submodule_old` | `special`); `special` (when `kind = "special"`: `fifo_git`, `symlink_fanout`, `symlink_out_of_root`, `unreadable_dir`, `corrupted`, `bad_gitdir`, `untrusted_path`, `drivers`, `submodule_lfs`, `worktree_escape`, `commondir_escape`, `symlinked_files`, `worktree_config_symlink`, `big_object`, `hang_probe`, `hang_probe_worktree_config`, `enclosing_root`); `in_clean` (false ⇒ excluded from `F_clean`); `target` (for `symlinked_files`: which file is the 4 GiB symlink); `covers` (array of §10.2 bullet names — a real key, not a comment); `parent` (submodule / nested); `commits` (`[{ branch, message, date, files = { path = content } }]`); `branches`; `head` (branch name or `detached:<i>`, `i` indexing this repo's `commits` array); `remotes` (`[{ name, target_repo_id }]`); `upstreams` (`{ branch = "remote/branch" }`); `origin_head`; `worktrees` (`[{ path, branch, missing, external }]`); `state` (`{ staged, unstaged, untracked, ignored }` path lists) and `edit` (`{ path = replacement }` for unstaged edits, same byte length as the committed content); `config` (repo-local key → value).
+- `[[repo]]`: `id` (unique); `root` (`F` | `EXT` | `H` | `budget` | `home` | `perf` | `demo`); `path` (relative to its root); `kind` (`normal` | `bare` | `nested` | `submodule` | `submodule_old` | `special`); `special` (when `kind = "special"`: `fifo_git`, `symlink_fanout`, `symlink_out_of_root`, `unreadable_dir`, `corrupted`, `bad_gitdir`, `untrusted_path`, `drivers`, `submodule_lfs`, `worktree_escape`, `commondir_escape`, `symlinked_files`, `worktree_config_symlink`, `big_object`, `hang_probe`, `hang_probe_worktree_config`, `enclosing_root`, `tree_bomb`, `tree_bomb_long`); `in_clean` (false ⇒ excluded from `F_clean`); `target` (for `symlinked_files`: which file is the 4 GiB symlink); `covers` (array of §10.2 bullet names — a real key, not a comment); `parent` (submodule / nested); `commits` (`[{ branch, message, date, files = { path = content } }]`); `branches`; `head` (branch name or `detached:<i>`, `i` indexing this repo's `commits` array); `remotes` (`[{ name, target_repo_id }]`); `upstreams` (`{ branch = "remote/branch" }`); `origin_head`; `worktrees` (`[{ path, branch, missing, external }]`); `state` (`{ staged, unstaged, untracked, ignored }` path lists) and `edit` (`{ path = replacement }` for unstaged edits, same byte length as the committed content); `config` (repo-local key → value).
 - `[home]`: `files` (`{ relpath = content }`) for the sandboxed `HOME` (`.gitconfig` with `core.excludesFile`; the refused-root suggestion repos) and `expected_suggestions`.
-- `[[claude]]`: `id`, `project_dir`, `file`, `corpus` (`matching` | `claude_rules` | `codex_rules` | `incremental` | `privacy` | `sanitise` | `shell` | `mcp_200` | `demo`), `lines` (JSONL strings), `steps` (`[{ op = "append" | "truncate" | "replace" | "symlink_swap" | "delete" | "move", lines?, to?, then_scan = true, expect = { records, offset, sessions, vanished } }]` — the §12.1 #7 oracle lives here), `expect` (`{ title, title_kind, last_prompt, branch, cwd, message_count, started_at, ended_at }`, or `excluded = "<reason>"`), `worktree` (repo id + worktree path it must match) or `unmatched = "<class>"`, `covers`.
+- `[[claude]]`: `id`, `project_dir`, `file`, `corpus` (`matching` | `claude_rules` | `codex_rules` | `incremental` | `privacy` | `sanitise` | `shell`; the `[mcp_200]` and `[demo]` tables generate their own sessions and have no corpus), `lines` (JSONL strings), `steps` (`[{ op = "append" | "truncate" | "replace" | "symlink_swap" | "delete" | "move", lines?, to?, then_scan = true, expect = { records, offset, sessions, vanished } }]` — the §12.1 #7 oracle lives here), `expect` (`{ title, title_kind, last_prompt, branch, cwd, message_count, started_at, ended_at }`, or `excluded = "<reason>"`), `worktree` (repo id + worktree path it must match) or `unmatched = "<class>"`, `covers`.
 - `[[codex_thread]]` (DB rows incl. `thread_spawn_edges`; `rollout_id` links to its `[[codex_rollout]]`) and `[[codex_rollout]]`: same `corpus` / `expect` / `worktree` / `covers` / `steps` keys.
 - `[[big_log]]`: `{ source, bytes = 67_108_864, single_line = true }` for P33's RSS check.
-- `[expect_counts]`: hand-written counts the oracle phases check against (`F_repos`, `F_worktrees`, per-source session counts per corpus).
-- Path tokens in any manifest value: `$F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS` and `$FIFO:<name>` (a FIFO the harness creates); the builder substitutes them before writing. `special = "corrupted"` is pinned as `core.repositoryformatversion = 7` (passes pre-open checks, fails gix open with `open failed: `, fails `git fsck`); `special = "tree_bomb"` per spec rev 8.
-- Which corpora each gate run materialises: P32 `matching` (for #3 `order.json`); P33 `matching` + `claude_rules` + `codex_rules` + `incremental`; P34 `mcp_200` + `matching`; P35 `privacy` + `sanitise`; P39 `shell`.
+- `[expect_counts]`: hand-written counts the oracle phases check against: `F_repos`, `F_worktrees`, and `<source>_sessions` for `claude`, `codex_db`, `codex_rollout`, each counting that source's sessions in corpora `matching`, `<source>_rules` (`claude_rules` or `codex_rules`) and `incremental` — exactly the rows of the P10 oracle file of the same name.
+- Path tokens in any manifest value: `$F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS` and `$FIFO:<name>` (a FIFO the harness creates); the builder substitutes them before writing. `special = "corrupted"` is pinned as `core.repositoryformatversion = 7` (passes pre-open checks, fails gix open with `open failed: `, fails `git fsck`); `special = "tree_bomb"` / `"tree_bomb_long"` per spec revs 8–9.
+- Which corpora each gate run materialises: P32 `matching` (for #3 `order.json`); P33 `matching` + `claude_rules` + `codex_rules` + `incremental` + `[[big_log]]`; P34 `mcp_200` + `matching`; P35 `privacy` + `sanitise`; P39 `shell`.
 - `[matching]`: `matched = 16`, `non_repo = 1`, `path_gone = 1`, `outside_root = 2` — counted over `corpus = "matching"` only.
 - `[perf]`: `repos = 50`, `linked_worktrees = 20`, `logs = 5000`, `bytes = 500_000_000`. `[mcp_200]`: `sessions = 200`. `[demo]`: repos and synthetic sessions for the vhs demo.
 
@@ -182,11 +182,12 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Expected test outputs:** `cargo test -p rollcall-core --locked` → ≥ 5 passed, 0 failed.
 
 ## Phase 04 — Cross-crate interface stubs
-**Description:** Transcribe § Interfaces into the other four crates with `unimplemented!()` bodies, and write the `cli.rs` dispatch complete, so later phases fill bodies only.
+**Description:** Transcribe § Interfaces into the other four crates with `unimplemented!()` bodies, and write the `cli.rs` dispatch complete (including §3.1's non-TTY `rollcall [PATH]` → `status` rule, decided by a pure `fn dispatch_target(stdout_is_tty: bool, …)`), so later phases fill bodies only.
 **Files:** `crates/rollcall-sessions/src/lib.rs`, `crates/rollcall-cli/src/cli.rs`; mech: delegations and stubs in every other crate's `lib.rs` and module files (core `matching.rs`, git `root.rs open.rs`, sessions `claude.rs`, store `lib.rs fs.rs`, cli `lib.rs config.rs scan.rs output.rs mcp.rs tui.rs app.rs resume.rs`), all stub parameters `_`-prefixed.
 **Acceptance criteria:**
 - [ ] Workspace builds; clippy clean.
 - [ ] `rollcall --help` lists `status`, `scan`, `doctor`, `mcp`, `init`, `cache`; `rollcall status --json --submodules --follow-symlinks --yes --no-scan . --help` exits 0.
+- [ ] `dispatch_target(false, no subcommand)` → `Status`; `(true, …)` → `Tui`.
 - [ ] `rollcall status --frobnicate` exits 2 (a bare word is a `[PATH]`, §3.1).
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- cli::` → ≥ 3 passed.
 
@@ -208,7 +209,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 07 — Manifest, part 1: git fixtures
 **Files:** `tests/fixtures/MANIFEST.toml` (new), `scripts/check-manifest.py` (new; stdlib `tomllib`; modes `git`, `sessions`, `expect <key>` — written complete here so P08–P10 never edit it).
-**Changes:** `[meta]`, `[home]`, every `[[repo]]` for roots `F`, `EXT`, `H`, `budget`, `home`, per § Fixture manifest schema and spec revisions 7–8 §10.2 (fan-out symlinks, `config.worktree` variants, same-size unstaged edits, `diff=x`, `big_object` as the HEAD root tree, `tree_bomb`, `corrupted` as format version 7); `[expect_counts]` for git roots. The schema summary is repeated as a header comment.
+**Changes:** `[meta]`, `[home]`, every `[[repo]]` for roots `F`, `EXT`, `H`, `budget`, `home`, per § Fixture manifest schema and spec revisions 7–8 §10.2 (fan-out symlinks, `config.worktree` variants, same-size unstaged edits, `diff=x`, `big_object` as the HEAD root tree, `tree_bomb`, `tree_bomb_long`, `corrupted` as format version 7); `[expect_counts]` for git roots. The schema summary is repeated as a header comment.
 **Acceptance criteria:**
 - [ ] `python3 scripts/check-manifest.py git`: every §10.2 "Discovery", "Git state", "Deadline", "Hostile repos" bullet (hard-coded list in the script) appears in some `covers`; every `special` value is in the enum; the `in_clean = false` set equals the §10.1 exclusion list.
 **Expected test outputs:** `python3 scripts/check-manifest.py git` → `ok: <n> repos, all bullets covered`.
@@ -217,7 +218,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Files:** `tests/fixtures/MANIFEST.toml` (edit).
 **Changes:** `[[claude]]`, `[[codex_thread]]`, `[[codex_rollout]]` (each with `corpus`; incremental cases as `steps`), `[[big_log]]`, `[matching]`, `[perf]`, `[mcp_200]`, `[demo]`, session `[expect_counts]`; one prompt per §9 scrub pattern; truncation and sanitising payloads; shell-hostile worktree paths and branch `$(touch marker-rc)`.
 **Acceptance criteria:**
-- [ ] `python3 scripts/check-manifest.py sessions`: every §10.2 "Claude fixtures", "Codex fixtures", "Incremental reads", "Pointer resolution", "Matching", "Privacy", "Sanitising", "Shell safety" bullet covered; matched / unmatched counts equal `[matching]` and sum to 20; ≥ 16 sessions carry prompt text.
+- [ ] `python3 scripts/check-manifest.py sessions`: every §10.2 "Claude fixtures", "Codex fixtures", "Incremental reads", "Pointer resolution", "Matching", "Privacy", "Sanitising", "Shell safety" bullet covered; matched / unmatched counts equal `[matching]` and sum to 20; ≥ 16 sessions in corpus `privacy` carry prompt text.
 **Expected test outputs:** `python3 scripts/check-manifest.py sessions` → `ok`.
 
 ## Phase 09 — Oracles: discovery, status *(after P07)*
@@ -281,7 +282,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 15a — gix audit, part 2a: index, status, worktree reads *(after P14)*
 **Files:** `docs/audits/gix-0.88-read-sites.md` (edit).
-**Changes:** same method for `gix-index`, `gix-status`, `gix-dir`, `gix-glob` (the actual reader behind `.gitignore`, `info/exclude`, `excludesFile`, `info/attributes`), `gix-attributes`, `gix-ignore`, `gix-diff` (blob pipeline reads, reachable with HEAD↔index rename tracking; check `large_file_threshold`), `gix-filter` (incl. built-in `working-tree-encoding` buffering), `gix-object`, reachable from `tree_index_status` and `index_worktree_status`.
+**Changes:** same method for `gix-index`, `gix-status`, `gix-dir`, `gix-glob` (the actual reader behind `.gitignore`, `info/exclude`, `excludesFile`, `info/attributes`), `gix-attributes`, `gix-ignore`, `gix-diff` (blob pipeline reads and resource-cache growth × `Rewrites.limit`, reachable with HEAD↔index rename tracking; check `large_file_threshold`), `gix-filter` (incl. built-in `working-tree-encoding` buffering), `gix-object`, reachable from `tree_index_status` and `index_worktree_status`.
 **Acceptance criteria:** as P14.
 **Expected test outputs:** n/a (document).
 
@@ -338,11 +339,11 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 20 — Per-worktree git state
 **Files:** `crates/rollcall-git/src/state.rs`.
-**Changes:** spec rev 8 HEAD tree bound first (own walk, deadline every 1,024 entries, cap 1,000,000 → `git error: HEAD tree too large`); then §3.3 fields: default branch, upstream, ahead / behind / unpushed (saturating at 10,000; deadline check every 256 commits; `cfg(test)` walked-commit counter), `dirty_count` (spec rev 8: union by destination path of `tree_index_status` with `TrackRenames::Given` and `index_worktree_status` with rewrites `None`, rollcall `SubmoduleStatus` → `Ok(None)`), `untracked_count` (files), `last_commit_at`, `merged`, `detached`, `head`, missing-worktree branch.
+**Changes:** spec rev 9 HEAD tree bound first (iterative walk via `gix::traverse::tree::depthfirst` with a counting `Visit` that cancels, deadline every 1,024 entries; caps 1,000,000 entries / 128 MiB path bytes / depth 4,096 → `git error: HEAD tree too large`; the walked tree id is passed on); then §3.3 fields: default branch, upstream, ahead / behind / unpushed (saturating at 10,000; deadline check every 256 commits; `cfg(test)` walked-commit counter), `dirty_count` (spec rev 8: union by destination path of `tree_index_status` with `TrackRenames::Given(Rewrites { copies: None, percentage: Some(0.5), limit: 1000, ..Default::default() })` and `index_worktree_status` with rewrites `None`, rollcall `SubmoduleStatus` → `Ok(None)`), `untracked_count` (files), `last_commit_at`, `merged`, `detached`, `head`, missing-worktree branch.
 **Acceptance criteria:**
 - [ ] Each §10.2 "Git state" case asserts a hard-coded expected value (non-zero where the case intends it) **and** equality with `git status --porcelain=v2 --branch --untracked-files=all` / `git rev-list --count` on the same tempdir repo.
 - [ ] Staged-only change → `dirty_count = 1`; staged plus a further unstaged edit of the same path → 1; `git mv` rename → 1; `git mv` plus an unstaged edit of the destination → 1; unstaged `mv a b` → `dirty_count = 1`, `untracked_count = 1` (matches git).
-- [ ] Tree bomb (3 nested levels × 200 entries) → `git error: HEAD tree too large`, and the bound's entry counter stops at the cap.
+- [ ] Tree bomb (3 nested levels × 200 entries) and long-name bomb (999 × 1,000 entries, 500-byte names) → `git error: HEAD tree too large`; each stops at its cap (entries, resp. path bytes) before `tree_index_status` is called; a 5,000-deep chain stops at depth 4,096 without stack overflow.
 - [ ] Forced `Trust::Reduced` → `upstream` / `ahead` / `behind` null; a corrupted commit-graph chain does not change `ahead` / `behind`.
 - [ ] 10,001 commits (`git fast-import`) → `ahead = 10000` and walked-commit counter ≤ 10,001.
 - [ ] Squash-merged branch → `merged = false`.
@@ -350,12 +351,12 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 21 — `discover` / `repo_state` entry points and deadline
 **Files:** `crates/rollcall-git/src/lib.rs` (bodies only).
-**Changes:** `repo_state` spawns a detached worker per repo; the timer starts before pre-open checks; a per-repo `AtomicBool` interrupt is set at the deadline; the worker checks the deadline at stage boundaries and a late result is discarded; `RepoState.pending` for abandoned workers; a `cfg(test)` sleep hook around the state call; submodule rows via the same hardened open.
+**Changes:** `repo_state` spawns a detached worker per repo; the timer starts before pre-open checks; a per-repo `AtomicBool` interrupt is set at the deadline; the worker checks the deadline at stage boundaries and a late result is discarded; `RepoState.pending` for abandoned workers; a sleep seam around the state call under `#[cfg(any(test, feature = "test-hooks"))]` (`GitOptions` gains no field; the seam reads a `static` set by tests); submodule rows via the same hardened open.
 **Acceptance criteria:**
 - [ ] `repo_budget = 1 µs` on 3 tempdir repos (normal, bare, linked) → every row `timed out`.
 - [ ] Sleep hook 200 ms, budget 50 ms → row `timed out`; `pending` is false at return and true after the worker finishes (awaited via a test-only channel).
 - [ ] A `core.repositoryformatversion = 7` repo → its row starts `open failed: ` with `worktrees: []`; siblings unaffected.
-**Expected test outputs:** `cargo test -p rollcall-git --locked` → ≥ 95 passed, 0 failed.
+**Expected test outputs:** `cargo test -p rollcall-git --locked` → ≥ 80 passed, 0 failed.
 
 ---
 
@@ -401,7 +402,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] A second `session_meta` is ignored; `parent_thread_id` → child.
 - [ ] DB absent → `mode = "rollouts"` plus a note; present → `db` with `db_version`.
 - [ ] Rollout moved to `archived_sessions/` → read incrementally (records-read counter shows no re-read).
-**Expected test outputs:** `cargo test -p rollcall-sessions --locked` → ≥ 60 passed, 0 failed.
+**Expected test outputs:** `cargo test -p rollcall-sessions --locked` → ≥ 49 passed, 0 failed.
 
 ---
 
@@ -441,12 +442,12 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 28 — Session fixture builder, materialize, schema self-test *(after P27b)*
 **Files:** `crates/rollcall-cli/tests/it/build_sessions.rs`, `crates/rollcall-cli/tests/it/materialize.rs`; mech: `selftest.rs` additions.
-**Changes:** Claude project dirs; Codex `state_5.sqlite` (+ `thread_spawn_edges`) via `rusqlite`; rollouts; `mcp_200`; perf logs; demo. `materialize.rs`: `#[ignore]` tests `materialize_perf` / `materialize_demo` writing a named root to `$ROLLCALL_MATERIALIZE_DIR` — the CI entry point for P40 / P42.
+**Changes:** Claude project dirs; `[[big_log]]`; Codex `state_5.sqlite` (+ `thread_spawn_edges`) via `rusqlite`; rollouts; `mcp_200`; perf logs; demo. `materialize.rs`: `#[ignore]` tests `materialize_perf` / `materialize_demo` writing a named root to `$ROLLCALL_MATERIALIZE_DIR` — the CI entry point for P40 / P42.
 **Acceptance criteria:**
 - [ ] `selftest::schemas`: each `schema/examples/*.valid.json` validates and each `*.invalid-*.json` fails.
 - [ ] `selftest::build_all_sessions`: every corpus builds; the Codex DB's columns equal the §5.2 required list (catches P24/P28 drift early).
 - [ ] `ROLLCALL_MATERIALIZE_DIR=$d cargo test -p rollcall-cli --test it --locked -- --ignored materialize_demo` creates `$d/demo` with ≥ 1 repo and ≥ 1 session file.
-**Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- selftest::` → ≥ 8 passed.
+**Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- selftest::` → ≥ 7 passed.
 
 ---
 
@@ -462,19 +463,19 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 30 — Scan orchestration
 **Files:** `crates/rollcall-cli/src/scan.rs`.
-**Changes:** refusal → lock → `discover` → `repo_state` (≤ `available_parallelism` in flight) → sources → canonicalise cwds → `match_sessions` per root → `commit_scan`; `scanned_at = ctx.now` at scan start; `NoScan` / lock held → cache with `stale`; `repo_timeouts` / `repo_timeouts_abandoned` from `pending`; fills each source's `matched` / `unmatched`; stores the `--submodules` flag with the matches; `WaitAtMost` per § Interfaces; exit codes (§3.1).
+**Changes:** refusal → lock → `discover` → `repo_state` (≤ `available_parallelism` in flight) → sources → canonicalise cwds → `match_sessions` per root → `commit_scan`; `scanned_at = ctx.now` at scan start; `NoScan` / lock held → cache with `stale`; `repo_timeouts` / `repo_timeouts_abandoned` from `pending`; fills each source's `matched` / `unmatched`; stores the `--submodules` flag (`ScanResult.submodules`, read back via `scanned_submodules`); `WaitAtMost` per § Interfaces; exit codes (§3.1).
 **Acceptance criteria (asserted on `ScanOutcome` / `Index`):**
 - [ ] Lock held elsewhere → `stale = true`, index unchanged; no cache → `scanned_at` none and exit 1.
 - [ ] Any error row or `partial` → exit 1; clean → 0; refused → 3.
 - [ ] Unreadable Codex DB → Claude and git results still committed; `DoctorDoc.notes` carries the reason.
 - [ ] Two scans at the same `ROLLCALL_NOW` commit identical rows.
 - [ ] `NoScan` with a different `--submodules` flag than the stored scan → `stale = true`.
-- [ ] `WaitAtMost(50 ms)` with a scan made slow by the P21 sleep hook → returns stale within 50 ms + slack; the detached scan later commits.
+- [ ] `WaitAtMost(50 ms)` with a scan made slow by the P21 sleep seam (via the `test-hooks` dev-dependency feature) → returns stale within 50 ms + slack; the detached scan later commits.
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- scan::` → ≥ 6 passed.
 
 ## Phase 31 — Output: status, scan, doctor, cache clear
 **Files:** `crates/rollcall-cli/src/output.rs`.
-**Changes:** `build_status` / `render_session` (resolve → `render_text`; `redact_prompts`; `resume` via `display_line`, or null when the cwd is gone); `display_line`; plain table (§8.2) sanitising paths, branches, errors; JSON exact; `scan_summary`; `doctor`; `cache clear`; non-TTY `rollcall` → `status`.
+**Changes:** `build_status` / `render_session` (resolve → `render_text`; `redact_prompts`; `resume` via `display_line`, or null when the cwd is gone); `display_line`; plain table (§8.2) sanitising paths, branches, errors; JSON exact; `scan_summary`; `doctor`; `cache clear`. (Non-TTY `rollcall` → `status` is `cli.rs` dispatch, written in P04; gated in P32.)
 **Acceptance criteria:**
 - [ ] `status --json` on a tempdir root validates against `schema/status.json`; `doctor --json` against `schema/doctor.json` (the tests in `output.rs` build their own `jsonschema` validator; `tests/it` helpers aren't reachable from unit tests).
 - [ ] `scan` stderr matches `^scanned .+: \d+ repos, \d+ worktrees, \d+ sessions in [0-9.]+s \(\d+ errors\)$`.
@@ -507,7 +508,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 35 — Gates: hostile, privacy, store (§12.1 #8, #10, #12)
 **Files:** `crates/rollcall-cli/tests/it/hostile.rs`, `crates/rollcall-cli/tests/it/privacy.rs`; mech: `store.rs`.
-**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos and `tree-bomb`. #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
+**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos, `tree-bomb` and `tree-bomb-long`. #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
 **Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- hostile:: privacy:: store::` → ≥ 20 passed.
 
 ## Phase 36 — TUI rendering (§12.1 #15; #13's TUI part)
@@ -525,7 +526,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Changes:** `ratatui::init` / `restore`; first paint from cache, background scan on `std::thread` + `mpsc`; keys per §8.1 through `handle_key`; `c` / `Y` via the configured clipboard (arboard or OSC 52 per Q3c); `o` via `shell-words`, `$VISUAL` before `$EDITOR`; `R` → `resume::resume`.
 **Acceptance criteria (through `handle_key` on a `TestBackend` model):**
 - [ ] `j` / `k` / arrows, `enter`, `tab`, `/` (case-insensitive substring over repos and branches), `Esc` clears, `r` rescans, `?`, `q` → exit 0.
-- [ ] `c` yields `cd -- '<path>'`; `Y` yields the §8.1 display line; clipboard failure → status message.
+- [ ] `c` yields `Action::Copy("cd -- '<path>'")`; `Y` yields `Action::Copy(<§8.1 display line>)`; `apply_copy` with a failing writer sets the status message.
 - [ ] `o` with `EnvPaths.visual = "code --wait"` returns `Action::Spawn { program: "code", args: ["--wait", <path>] }`; `visual` beats `editor`; both unset → status message.
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- app::` → ≥ 12 passed.
 
@@ -535,7 +536,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Acceptance criteria:**
 - [ ] Resume file that is a symlink, `0644`, or hard-linked → refused; its bytes and a hard-link partner's bytes unchanged; a FIFO → refused without blocking.
 - [ ] `find_agent("relative/dir:/abs/stub", "claude")` with `claude` planted in both → `/abs/stub/claude`.
-- [ ] `resume` with `uid` ≠ the file owner's uid → refused.
+- [ ] `resume` with a `uid` closure returning another uid → refused; on the direct-exec path the closure is never called.
 - [ ] `grep -c eval` over each `init_script` → 0.
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- resume::` → ≥ 10 passed.
 
