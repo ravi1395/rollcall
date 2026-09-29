@@ -17,9 +17,11 @@ their work and touch only your phase's files.
   "Expected test outputs" command. Never `--workspace` builds/tests unless your phase says so.
   Quote the full `test result: ok. N passed; 0 failed; …` line; a filtered run with `0 passed`
   is a failure.
-- **Build env:** `export CARGO_TARGET_DIR=/Users/ravichandrasekhar/Projects/rollcall/target`
-  before any cargo command (shared across worktrees; cargo may print "Blocking waiting for file
-  lock" — wait, don't kill it). First builds take minutes: use Bash timeouts of 600000 ms.
+- **Build env:** per-worktree target dir — test binaries of workspace members collide across
+  worktrees in a shared one. From your worktree root: `[ -d target ] || cp -cR
+  /Users/ravichandrasekhar/Projects/rollcall/target ./target; export CARGO_TARGET_DIR=$PWD/target`
+  (APFS clone: instant, reuses compiled deps). In the main checkout use its own `target/`. Builds
+  can take minutes: use Bash timeouts of 600000 ms.
 - **Worktree base:** if you run in an isolated worktree, first check `git log --oneline -1`; if
   HEAD is not the `impl/v0` commit named in your brief, run `git restore HANDOFF.md 2>/dev/null;
   git merge --ff-only impl/v0` (the one git command you may run) and report it.

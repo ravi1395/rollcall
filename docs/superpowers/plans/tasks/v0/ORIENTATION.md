@@ -21,7 +21,7 @@
 
 - `/pexec` is not used unmodified (hard-codes fable + shared-tree psurgeon).
 - Workers never commit. The orchestrator commits `P<nn>: <title>` per phase (in the lane worktree, then merges into `impl/v0`), runs the R2 full gate after each merge, and pushes `impl/v0` after each lane merge (Q1).
-- Shared `CARGO_TARGET_DIR=/Users/ravichandrasekhar/Projects/rollcall/target` for every worktree so gix / bundled SQLite compile once (cargo's build lock serialises concurrent builds; path-dependent hashes keep worktrees apart).
+- Per-worktree `CARGO_TARGET_DIR` seeded by `cp -cR <main>/target` (APFS clone). A shared target dir was tried first and failed: workspace-member test binaries collide across worktrees (P12 ran a foreign binary: `0 passed; 72 filtered out`).
 - Terminal condition: the Opus skeptic reports every spec §12.1 criterion 1–18 MET. #16–#18 need CI runs on `origin` (evidence via `gh run`).
 
 ## Gotchas
