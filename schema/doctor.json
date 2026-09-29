@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rollcall:doctor.json",
+  "title": "DoctorDoc",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "root", "scanned_at", "walk", "repos_by_kind", "worktrees", "submodules",
+    "repo_errors", "untrusted_git_dirs", "repo_timeouts", "repo_timeouts_abandoned", "notes", "sources"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "root": { "type": "string" },
+    "scanned_at": { "type": ["string", "null"], "format": "date-time" },
+    "walk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "budget_hit", "stopped_at", "unreadable_dirs", "skipped_dirs", "skipped_mounts"],
+      "properties": {
+        "entries": { "type": "integer", "minimum": 0 },
+        "budget_hit": { "type": "boolean" },
+        "stopped_at": { "type": ["string", "null"] },
+        "unreadable_dirs": { "type": "integer", "minimum": 0 },
+        "skipped_dirs": { "type": "integer", "minimum": 0 },
+        "skipped_mounts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "repos_by_kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normal", "nested", "bare", "external_main"],
+      "properties": {
+        "normal": { "type": "integer", "minimum": 0 },
+        "nested": { "type": "integer", "minimum": 0 },
+        "bare": { "type": "integer", "minimum": 0 },
+        "external_main": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "worktrees": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "external", "missing", "untrusted_path"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "external": { "type": "integer", "minimum": 0 },
+        "missing": { "type": "integer", "minimum": 0 },
+        "untrusted_path": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "submodules": { "type": "integer", "minimum": 0 },
+    "repo_errors": { "type": "integer", "minimum": 0 },
+    "untrusted_git_dirs": { "type": "integer", "minimum": 0 },
+    "repo_timeouts": { "type": "integer", "minimum": 0 },
+    "repo_timeouts_abandoned": { "type": "integer", "minimum": 0 },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source", "mode", "db_version", "files", "records", "skipped", "sessions",
+          "excluded_children", "vanished", "matched", "unmatched"
+        ],
+        "properties": {
+          "source": { "enum": ["claude", "codex"] },
+          "mode": { "enum": ["jsonl", "db", "rollouts", "absent"] },
+          "db_version": { "type": ["integer", "null"] },
+          "files": { "type": "integer", "minimum": 0 },
+          "records": { "type": "integer", "minimum": 0 },
+          "skipped": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["malformed", "unknown_type", "oversize", "non_uuid", "bad_rollout_path"],
+            "properties": {
+              "malformed": { "type": "integer", "minimum": 0 },
+              "unknown_type": { "type": "integer", "minimum": 0 },
+              "oversize": { "type": "integer", "minimum": 0 },
+              "non_uuid": { "type": "integer", "minimum": 0 },
+              "bad_rollout_path": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "sessions": { "type": "integer", "minimum": 0 },
+          "excluded_children": { "type": "integer", "minimum": 0 },
+          "vanished": { "type": "integer", "minimum": 0 },
+          "matched": { "type": "integer", "minimum": 0 },
+          "unmatched": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["outside_root", "path_gone", "non_repo"],
+            "properties": {
+              "outside_root": { "type": "integer", "minimum": 0 },
+              "path_gone": { "type": "integer", "minimum": 0 },
+              "non_repo": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

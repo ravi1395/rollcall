@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "root": "/Users/dev/Projects",
+  "scanned_at": "2026-09-30T09:00:00Z",
+  "stale": false,
+  "partial": false,
+  "truncated": false,
+  "items": [
+    {
+      "repo_name": "crm",
+      "repo_path": "/Users/dev/Projects/crm",
+      "worktree_path": "/Users/dev/Projects/crm/.worktrees/chore-housekeeping",
+      "branch": "chore/post-pr1-housekeeping",
+      "stale_reason": "merged"
+    },
+    {
+      "repo_name": "crm",
+      "repo_path": "/Users/dev/Projects/crm",
+      "worktree_path": "/Users/dev/tmp/crm-spike",
+      "branch": null,
+      "stale_reason": "missing"
+    }
+  ]
+}
