@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "root": "/Users/dev/Projects",
+  "scanned_at": "2026-09-30T09:00:00Z",
+  "stale": false,
+  "partial": false,
+  "repos": [
+    {
+      "name": "old-spike",
+      "path": "/Users/dev/Projects/old-spike",
+      "kind": "normal",
+      "contains_root": false,
+      "default_branch": null,
+      "has_remote": false,
+      "attention": 4,
+      "last_activity_at": null,
+      "error": "cannot open repository: unsupported object format sha256",
+      "worktrees": []
+    },
+    {
+      "name": "crm",
+      "path": "/Users/dev/Projects/crm",
+      "kind": "normal",
+      "contains_root": false,
+      "default_branch": "main",
+      "has_remote": true,
+      "attention": 3,
+      "last_activity_at": "2026-09-29T16:40:05Z",
+      "error": null,
+      "worktrees": [
+        {
+          "path": "/Users/dev/Projects/crm",
+          "is_main": true,
+          "external": false,
+          "branch": "main",
+          "detached": false,
+          "head": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+          "last_commit_at": "2026-09-29T08:40:12Z",
+          "upstream": "origin/main",
+          "ahead": 0,
+          "behind": 0,
+          "unpushed": 0,
+          "dirty_count": 0,
+          "untracked_count": 0,
+          "stale_reason": null,
+          "attention": 0,
+          "error": null,
+          "last_session": {
+            "source": "codex",
+            "id": "7d3f0c1e-8a26-4b59-b1c4-e02a9f6d5137",
+            "branch": "main",
+            "cwd": "/Users/dev/Projects/crm",
+            "started_at": "2026-09-29T08:15:00Z",
+            "ended_at": "2026-09-29T08:52:30Z",
+            "title": null,
+            "title_kind": null,
+            "last_prompt": null,
+            "message_count": 7,
+            "resume": "cd -- '/Users/dev/Projects/crm' && codex resume 7d3f0c1e-8a26-4b59-b1c4-e02a9f6d5137"
+          },
+          "older_sessions": 0
+        },
+        {
+          "path": "/Users/dev/Projects/crm/.worktrees/ui-refine",
+          "is_main": false,
+          "external": false,
+          "branch": "ui-refine/css-consolidation",
+          "detached": false,
+          "head": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+          "last_commit_at": "2026-09-29T16:31:44Z",
+          "upstream": "origin/ui-refine/css-consolidation",
+          "ahead": 3,
+          "behind": 1,
+          "unpushed": 3,
+          "dirty_count": 2,
+          "untracked_count": 1,
+          "stale_reason": null,
+          "attention": 3,
+          "error": null,
+          "last_session": {
+            "source": "claude",
+            "id": "0b7e9a52-3c1d-4f6e-9a48-5d2f1c7e8b10",
+            "branch": "ui-refine/css-consolidation",
+            "cwd": "/Users/dev/Projects/crm/.worktrees/ui-refine",
+            "started_at": "2026-09-28T13:02:11Z",
+            "ended_at": "2026-09-29T16:40:05Z",
+            "title": "Consolidate dark-mode tokens",
+            "title_kind": "ai",
+            "last_prompt": "run the stylesheet diff again",
+            "message_count": 42,
+            "resume": "cd -- '/Users/dev/Projects/crm/.worktrees/ui-refine' && claude --resume 0b7e9a52-3c1d-4f6e-9a48-5d2f1c7e8b10"
+          },
+          "older_sessions": 1
+        }
+      ],
+      "submodules": [
+        {
+          "name": "tokens",
+          "path": "/Users/dev/Projects/crm/vendor/tokens",
+          "kind": "nested",
+          "contains_root": false,
+          "default_branch": "main",
+          "has_remote": true,
+          "attention": 0,
+          "last_activity_at": "2026-08-01T10:00:00Z",
+          "error": null,
+          "worktrees": [
+            {
+              "path": "/Users/dev/Projects/crm/vendor/tokens",
+              "is_main": true,
+              "external": false,
+              "branch": "main",
+              "detached": false,
+              "head": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+              "last_commit_at": "2026-08-01T10:00:00Z",
+              "upstream": "origin/main",
+              "ahead": 0,
+              "behind": 0,
+              "unpushed": 0,
+              "dirty_count": 0,
+              "untracked_count": 0,
+              "stale_reason": null,
+              "attention": 0,
+              "error": null,
+              "last_session": null,
+              "older_sessions": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

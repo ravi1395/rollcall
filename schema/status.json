@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rollcall:status.json",
+  "title": "StatusDoc",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "root", "scanned_at", "stale", "partial", "repos"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "root": { "type": "string" },
+    "scanned_at": { "type": ["string", "null"], "format": "date-time" },
+    "stale": { "type": "boolean" },
+    "partial": { "type": "boolean" },
+    "repos": { "type": "array", "items": { "$ref": "rollcall:status.json#/$defs/Repo" } }
+  },
+  "$defs": {
+    "Repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "path", "kind", "contains_root", "default_branch", "has_remote",
+        "attention", "last_activity_at", "error", "worktrees"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "kind": { "enum": ["normal", "nested", "bare", "external_main"] },
+        "contains_root": { "type": "boolean" },
+        "default_branch": { "type": ["string", "null"] },
+        "has_remote": { "type": "boolean" },
+        "attention": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "last_activity_at": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "type": ["string", "null"] },
+        "worktrees": { "type": "array", "items": { "$ref": "rollcall:status.json#/$defs/Worktree" } },
+        "submodules": { "type": "array", "items": { "$ref": "rollcall:status.json#/$defs/Repo" } }
+      }
+    },
+    "Worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "is_main", "external", "branch", "detached", "head", "last_commit_at",
+        "upstream", "ahead", "behind", "unpushed", "dirty_count", "untracked_count",
+        "stale_reason", "attention", "error", "last_session", "older_sessions"
+      ],
+      "properties": {
+        "path": { "type": "string" },
+        "is_main": { "type": "boolean" },
+        "external": { "type": "boolean" },
+        "branch": { "type": ["string", "null"] },
+        "detached": { "type": "boolean" },
+        "head": { "type": ["string", "null"] },
+        "last_commit_at": { "type": ["string", "null"], "format": "date-time" },
+        "upstream": { "type": ["string", "null"] },
+        "ahead": { "type": ["integer", "null"], "minimum": 0 },
+        "behind": { "type": ["integer", "null"], "minimum": 0 },
+        "unpushed": { "type": ["integer", "null"], "minimum": 0 },
+        "dirty_count": { "type": "integer", "minimum": 0 },
+        "untracked_count": { "type": "integer", "minimum": 0 },
+        "stale_reason": { "enum": ["missing", "merged", "inactive", null] },
+        "attention": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "error": { "type": ["string", "null"] },
+        "last_session": {
+          "oneOf": [{ "type": "null" }, { "$ref": "rollcall:status.json#/$defs/Session" }]
+        },
+        "older_sessions": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source", "id", "branch", "cwd", "started_at", "ended_at", "title", "title_kind",
+        "last_prompt", "message_count", "resume"
+      ],
+      "properties": {
+        "source": { "enum": ["claude", "codex"] },
+        "id": { "type": "string" },
+        "branch": { "type": ["string", "null"] },
+        "cwd": { "type": "string" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "title": { "type": ["string", "null"] },
+        "title_kind": { "enum": ["custom", "ai", "thread", "prompt", null] },
+        "last_prompt": { "type": ["string", "null"] },
+        "message_count": { "type": "integer", "minimum": 0 },
+        "resume": { "type": ["string", "null"] }
+      },
+      "if": { "properties": { "title": { "type": "null" } }, "required": ["title"] },
+      "then": { "properties": { "title_kind": { "type": "null" } } },
+      "else": { "properties": { "title_kind": { "enum": ["custom", "ai", "thread", "prompt"] } } }
+    }
+  }
+}

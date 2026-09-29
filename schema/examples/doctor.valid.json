@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "root": "/Users/dev/Projects",
+  "scanned_at": "2026-09-30T09:00:00Z",
+  "walk": {
+    "entries": 48213,
+    "budget_hit": false,
+    "stopped_at": null,
+    "unreadable_dirs": 1,
+    "skipped_dirs": 37,
+    "skipped_mounts": [
+      "/Users/dev/Projects/nas"
+    ]
+  },
+  "repos_by_kind": {
+    "normal": 15,
+    "nested": 1,
+    "bare": 1,
+    "external_main": 0
+  },
+  "worktrees": {
+    "total": 29,
+    "external": 2,
+    "missing": 1,
+    "untrusted_path": 0
+  },
+  "submodules": 1,
+  "repo_errors": 1,
+  "untrusted_git_dirs": 0,
+  "repo_timeouts": 0,
+  "repo_timeouts_abandoned": 0,
+  "notes": [
+    "claude: 3 files skipped, names are not session UUIDs"
+  ],
+  "sources": [
+    {
+      "source": "claude",
+      "mode": "jsonl",
+      "db_version": null,
+      "files": 412,
+      "records": 90311,
+      "skipped": {
+        "malformed": 2,
+        "unknown_type": 14,
+        "oversize": 0,
+        "non_uuid": 3,
+        "bad_rollout_path": 0
+      },
+      "sessions": 398,
+      "excluded_children": 9,
+      "vanished": 0,
+      "matched": 301,
+      "unmatched": {
+        "outside_root": 60,
+        "path_gone": 30,
+        "non_repo": 7
+      }
+    },
+    {
+      "source": "codex",
+      "mode": "db",
+      "db_version": 5,
+      "files": 88,
+      "records": 12044,
+      "skipped": {
+        "malformed": 0,
+        "unknown_type": 1,
+        "oversize": 0,
+        "non_uuid": 0,
+        "bad_rollout_path": 1
+      },
+      "sessions": 86,
+      "excluded_children": 0,
+      "vanished": 1,
+      "matched": 70,
+      "unmatched": {
+        "outside_root": 10,
+        "path_gone": 4,
+        "non_repo": 1
+      }
+    }
+  ]
+}
