@@ -1,0 +1,10 @@
+[package]
+name = "probe-index-bomb"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+gix-index = "=0.56.0"
+gix-hash = { version = "=0.27.0", features = ["sha1"] }
+
+bstr = "1"
+[workspace]

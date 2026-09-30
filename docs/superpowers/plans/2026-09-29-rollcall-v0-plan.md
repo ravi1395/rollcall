@@ -225,7 +225,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 07b — Manifest, part 3: revision 12 hostile fixtures *(after P08)*
 **Files:** `tests/fixtures/MANIFEST.toml` (edit), `scripts/check-manifest.py` (edit: bullet list and `special` enum only).
-**Changes:** add `"hostile: index-bombs"`, `"hostile: index-deep-ok"`, `"hostile: nested-probe"`, `"hostile: exec-type"`, `"hostile: big-tracked"`, `"hostile: pattern-blob-bomb"`, `"hostile: rename-bomb"` to the checker's hard-coded list first (checker red), then the `[[repo]]` entries under root `H` per spec §10.2 revision 12 (six `index-bombs` repos, two `index-deep-ok`, both `exec-type`, both `pattern-blob-bomb`), with `special` values added to the enum and the header comment; `in_clean = false` for all of them.
+**Changes:** add `"hostile: index-bombs"`, `"hostile: index-deep-ok"`, `"hostile: nested-probe"`, `"hostile: exec-type"`, `"hostile: big-tracked"`, `"hostile: pattern-blob-bomb"`, `"hostile: rename-bomb"` to the checker's hard-coded list first (checker red), then the `[[repo]]` entries under root `H` per spec §10.2 revision 12 (eight `index-bombs` repos, two `index-deep-ok`, both `exec-type`, both `pattern-blob-bomb`), with `special` values added to the enum and the header comment; `in_clean = false` for all of them.
 **Acceptance criteria:**
 - [ ] With only the checker edit applied, `python3 scripts/check-manifest.py git` exits non-zero naming the seven new bullets; with the manifest entries, it prints `ok`.
 - [ ] `expect F_repos` / `expect F_worktrees` unchanged (all new repos are under `H`).
@@ -349,11 +349,11 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 18b — Pre-open and open, revision 12 *(after P19)*
 **Files:** `crates/rollcall-git/src/open.rs`, `crates/rollcall-git/src/trust.rs`.
-**Changes:** spec §4.4 revision 12: `sharedindex.*` on the pre-open list; pattern-file caps 256 KiB (`info/exclude`, `info/attributes`, worktree-root `.gitignore` / `.gitattributes`, the user's excludes file); index validation (streamed iterative parse of each `index` and linked `sharedindex.*`, versions 2/3/4, `TREE` / `UNTR` depth ≤ 1,024, `REUC` ≤ 1 MiB, no chained `link`); override `core.bigFileThreshold=1m` at open.
+**Changes:** spec §4.4 revision 12: `sharedindex.*` on the pre-open list; pattern-file caps 256 KiB (`info/exclude`, `info/attributes`, worktree-root `.gitignore` / `.gitattributes`, the user's excludes file); index validation (streamed iterative parse of each `index` and linked `sharedindex.*`, versions 2/3/4, `TREE` / `UNTR` depth ≤ 1,024, `TREE` ≤ 16 MiB, `UNTR` ≤ 4 MiB, `REUC` ≤ 1 MiB, no chained `link`); overrides `core.bigFileThreshold=1m` and `index.threads=1` at open.
 **Acceptance criteria:**
-- [ ] Hand-built index bytes (valid checksum) each → `untrusted git dir`: `TREE` depth 1,025; `UNTR` depth 1,025; `REUC` 2 MiB; entry past EOF; name > 4,096 bytes; `link` → FIFO `sharedindex` (watchdog, no block); `link` → symlinked `sharedindex`; chained `link`. Depth exactly 1,024 in a v2 and a v4 index → ok. A real-git `git update-index --split-index` repo → ok. A real-git index with `TREE`, `REUC` (from a conflicted merge) and `UNTR` (`core.untrackedCache=true`) → ok.
+- [ ] Hand-built index bytes (valid checksum) each → `untrusted git dir`: `TREE` depth 1,025; `UNTR` depth 1,025; `REUC` 2 MiB; `TREE` 16 MiB + 1 byte; `UNTR` 4 MiB + 1 byte; entry past EOF; name > 4,096 bytes; `link` → FIFO `sharedindex` (watchdog, no block); `link` → symlinked `sharedindex`; chained `link`. Depth exactly 1,024 in a v2 and a v4 index → ok. A real-git `git update-index --split-index` repo → ok. A real-git index with `TREE`, `REUC` (from a conflicted merge) and `UNTR` (`core.untrackedCache=true`) → ok.
 - [ ] Each pattern file at 256 KiB → ok, 256 KiB + 1 → untrusted; a `sharedindex.x` symlink → untrusted.
-- [ ] After open, the resolved `core.bigFileThreshold` is 1 MiB when the repo-local config sets `0` and when it sets `1g`.
+- [ ] After open, the resolved `core.bigFileThreshold` is 1 MiB when the repo-local config sets `0` and when it sets `1g`; the resolved `index.threads` is 1 when the repo-local config sets `0` and when it sets `8`.
 **Expected test outputs:** `cargo test -p rollcall-git --locked -- open:: trust::` → ≥ 20 more passed than before this phase.
 
 ## Phase 20 — Per-worktree git state
@@ -376,7 +376,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] `repo_budget = 1 µs` on 3 tempdir repos (normal, bare, linked) → every row `timed out`.
 - [ ] Sleep hook 200 ms, budget 50 ms → row `timed out`; `pending` is false at return and true after the worker finishes (awaited via a test-only channel).
 - [ ] A `core.repositoryformatversion = 7` repo → its row starts `open failed: ` with `worktrees: []`; siblings unaffected.
-- [ ] Revision 6: an index whose `TREE` chain is exactly 1,024 levels decodes through `repo_state` without aborting the test process.
+- [ ] Revision 6: an index whose `TREE` chain is exactly 1,024 levels decodes through `repo_state` without aborting the test process (a regression check on the accepted path; the 16 MiB stack is margin and is not what this proves).
 **Expected test outputs:** `cargo test -p rollcall-git --locked` → ≥ 80 passed, 0 failed.
 
 ---
@@ -455,7 +455,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 27b — Git fixture builder *(after P27a)*
 **Files:** `crates/rollcall-cli/tests/it/build_git.rs`; mech: `selftest.rs` addition.
-**Changes:** every `[[repo]]` kind and special; `big_object` zlib via `python3`; revision 6: the P07b specials, incl. index files written byte by byte with a SHA-1 trailer (versions 2 and 4) and sparse files via `set_len`.
+**Changes:** every `[[repo]]` kind and special; `big_object` zlib via `python3`; revision 6: the P07b specials, incl. index files written byte by byte with a SHA-1 trailer computed via `python3` `hashlib` (versions 2 and 4; no SHA-1 crate, R1) and sparse files via `set_len`.
 **Acceptance criteria:**
 - [ ] `selftest::f_clean_fsck`: `git fsck` (under watchdog) passes on every `F_clean` repo and fails on the `corrupted` repo.
 - [ ] `selftest::build_all_git`: `F`, `H`, `EXT`, `budget`, `home` all build (exercises every special, keeping builders live).
