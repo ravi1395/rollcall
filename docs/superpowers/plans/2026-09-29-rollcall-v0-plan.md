@@ -521,7 +521,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] Unreadable Codex DB → Claude and git results still committed; `DoctorDoc.notes` carries the reason.
 - [ ] Two scans at the same `ROLLCALL_NOW` commit identical rows.
 - [ ] `NoScan` with a different `--submodules` flag than the stored scan → `stale = true`.
-- [ ] Revision 7: the hidden subcommand round-trips a `DiscoveredRepo` + `GitOptions` for a tempdir repo to the same `RepoState` as the in-process call (test drives the subcommand's pure `fn` on in-memory stdin/stdout); the result parser maps empty, truncated and 16 MiB + 1 byte outputs to `git error: worker failed`; the `ps` output parser handles both procps and BSD formats, ignores exited pids, and treats a `ps` exit status of 1 with empty stdout as no live children, not a probe failure.
+- [ ] Revision 7: the hidden subcommand round-trips a `DiscoveredRepo` + `GitOptions` for a tempdir repo to the same `RepoState` as the in-process call (test drives the subcommand's pure `fn` on in-memory stdin/stdout); the result parser maps empty, truncated and 16 MiB + 1 byte outputs to `git error: worker failed`; the `ps` output parser handles both procps and BSD formats, ignores exited pids, and ignores `ps`'s exit status (empty stdout = no live children); only a `ps` that cannot be run, or output that cannot be parsed, is a probe failure.
 - [ ] `WaitAtMost(50 ms)` with a scan made slow by the P21 sleep seam (via the `test-hooks` dev-dependency feature) → returns stale within 50 ms + slack; the detached scan later commits.
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- scan::` → ≥ 6 passed.
 
