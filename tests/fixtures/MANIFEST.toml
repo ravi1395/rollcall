@@ -1,6 +1,7 @@
 # rollcall fixture manifest. Hand-written; committed before the code it tests (spec 10.1).
 # P07 wrote the git half (this file: [meta], [home], [[repo]], git [expect_counts]).
-# P08 adds sessions, perf and demo. scripts/check-manifest.py checks coverage; it is complete already.
+# P08 added the session tables, [[big_log]], [matching], [perf], [mcp_200], [demo] and the shell-hostile repo in root F.
+# scripts/check-manifest.py checks coverage; it is complete already.
 #
 # ---- Schema summary (plan "Fixture manifest schema") ----
 # [meta]       now (RFC 3339; ROLLCALL_NOW of every gating test), author, committer ({ name, email }).
@@ -13,9 +14,10 @@
 #              | worktrees [{ path, branch, missing, external }] | state { staged, unstaged, untracked, ignored }
 #              | edit { path = replacement } | config { "section.key" = "value" }
 # [home]       files { relpath = content } for the sandboxed HOME; expected_suggestions (refused-root list).
-# [[claude]] [[codex_thread]] [[codex_rollout]] [[big_log]] [matching] [perf] [mcp_200] [demo]: P08.
-# [expect_counts]  hand-counted F_repos, F_worktrees (below); P08 adds <source>_sessions.
-# Path tokens in any value: $F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS and $FIFO:<name> (a FIFO the harness creates).
+# [[claude]] [[codex_thread]] [[codex_rollout]] [[big_log]] [matching] [perf] [mcp_200] [demo]: P08; keys and rules in
+#   "Session-fixture conventions" below.
+# [expect_counts]  hand-counted F_repos, F_worktrees and claude_sessions, codex_db_sessions, codex_rollout_sessions (below).
+# Path tokens in any value: $F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS $DEMO and $FIFO:<name> (a FIFO the harness creates).
 # special enum: fifo_git symlink_fanout symlink_out_of_root unreadable_dir corrupted bad_gitdir untrusted_path drivers
 #   submodule_lfs worktree_escape commondir_escape symlinked_files worktree_config_symlink big_object hang_probe
 #   hang_probe_worktree_config enclosing_root tree_bomb tree_bomb_long excludes_file   (excludes_file added by P07, spec rev 11)
@@ -41,7 +43,10 @@
 # kind = "special" repos are non-bare unless config has core.bare = "true" (then `git init --bare`; commits still apply).
 # Special repos that are directory fixtures, not repos (no commits, no row): symlink_fanout (creates <path>/d1/d2/loop-a
 #   and loop-b, both symlinks to the root being built), symlink_out_of_root (symlink <path> -> target), unreadable_dir
-#   (mode 000; discovery skips it, or the test skips when euid = 0), fifo_git (<path>/.git is a FIFO).
+#   (mode 000; discovery skips it, or the test skips when euid = 0).
+# fifo_git is NOT a row-less directory fixture (orchestrator correction after P16): <path>/.git is a FIFO the walk never
+#   opens, and discovery reports an error row: kind normal, path = <path> (the directory), `error` starting "bad gitdir: ",
+#   worktrees []. It lives in H (in_clean = false) and so does not count in F_repos or F_worktrees.
 # target by special: symlinked_files = the file that becomes a symlink to a sparse 4 GiB file the builder creates
 #   (path relative to the git dir; "worktree:<f>" = worktree root; "objects/info/alternates#2" = second-hop alternates:
 #   builder adds a hop-1 alternates entry to a helper dir whose own objects/info/alternates is the symlink;
@@ -72,7 +77,91 @@
 #   symlinked_files worktree_config_symlink drivers submodule_lfs worktree_escape commondir_escape big_object tree_bomb
 #   tree_bomb_long hang_probe hang_probe_worktree_config fifo_git excludes_file} (spec 10.1 exclusion list; budget produces
 #   `partial`).
-# The sandboxed HOME is the `home` root. P08 adds shell-hostile [[repo]] entries to root F and updates [expect_counts] itself.
+# The sandboxed HOME is the `home` root. P08 added the shell-hostile repo `f-shell` to root F and updated [expect_counts].
+
+# ---- Session-fixture conventions (fixed by P08; P28 builds to these, P10 / P33 / P35 / P39 judge against them) ----
+# Rows. [[claude]]: id (the session id rollcall must report), project_dir (directory name under $CLAUDE_PROJECTS; opaque, rollcall
+#   never reads it), file (path under project_dir; the file stem is the fallback id; `<uuid>/subagents/<name>.jsonl` is a
+#   subagent file), corpus, lines, steps, expect | excluded, worktree | unmatched, covers.
+#   [[codex_thread]]: one `threads` row (id, rollout_id, rollout_path, created_at, updated_at as Unix seconds, source, cwd, title,
+#   git_branch, archived, first_user_message) plus spawn_parent (one thread_spawn_edges row parent_thread_id = spawn_parent,
+#   child_thread_id = id); [[codex_rollout]]: id (= session_meta.payload.id), file (path under $CODEX_HOME, or a $EXT path),
+#   corpus, lines, steps, expect | excluded, worktree, covers. worktree = { repo = <[[repo]] id>, path = <worktree path token> }:
+#   the worktree the session must match with no --submodules. unmatched = "non_repo" | "path_gone" | "outside_root".
+#   expect keys title, title_kind, last_prompt, branch, cwd, message_count, started_at, ended_at; an ABSENT key means null
+#   (TOML has no null; title and title_kind are absent together). excluded = "<reason>": the row is a child, subagent, non-uuid
+#   or vanished file and yields NO session row; it is counted by the source's doctor counters, never in [expect_counts].
+# lines. Every entry is one JSONL line, written verbatim plus "\n" after path-token substitution (a literal `$F` etc.; $F, $EXT,
+#   $DEMO expand to canonical temp paths that contain no JSON-special character; tokens are matched longest first and hostile
+#   path segments never start with an uppercase letter after `$`). Two builder tokens: `$PAD:<n>` inside a line expands to n
+#   ASCII `x` (the 1 MiB+1 oversize line without a 1 MiB manifest); a line ending in `$NOEOL` is written WITHOUT its trailing
+#   "\n" (a partial line, completed by the next step's first line). Invisible and control characters appear only as JSON \uXXXX.
+# Prompt filter (spec 5.0, orchestrator decision): it applies to Codex event_msg user_message text as well as to response_item
+#   blocks and Claude blocks; a user_message that filters to nothing is not a human prompt and is not counted in message_count.
+#   Codex fixtures include such messages (a `<...>` block, a `<system-reminder>` / `<task-notification>` suffix).
+# expect values are the rendered fields (spec 5, then 9: sanitise -> scrub -> truncate 200 graphemes): title, last_prompt.
+#   Timestamps are the jiff Display form (Z, fraction only when non-zero; fixtures avoid trailing-zero milliseconds). Codex thread
+#   started_at / ended_at come from created_at / updated_at; a rollout row's started_at is session_meta.payload.timestamp and its
+#   ended_at the max top-level timestamp. expect.branch and expect.cwd are the exact stored strings (JSON keeps branch and cwd
+#   exact, spec 9): the sanitise-branch row's branch keeps its \u escapes, and plain / TUI rendering is the spec 9 removal of them.
+#   A skipped line (malformed, unknown type, oversize) never carries a timestamp outside the range of the known records, so
+#   started_at / ended_at do not depend on whether skipped lines count. Skip counters per row are noted in comments (doctor).
+# Sessions in every corpus other than `matching` are matched to a sink worktree so a run over several corpora keeps the matching
+#   corpus's four unmatched sessions the only unmatched ones: claude_rules $F/dirty-mixed, codex_rules $F/untracked, incremental
+#   $F/ahead-behind, privacy $F/dirty-unstaged, sanitise $F/no-upstream, shell f-shell's worktrees. P10's matching.json covers only
+#   the worktrees that host `matching` sessions (its own list below); a gate that materialises other corpora too compares only those.
+# Codex trees. DB mode: state_5.sqlite holding every [[codex_thread]] of the materialised corpora, and each thread's linked rollout
+#   (rollout_id = that rollout's id) is written whenever its thread is, whatever the rollout's own corpus (linked rollouts are never
+#   corpus `matching`; the check script counts them through the thread). rollout_path defaults to $CODEX_HOME/<rollout.file>; a
+#   thread with neither rollout_id nor rollout_path gets a path to a file that does not exist. Fallback mode (database absent): a
+#   $CODEX_HOME with no state_*.sqlite holding every [[codex_rollout]] of corpora codex_rules and incremental whose file lies under
+#   $CODEX_HOME, linked or not; the rollout rows with `excluded` are children or outside $CODEX_HOME.
+# Counting rule for [expect_counts] <source>_sessions (rows without `excluded`, corpora matching, <source>_rules, incremental):
+#   claude_sessions = [[claude]] rows in claude_rules + matching + incremental = 19 + 18 + 6 = 43 (excluded: 2 in claude_rules,
+#     1 in incremental); codex_db_sessions = [[codex_thread]] rows in matching + codex_rules = 2 + 8 = 10 (excluded: 3 children);
+#     codex_rollout_sessions = fallback-mode rollouts = codex_rules linked 5 + codex_rules standalone 4 + incremental 1 = 10
+#     (excluded: 2 children, 1 outside $CODEX_HOME). privacy, sanitise and shell rows are never counted.
+# steps. The builder scans once after materialising (initial scan), then applies each step in order and scans after every step
+#   whose then_scan is true. ops: append (lines written after the current end; a $NOEOL entry leaves a partial), truncate
+#   (`to` = number of leading COMPLETE lines kept; the file is cut right after that many newlines), replace (a new file with a
+#   new inode at the same path, holding `lines`), symlink_swap (the log is renamed to <file>.real and a symlink to it is created
+#   at <file>), delete, move (rename to the path `to`, same inode). `to` is an integer for truncate and a string for move
+#   (an untagged enum in P27a's struct). step expect: records = complete lines the scan consumed
+#   (from the old offset, or from 0 after a re-read; incremental fixtures hold only well-formed known records), offset = byte
+#   offset stored for the file after the scan, sessions = sessions that file yields after the scan (0 or 1), vanished = sessions
+#   dropped by that scan. offset and `truncate.to` are TOKEN-FREE: every `$F`/`$EXT` occurrence counts as 0 bytes (each incremental
+#   file has `$F` only in its first line), so the gate adds len($F) for the one token; optional extra keys (message_count, title,
+#   title_kind) are checked against the session after that scan. A step with then_scan = false and `expect = { resolves = false }`
+#   means: no scan; the TextRefs captured by the previous scan must now resolve to null. The row's top-level expect (or excluded)
+#   is the state after the LAST scan. Pre-step state that is not an offset: I4 (incr-04) starts with title kind prompt.
+# Matching corpus (20 sessions). Worktrees hosting matched sessions and their session counts: $F/normal 3 (two Claude, one Codex
+#   thread; the thread ends last so `older_sessions` = 2), $F/linked 1, $F/linked-wt 2 (Claude + Codex thread, older 1), $F/merged 1,
+#   $F/merged-wt 1, $F/inactive-wt 1, $F/sub-parent 1 (cwd $F/sub-parent/libs/child, a hidden submodule: matches the parent without
+#   --submodules), $F/missing-wt 1 (cwd equals the missing worktree's path), $F/nest-outer/inner 1 (nest-outer also
+#   encloses the cwd; the longest prefix wins), $F/nest-outer 1, $F/dirty-staged 1, $F/case-a-main 1, $F/detached 1 = 16. Unmatched: non_repo $F/bare (an
+#   existing directory in no worktree), path_gone $F/gone-project (never created, outside every worktree), outside_root
+#   $EXT/case-a-wt (an external linked worktree, not a candidate) and $EXT/outside-repo.
+# Privacy corpus: 17 prompt sessions (14 scrub patterns, one prompt each, then three truncation payloads; every prompt carries a
+#   distinct tag word such as quokka-tango-01 for the cache-file search). Every secret is a fixture string, none a real credential.
+#   `privacy: email` scrubs only with redact_emails = true, so ITS expect assumes redact_emails = true; run that row with it set.
+#   Truncation payloads use regional-indicator flags and base + combining marks (a ZWJ would be stripped by sanitising).
+# Sanitise extent (binds P11): an ESC-introduced sequence is removed WHOLE: ESC, then for `[` (CSI) the parameter bytes
+#   0x30-0x3F, intermediate bytes 0x20-0x2F and one final byte 0x40-0x7E; for any other ESC, ESC plus the one byte after it. The
+#   expects rely on this: `wipe the \u001b[2Jbuild dir` renders `wipe the build dir`, never `wipe the [2Jbuild dir`.
+# Sanitise corpus: gitBranch cannot hold ESC in a git ref, so `sanitise: branch name` is a session's gitBranch. The 0x9b payload
+#   is followed by a non-ASCII character so no reader can mistake it for a CSI introducer that swallows following bytes.
+# Shell corpus and f-shell: git rejects a space in a ref name, so the spec's branch `$(touch marker-rc)` cannot be a git branch.
+#   Decision: the repo's checked-out branch is `$(true>marker-rc)` (`git check-ref-format --branch` accepts it; bash and zsh run
+#   it under `eval` as a command substitution and create the file `marker-rc`, checked here; fish was NOT run here, so P39's
+#   positive control must prove it for fish), and one shell session also records the spec's literal `$(touch marker-rc)` as its
+#   gitBranch. The marker name `marker-rc` is fixed.
+# [[big_log]] { source, bytes, single_line }: a file of exactly `bytes` bytes on one line, no newline, under a project dir of its
+#   own; it yields no session (every line is oversize), only files and skipped.oversize in doctor, and is never in [expect_counts].
+# [perf], [mcp_200], [demo]: the builder generates these roots; counts only. [perf] repos includes the linked_worktrees (50 repos, 20
+#   of them linked worktrees of some of those repos), logs = Claude and Codex files, bytes = their total size. [mcp_200] sessions =
+#   200 Claude sessions in root F worktrees, each with a title and last prompt long enough that the two tools' answers exceed
+#   16 KiB. [demo]: `repos` lists the [[repo]] ids with root = "demo"; [[demo.claude]] and [[demo.codex_thread]] mirror the session
+#   tables (lines, thread columns) with no corpus, expect or worktree; cwd token $DEMO is the demo root.
 
 [meta]
 now = "2026-09-28T12:00:00Z"
@@ -96,8 +185,15 @@ expected_suggestions = ["$HOME/alpha", "$HOME/bravo", "$HOME/charlie", "$HOME/de
 # F_worktrees = worktree rows over those repos: main + linked, including external (case A), the external main of case B,
 #   missing, and the untrusted-path worktree (its row exists with an error). Bare = 0; repo-level error rows = 0.
 [expect_counts]
-F_repos = 26
-F_worktrees = 29
+# P07 counted 26 / 29 (see the rule above). P08 adds one repo, f-shell (main worktree + 6 shell-hostile linked worktrees):
+#   F_repos = 26 + 1 = 27;   F_worktrees = 29 + (1 main + 6 linked) = 36.
+F_repos = 27
+F_worktrees = 36
+# Session counts: rows without `excluded` in corpora matching, <source>_rules and incremental (rule and arithmetic in
+#   "Session-fixture conventions"); the P10 oracle files claude.json, codex_db.json, codex_rollout.json hold exactly these rows.
+claude_sessions = 43
+codex_db_sessions = 10
+codex_rollout_sessions = 10
 
 # ============================== root F ==============================
 
@@ -506,6 +602,30 @@ commits = [
 ]
 config = { "core.repositoryformatversion" = "7" }
 
+# ---- shell safety (P08): one repo, hostile worktree paths and a hostile branch ----
+# The main worktree is checked out on `$(true>marker-rc)` (git refuses the space of the spec's `$(touch marker-rc)`); the six
+# linked worktrees sit beside it in F with a space, $, backtick, ;, ' and a newline in their directory names (branches wt-*, all at
+# the hostile branch's tip, 6 days before meta.now, so none is merged or inactive; no remote). Expected rows are in the P09 oracles.
+[[repo]]
+id = "f-shell"
+root = "F"
+path = "shell"
+kind = "normal"
+covers = ["shell: path space", "shell: path dollar", "shell: path backtick", "shell: path semicolon", "shell: path single quote", "shell: path newline", "shell: branch command substitution"]
+head = "$(true>marker-rc)"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# shell\n" } },
+  { branch = "$(true>marker-rc)", message = "hostile branch work", date = "2026-09-22T09:00:00Z", files = { "work.txt" = "w\n" } },
+]
+worktrees = [
+  { path = "shell wt space", branch = "wt-space" },
+  { path = "shell-wt$dollar", branch = "wt-dollar" },
+  { path = "shell-wt`tick", branch = "wt-tick" },
+  { path = "shell-wt;semi", branch = "wt-semi" },
+  { path = "shell-wt'quote", branch = "wt-quote" },
+  { path = "shell-wt\nnewline", branch = "wt-newline" },
+]
+
 # ============================== root EXT (outside-root targets) ==============================
 
 # Remote for f-no-upstream.
@@ -896,7 +1016,7 @@ commits = [
   { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# hang probe wt\n" } },
 ]
 
-# <path>/.git is a FIFO: the walk must never open it. It yields no repo row.
+# <path>/.git is a FIFO: the walk must never open it. It yields an error row ("bad gitdir: ", worktrees []), see the header.
 [[repo]]
 id = "h-fifo-git"
 root = "H"
@@ -1024,3 +1144,1668 @@ head = "main"
 commits = [
   { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "d0/f00.txt" = "00\n", "d0/f01.txt" = "01\n", "d0/f02.txt" = "02\n", "d0/f03.txt" = "03\n", "d0/f04.txt" = "04\n", "d0/f05.txt" = "05\n", "d0/f06.txt" = "06\n", "d0/f07.txt" = "07\n", "d0/f08.txt" = "08\n", "d0/f09.txt" = "09\n", "d0/f10.txt" = "010\n", "d0/f11.txt" = "011\n", "d0/f12.txt" = "012\n", "d0/f13.txt" = "013\n", "d0/f14.txt" = "014\n", "d1/f00.txt" = "10\n", "d1/f01.txt" = "11\n", "d1/f02.txt" = "12\n", "d1/f03.txt" = "13\n", "d1/f04.txt" = "14\n", "d1/f05.txt" = "15\n", "d1/f06.txt" = "16\n", "d1/f07.txt" = "17\n", "d1/f08.txt" = "18\n", "d1/f09.txt" = "19\n", "d1/f10.txt" = "110\n", "d1/f11.txt" = "111\n", "d1/f12.txt" = "112\n", "d1/f13.txt" = "113\n", "d1/f14.txt" = "114\n", "d2/f00.txt" = "20\n", "d2/f01.txt" = "21\n", "d2/f02.txt" = "22\n", "d2/f03.txt" = "23\n", "d2/f04.txt" = "24\n", "d2/f05.txt" = "25\n", "d2/f06.txt" = "26\n", "d2/f07.txt" = "27\n", "d2/f08.txt" = "28\n", "d2/f09.txt" = "29\n", "d2/f10.txt" = "210\n", "d2/f11.txt" = "211\n", "d2/f12.txt" = "212\n", "d2/f13.txt" = "213\n", "d2/f14.txt" = "214\n" } },
 ]
+
+# ============================== root demo (vhs demo, README GIF; P28 `materialize_demo`) ==============================
+# Four repos under $DEMO with the states the TUI shows: api-gateway is dirty and ahead / behind (history of f-ahead-behind, so the
+# same commit ids, remote x-origin-b, so EXT is built with the demo root), web-app has a linked worktree and a merged one, docs is quiet, infra has an inactive one.
+
+[[repo]]
+id = "demo-api"
+root = "demo"
+path = "api-gateway"
+kind = "normal"
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-01T09:00:00Z", files = { "README.md" = "# remote demo\n" } },
+  { branch = "main", message = "local one", date = "2026-09-05T09:00:00Z", files = { "l1.txt" = "1\n" } },
+  { branch = "main", message = "local two", date = "2026-09-06T09:00:00Z", files = { "l2.txt" = "2\n" } },
+  { branch = "fix/retry-backoff", message = "retry backoff", date = "2026-09-27T09:00:00Z", files = { "retry.txt" = "r\n" } },
+]
+remotes = [ { name = "origin", target_repo_id = "x-origin-b" } ]
+upstreams = { main = "origin/main" }
+origin_head = "main"
+worktrees = [ { path = "api-gateway-retry", branch = "fix/retry-backoff" } ]
+edit = { "README.md" = "# Remote demo\n" }
+state = { unstaged = ["README.md"], untracked = ["scratch.md"] }
+
+[[repo]]
+id = "demo-web"
+root = "demo"
+path = "web-app"
+kind = "normal"
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-02T09:00:00Z", files = { "README.md" = "# web app\n" } },
+  { branch = "main", message = "add layout", date = "2026-09-20T09:00:00Z", files = { "layout.txt" = "l\n" } },
+  { branch = "feat-nav", message = "nav component", date = "2026-09-27T09:00:00Z", files = { "nav.txt" = "n\n" } },
+]
+branches = { "feat-done" = 0 }
+worktrees = [ { path = "web-app-nav", branch = "feat-nav" }, { path = "web-app-done", branch = "feat-done" } ]
+
+[[repo]]
+id = "demo-docs"
+root = "demo"
+path = "docs"
+kind = "normal"
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-08-20T09:00:00Z", files = { "README.md" = "# docs\n" } },
+]
+
+[[repo]]
+id = "demo-infra"
+root = "demo"
+path = "infra"
+kind = "normal"
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-07-20T09:00:00Z", files = { "README.md" = "# infra\n" } },
+  { branch = "feat-old", message = "old change", date = "2026-08-01T09:00:00Z", files = { "old.txt" = "o\n" } },
+  { branch = "main", message = "recent main", date = "2026-09-15T09:00:00Z", files = { "new.txt" = "n\n" } },
+]
+worktrees = [ { path = "infra-old", branch = "feat-old" } ]
+
+# ============================== sessions (P08) ==============================
+
+# ---- Claude sessions: [[claude]] (corpus matching, claude_rules, incremental, privacy, sanitise, shell) ----
+# -- corpus matching --
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000001"
+project_dir = "matching-01"
+file = "c1a00001-0000-4000-8000-000000000001.jsonl"
+corpus = "matching"
+worktree = { repo = "f-normal", path = "$F/normal" }
+covers = ["matching: 16 matchable", "matching: older_sessions"]
+expect = { title = "Wire normal repo", title_kind = "ai", last_prompt = "add a badge to the readme", branch = "main", cwd = "$F/normal", message_count = 2, started_at = "2026-09-24T10:00:00.532Z", ended_at = "2026-09-24T10:10:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000001","timestamp":"2026-09-24T10:00:00.532Z","cwd":"$F/normal","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"wire up the normal repo"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000001","timestamp":"2026-09-24T10:00:30.000Z","cwd":"$F/normal","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000001","timestamp":"2026-09-24T10:10:00.000Z","cwd":"$F/normal","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"add a badge to the readme"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000001","timestamp":"2026-09-24T10:10:30.000Z","cwd":"$F/normal","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"ai-title","sessionId":"c1a00001-0000-4000-8000-000000000001","aiTitle":"Wire normal repo"}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000002"
+project_dir = "matching-02"
+file = "c1a00001-0000-4000-8000-000000000002.jsonl"
+corpus = "matching"
+worktree = { repo = "f-normal", path = "$F/normal" }
+expect = { title = "refactor the lib module", title_kind = "prompt", last_prompt = "refactor the lib module", branch = "main", cwd = "$F/normal/src", message_count = 1, started_at = "2026-09-26T14:00:00Z", ended_at = "2026-09-26T14:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000002","timestamp":"2026-09-26T14:00:00.000Z","cwd":"$F/normal/src","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"refactor the lib module"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000002","timestamp":"2026-09-26T14:00:30.000Z","cwd":"$F/normal/src","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000003"
+project_dir = "matching-03"
+file = "c1a00001-0000-4000-8000-000000000003.jsonl"
+corpus = "matching"
+worktree = { repo = "f-linked", path = "$F/linked" }
+expect = { title = "Linked setup", title_kind = "custom", last_prompt = "check the linked worktree setup", branch = "main", cwd = "$F/linked", message_count = 1, started_at = "2026-09-23T09:00:00Z", ended_at = "2026-09-23T09:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000003","timestamp":"2026-09-23T09:00:00.000Z","cwd":"$F/linked","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"check the linked worktree setup"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000003","timestamp":"2026-09-23T09:00:30.000Z","cwd":"$F/linked","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"custom-title","sessionId":"c1a00001-0000-4000-8000-000000000003","customTitle":"Linked setup"}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000004"
+project_dir = "matching-04"
+file = "c1a00001-0000-4000-8000-000000000004.jsonl"
+corpus = "matching"
+worktree = { repo = "f-linked", path = "$F/linked-wt" }
+expect = { title = "finish the feature file", title_kind = "prompt", last_prompt = "finish the feature file", branch = "feat-linked", cwd = "$F/linked-wt", message_count = 1, started_at = "2026-09-25T09:00:00Z", ended_at = "2026-09-25T09:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000004","timestamp":"2026-09-25T09:00:00.000Z","cwd":"$F/linked-wt","gitBranch":"feat-linked","isSidechain":false,"message":{"role":"user","content":"finish the feature file"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000004","timestamp":"2026-09-25T09:00:30.000Z","cwd":"$F/linked-wt","gitBranch":"feat-linked","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000005"
+project_dir = "matching-05"
+file = "c1a00001-0000-4000-8000-000000000005.jsonl"
+corpus = "matching"
+worktree = { repo = "f-merged", path = "$F/merged" }
+expect = { title = "tidy merged branches", title_kind = "prompt", last_prompt = "tidy merged branches", branch = "main", cwd = "$F/merged", message_count = 1, started_at = "2026-09-21T15:00:00Z", ended_at = "2026-09-21T15:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000005","timestamp":"2026-09-21T15:00:00.000Z","cwd":"$F/merged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"tidy merged branches"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000005","timestamp":"2026-09-21T15:00:30.000Z","cwd":"$F/merged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000006"
+project_dir = "matching-06"
+file = "c1a00001-0000-4000-8000-000000000006.jsonl"
+corpus = "matching"
+worktree = { repo = "f-merged", path = "$F/merged-wt" }
+expect = { title = "Confirm merge", title_kind = "ai", last_prompt = "confirm the merge landed", branch = "feat-merged", cwd = "$F/merged-wt", message_count = 1, started_at = "2026-09-22T16:00:00Z", ended_at = "2026-09-22T16:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000006","timestamp":"2026-09-22T16:00:00.000Z","cwd":"$F/merged-wt","gitBranch":"feat-merged","isSidechain":false,"message":{"role":"user","content":"confirm the merge landed"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000006","timestamp":"2026-09-22T16:00:30.000Z","cwd":"$F/merged-wt","gitBranch":"feat-merged","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"ai-title","sessionId":"c1a00001-0000-4000-8000-000000000006","aiTitle":"Confirm merge"}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000007"
+project_dir = "matching-07"
+file = "c1a00001-0000-4000-8000-000000000007.jsonl"
+corpus = "matching"
+worktree = { repo = "f-inactive", path = "$F/inactive-wt" }
+expect = { title = "revive the old feature", title_kind = "prompt", last_prompt = "revive the old feature", branch = "feat-old", cwd = "$F/inactive-wt", message_count = 1, started_at = "2026-09-19T11:00:00Z", ended_at = "2026-09-19T11:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000007","timestamp":"2026-09-19T11:00:00.000Z","cwd":"$F/inactive-wt","gitBranch":"feat-old","isSidechain":false,"message":{"role":"user","content":"revive the old feature"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000007","timestamp":"2026-09-19T11:00:30.000Z","cwd":"$F/inactive-wt","gitBranch":"feat-old","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000008"
+project_dir = "matching-08"
+file = "c1a00001-0000-4000-8000-000000000008.jsonl"
+corpus = "matching"
+worktree = { repo = "f-sub-modern", path = "$F/sub-parent" }
+covers = ["matching: hidden submodule matches parent"]
+expect = { title = "bump the vendored child", title_kind = "prompt", last_prompt = "bump the vendored child", branch = "main", cwd = "$F/sub-parent/libs/child", message_count = 1, started_at = "2026-09-26T10:00:00Z", ended_at = "2026-09-26T10:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000008","timestamp":"2026-09-26T10:00:00.000Z","cwd":"$F/sub-parent/libs/child","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"bump the vendored child"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000008","timestamp":"2026-09-26T10:00:30.000Z","cwd":"$F/sub-parent/libs/child","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000009"
+project_dir = "matching-09"
+file = "c1a00001-0000-4000-8000-000000000009.jsonl"
+corpus = "matching"
+worktree = { repo = "f-missing", path = "$F/missing-wt" }
+expect = { title = "clean up the missing worktree", title_kind = "prompt", last_prompt = "clean up the missing worktree", branch = "feat-missing", cwd = "$F/missing-wt", message_count = 1, started_at = "2026-09-24T17:00:00Z", ended_at = "2026-09-24T17:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000009","timestamp":"2026-09-24T17:00:00.000Z","cwd":"$F/missing-wt","gitBranch":"feat-missing","isSidechain":false,"message":{"role":"user","content":"clean up the missing worktree"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000009","timestamp":"2026-09-24T17:00:30.000Z","cwd":"$F/missing-wt","gitBranch":"feat-missing","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000a"
+project_dir = "matching-10"
+file = "c1a00001-0000-4000-8000-00000000000a.jsonl"
+corpus = "matching"
+worktree = { repo = "f-nest-inner", path = "$F/nest-outer/inner" }
+expect = { title = "fix the inner crate", title_kind = "prompt", last_prompt = "fix the inner crate", branch = "main", cwd = "$F/nest-outer/inner", message_count = 1, started_at = "2026-09-27T08:00:00Z", ended_at = "2026-09-27T08:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000a","timestamp":"2026-09-27T08:00:00.000Z","cwd":"$F/nest-outer/inner","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"fix the inner crate"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000a","timestamp":"2026-09-27T08:00:30.000Z","cwd":"$F/nest-outer/inner","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000b"
+project_dir = "matching-11"
+file = "c1a00001-0000-4000-8000-00000000000b.jsonl"
+corpus = "matching"
+worktree = { repo = "f-nest-outer", path = "$F/nest-outer" }
+expect = { title = "write the outer docs", title_kind = "prompt", last_prompt = "write the outer docs", branch = "main", cwd = "$F/nest-outer", message_count = 1, started_at = "2026-09-27T09:00:00Z", ended_at = "2026-09-27T09:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000b","timestamp":"2026-09-27T09:00:00.000Z","cwd":"$F/nest-outer","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"write the outer docs"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000b","timestamp":"2026-09-27T09:00:30.000Z","cwd":"$F/nest-outer","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000c"
+project_dir = "matching-12"
+file = "c1a00001-0000-4000-8000-00000000000c.jsonl"
+corpus = "matching"
+worktree = { repo = "f-dirty-staged", path = "$F/dirty-staged" }
+expect = { title = "Alpha staging", title_kind = "custom", last_prompt = "finish staging the alpha change", branch = "main", cwd = "$F/dirty-staged", message_count = 1, started_at = "2026-09-27T11:00:00Z", ended_at = "2026-09-27T11:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000c","timestamp":"2026-09-27T11:00:00.000Z","cwd":"$F/dirty-staged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"finish staging the alpha change"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000c","timestamp":"2026-09-27T11:00:30.000Z","cwd":"$F/dirty-staged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"custom-title","sessionId":"c1a00001-0000-4000-8000-00000000000c","customTitle":"Alpha staging"}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000d"
+project_dir = "matching-13"
+file = "c1a00001-0000-4000-8000-00000000000d.jsonl"
+corpus = "matching"
+worktree = { repo = "f-case-a", path = "$F/case-a-main" }
+expect = { title = "review case a main", title_kind = "prompt", last_prompt = "review case a main", branch = "main", cwd = "$F/case-a-main", message_count = 1, started_at = "2026-09-25T13:00:00Z", ended_at = "2026-09-25T13:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000d","timestamp":"2026-09-25T13:00:00.000Z","cwd":"$F/case-a-main","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"review case a main"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000d","timestamp":"2026-09-25T13:00:30.000Z","cwd":"$F/case-a-main","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000e"
+project_dir = "matching-14"
+file = "c1a00001-0000-4000-8000-00000000000e.jsonl"
+corpus = "matching"
+worktree = { repo = "f-detached", path = "$F/detached" }
+expect = { title = "inspect the detached checkout", title_kind = "prompt", last_prompt = "inspect the detached checkout", cwd = "$F/detached", message_count = 1, started_at = "2026-09-26T12:00:00Z", ended_at = "2026-09-26T12:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000e","timestamp":"2026-09-26T12:00:00.000Z","cwd":"$F/detached","gitBranch":"HEAD","isSidechain":false,"message":{"role":"user","content":"inspect the detached checkout"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000e","timestamp":"2026-09-26T12:00:30.000Z","cwd":"$F/detached","gitBranch":"HEAD","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-00000000000f"
+project_dir = "matching-15"
+file = "c1a00001-0000-4000-8000-00000000000f.jsonl"
+corpus = "matching"
+unmatched = "non_repo"
+covers = ["matching: non_repo"]
+expect = { title = "poke around the bare directory", title_kind = "prompt", last_prompt = "poke around the bare directory", branch = "main", cwd = "$F/bare", message_count = 1, started_at = "2026-09-24T15:00:00Z", ended_at = "2026-09-24T15:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-00000000000f","timestamp":"2026-09-24T15:00:00.000Z","cwd":"$F/bare","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"poke around the bare directory"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-00000000000f","timestamp":"2026-09-24T15:00:30.000Z","cwd":"$F/bare","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000010"
+project_dir = "matching-16"
+file = "c1a00001-0000-4000-8000-000000000010.jsonl"
+corpus = "matching"
+unmatched = "path_gone"
+covers = ["matching: path_gone"]
+expect = { title = "start the gone project", title_kind = "prompt", last_prompt = "start the gone project", branch = "main", cwd = "$F/gone-project", message_count = 1, started_at = "2026-09-20T09:00:00Z", ended_at = "2026-09-20T09:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000010","timestamp":"2026-09-20T09:00:00.000Z","cwd":"$F/gone-project","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"start the gone project"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000010","timestamp":"2026-09-20T09:00:30.000Z","cwd":"$F/gone-project","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000011"
+project_dir = "matching-17"
+file = "c1a00001-0000-4000-8000-000000000011.jsonl"
+corpus = "matching"
+unmatched = "outside_root"
+covers = ["matching: outside_root"]
+expect = { title = "work in the external worktree", title_kind = "prompt", last_prompt = "work in the external worktree", branch = "feat-a", cwd = "$EXT/case-a-wt", message_count = 1, started_at = "2026-09-25T16:00:00Z", ended_at = "2026-09-25T16:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000011","timestamp":"2026-09-25T16:00:00.000Z","cwd":"$EXT/case-a-wt","gitBranch":"feat-a","isSidechain":false,"message":{"role":"user","content":"work in the external worktree"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000011","timestamp":"2026-09-25T16:00:30.000Z","cwd":"$EXT/case-a-wt","gitBranch":"feat-a","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00001-0000-4000-8000-000000000012"
+project_dir = "matching-18"
+file = "c1a00001-0000-4000-8000-000000000012.jsonl"
+corpus = "matching"
+unmatched = "outside_root"
+covers = ["matching: outside_root"]
+expect = { title = "look at the outside repo", title_kind = "prompt", last_prompt = "look at the outside repo", branch = "main", cwd = "$EXT/outside-repo", message_count = 1, started_at = "2026-09-23T12:00:00Z", ended_at = "2026-09-23T12:00:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00001-0000-4000-8000-000000000012","timestamp":"2026-09-23T12:00:00.000Z","cwd":"$EXT/outside-repo","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"look at the outside repo"}}',
+  '{"type":"assistant","sessionId":"c1a00001-0000-4000-8000-000000000012","timestamp":"2026-09-23T12:00:30.000Z","cwd":"$EXT/outside-repo","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+# -- corpus claude_rules --
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000001"
+project_dir = "rules-01"
+file = "c1a00002-0000-4000-8000-000000000001.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: tool_result last user record"]
+expect = { title = "run the linter on the parser", title_kind = "prompt", last_prompt = "run the linter on the parser", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:00:00Z", ended_at = "2026-09-26T09:00:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000001","timestamp":"2026-09-26T09:00:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"run the linter on the parser"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000001","timestamp":"2026-09-26T09:00:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"running"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000001","timestamp":"2026-09-26T09:00:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"lint ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000002"
+project_dir = "rules-02"
+file = "c1a00002-0000-4000-8000-000000000002.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: isMeta"]
+expect = { title = "add the missing tests", title_kind = "prompt", last_prompt = "add the missing tests", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:10:00Z", ended_at = "2026-09-26T09:10:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000002","timestamp":"2026-09-26T09:10:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"add the missing tests"}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000002","timestamp":"2026-09-26T09:10:05.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Caveat: the messages below were generated locally"}]}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000002","timestamp":"2026-09-26T09:10:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"adding"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000003"
+project_dir = "rules-03"
+file = "c1a00002-0000-4000-8000-000000000003.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: command-name"]
+expect = { title = "explain the build script", title_kind = "prompt", last_prompt = "explain the build script", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:20:00Z", ended_at = "2026-09-26T09:21:00Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000003","timestamp":"2026-09-26T09:20:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"<command-name>/clear</command-name>"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000003","timestamp":"2026-09-26T09:20:30.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"explain the build script"}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000003","timestamp":"2026-09-26T09:21:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"<command-message>model</command-message><command-name>/model</command-name>"}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000004"
+project_dir = "rules-04"
+file = "c1a00002-0000-4000-8000-000000000004.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: injected marker after user text"]
+expect = { title = "fix the parser", title_kind = "prompt", last_prompt = "review the diff", branch = "main", cwd = "$F/dirty-mixed", message_count = 2, started_at = "2026-09-26T09:30:00Z", ended_at = "2026-09-26T09:30:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000004","timestamp":"2026-09-26T09:30:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"fix the parser <system-reminder>never show this</system-reminder> and more"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000004","timestamp":"2026-09-26T09:30:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"fixing"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000004","timestamp":"2026-09-26T09:30:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"review the diff<task-notification>job done</task-notification>"}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000005"
+project_dir = "rules-05"
+file = "c1a00002-0000-4000-8000-000000000005.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: prompt block filter"]
+expect = { title = "real prompt here second block kept", title_kind = "prompt", last_prompt = "real prompt here second block kept", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:35:00Z", ended_at = "2026-09-26T09:35:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000005","timestamp":"2026-09-26T09:35:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened a.rs</ide_opened_file>"},{"type":"text","text":"# AGENTS.md instructions for /repo"},{"type":"text","text":"  <note>indented tag</note>"},{"type":"text","text":"real prompt here"},{"type":"text","text":"second block kept"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000005","timestamp":"2026-09-26T09:35:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>ok</local-command-stdout>"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000006"
+project_dir = "rules-06"
+file = "c1a00002-0000-4000-8000-000000000006.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: isSidechain"]
+expect = { title = "plan the release notes", title_kind = "prompt", last_prompt = "plan the release notes", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:40:00Z", ended_at = "2026-09-26T09:40:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000006","timestamp":"2026-09-26T09:40:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"plan the release notes"}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000006","timestamp":"2026-09-26T09:40:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":true,"message":{"role":"user","content":"delegated subtask prompt"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000006","timestamp":"2026-09-26T09:40:30.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"planning"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000007"
+project_dir = "rules-07"
+file = "c1a00002-0000-4000-8000-000000000007.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: title custom"]
+expect = { title = "Flaky test hunt", title_kind = "custom", last_prompt = "sort out the flaky test", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:45:00Z", ended_at = "2026-09-26T09:45:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000007","timestamp":"2026-09-26T09:45:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"sort out the flaky test"}}',
+  '{"type":"custom-title","sessionId":"c1a00002-0000-4000-8000-000000000007","customTitle":"Old name"}',
+  '{"type":"ai-title","sessionId":"c1a00002-0000-4000-8000-000000000007","aiTitle":"Fix flaky e2e test"}',
+  '{"type":"custom-title","sessionId":"c1a00002-0000-4000-8000-000000000007","customTitle":"Flaky test hunt"}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000007","timestamp":"2026-09-26T09:45:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"sorting"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000008"
+project_dir = "rules-08"
+file = "c1a00002-0000-4000-8000-000000000008.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: title ai"]
+expect = { title = "Fix retry logic", title_kind = "ai", last_prompt = "make the retry logic safer", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T09:50:00Z", ended_at = "2026-09-26T09:50:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000008","timestamp":"2026-09-26T09:50:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"make the retry logic safer"}}',
+  '{"type":"ai-title","sessionId":"c1a00002-0000-4000-8000-000000000008","aiTitle":"Draft title"}',
+  '{"type":"ai-title","sessionId":"c1a00002-0000-4000-8000-000000000008","aiTitle":"Fix retry logic"}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000008","timestamp":"2026-09-26T09:50:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"making it safe"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000009"
+project_dir = "rules-09"
+file = "c1a00002-0000-4000-8000-000000000009.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: title prompt"]
+expect = { title = "summarise the open issues", title_kind = "prompt", last_prompt = "now group them by label", branch = "main", cwd = "$F/dirty-mixed", message_count = 2, started_at = "2026-09-26T09:55:00Z", ended_at = "2026-09-26T09:55:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000009","timestamp":"2026-09-26T09:55:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"summarise the open issues"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000009","timestamp":"2026-09-26T09:55:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"summary"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000009","timestamp":"2026-09-26T09:55:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"now group them by label"}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000a"
+project_dir = "rules-10"
+file = "c1a00002-0000-4000-8000-00000000000a.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: pre-truncated lastPrompt"]
+expect = { title = "tidy up the changelog", title_kind = "prompt", last_prompt = "please summarise the whole migration plan and list every risk we still hav…", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:00:00Z", ended_at = "2026-09-26T10:00:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-00000000000a","timestamp":"2026-09-26T10:00:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"tidy up the changelog"}}',
+  '{"type":"last-prompt","sessionId":"c1a00002-0000-4000-8000-00000000000a","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":"an older last prompt"}',
+  '{"type":"last-prompt","sessionId":"c1a00002-0000-4000-8000-00000000000a","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":"please summarise the whole migration plan and list every risk we still hav…"}',
+  '{"type":"last-prompt","sessionId":"c1a00002-0000-4000-8000-00000000000a","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":""}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000a","timestamp":"2026-09-26T10:00:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"tidying"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000b"
+project_dir = "rules-11"
+file = "c1a00002-0000-4000-8000-00000000000b.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: lastPrompt with zero human prompts"]
+expect = { last_prompt = "now run it 20 times", branch = "main", cwd = "$F/dirty-mixed", message_count = 0, started_at = "2026-09-26T10:05:00Z", ended_at = "2026-09-26T10:05:20Z" }
+lines = [
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000b","timestamp":"2026-09-26T10:05:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"resuming"}]}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000b","timestamp":"2026-09-26T10:05:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"waiting"}]}}',
+  '{"type":"last-prompt","sessionId":"c1a00002-0000-4000-8000-00000000000b","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":"now run it 20 times"}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000c"
+project_dir = "rules-12"
+file = "c1a00002-0000-4000-8000-00000000000c.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: multi-cwd"]
+expect = { title = "inspect the normal repo first", title_kind = "prompt", last_prompt = "now the repo root", branch = "main", cwd = "$F/dirty-mixed", message_count = 2, started_at = "2026-09-26T10:10:00Z", ended_at = "2026-09-26T10:15:00Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-00000000000c","timestamp":"2026-09-26T10:10:00.000Z","cwd":"$F/normal","gitBranch":"feat-x","isSidechain":false,"message":{"role":"user","content":"inspect the normal repo first"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000c","timestamp":"2026-09-26T10:10:10.000Z","cwd":"$F/normal","gitBranch":"feat-x","message":{"role":"assistant","content":[{"type":"text","text":"inspecting"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-00000000000c","timestamp":"2026-09-26T10:15:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"now the repo root"}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000d"
+project_dir = "rules-13"
+file = "c1a00002-0000-4000-8000-00000000000d.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: HEAD branch"]
+expect = { title = "look at the detached state", title_kind = "prompt", last_prompt = "look at the detached state", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:20:00Z", ended_at = "2026-09-26T10:20:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-00000000000d","timestamp":"2026-09-26T10:20:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"look at the detached state"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000d","timestamp":"2026-09-26T10:20:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"HEAD","message":{"role":"assistant","content":[{"type":"text","text":"looking"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000e"
+project_dir = "rules-14"
+file = "c1a00002-0000-4000-8000-00000000000e.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: missing gitBranch"]
+expect = { title = "no branch was recorded", title_kind = "prompt", last_prompt = "no branch was recorded", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:25:00Z", ended_at = "2026-09-26T10:25:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-00000000000e","timestamp":"2026-09-26T10:25:00.000Z","cwd":"$F/dirty-mixed","isSidechain":false,"message":{"role":"user","content":"no branch was recorded"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-00000000000e","timestamp":"2026-09-26T10:25:10.000Z","cwd":"$F/dirty-mixed","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-00000000000f"
+project_dir = "rules-15"
+file = "c1a00002-0000-4000-8000-00000000000f.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: id from filename"]
+expect = { title = "the id comes from the file name", title_kind = "prompt", last_prompt = "the id comes from the file name", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:30:00Z", ended_at = "2026-09-26T10:30:10Z" }
+lines = [
+  '{"type":"user","timestamp":"2026-09-26T10:30:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"the id comes from the file name"}}',
+  '{"type":"assistant","timestamp":"2026-09-26T10:30:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000010"
+project_dir = "rules-16"
+file = "c1a00002-0000-4000-8000-000000001016.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: id from filename"]
+expect = { title = "the first sessionId wins", title_kind = "prompt", last_prompt = "the first sessionId wins", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:35:00Z", ended_at = "2026-09-26T10:35:20Z" }
+lines = [
+  '{"type":"user","timestamp":"2026-09-26T10:35:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"the first sessionId wins"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000010","timestamp":"2026-09-26T10:35:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000002016","timestamp":"2026-09-26T10:35:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok again"}]}}',
+]
+
+# skipped: oversize 1
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000011"
+project_dir = "rules-17"
+file = "c1a00002-0000-4000-8000-000000000011.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: oversize line"]
+expect = { title = "check the big paste", title_kind = "prompt", last_prompt = "check the big paste", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:40:00Z", ended_at = "2026-09-26T10:40:20Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000011","timestamp":"2026-09-26T10:40:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"check the big paste"}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000011","timestamp":"2026-09-26T10:40:05.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"$PAD:1048577"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000011","timestamp":"2026-09-26T10:40:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"checked"}]}}',
+]
+
+# skipped: malformed 2
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000012"
+project_dir = "rules-18"
+file = "c1a00002-0000-4000-8000-000000000012.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: malformed line"]
+expect = { title = "diagnose the crash", title_kind = "prompt", last_prompt = "retry with logging", branch = "main", cwd = "$F/dirty-mixed", message_count = 2, started_at = "2026-09-26T10:45:00Z", ended_at = "2026-09-26T10:46:00Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000012","timestamp":"2026-09-26T10:45:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"diagnose the crash"}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000012","timestamp":"2026-09-26T10:45:0',
+  'not json at all',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000012","timestamp":"2026-09-26T10:45:20.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"diagnosing"}]}}',
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000012","timestamp":"2026-09-26T10:46:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"retry with logging"}}',
+]
+
+# skipped: unknown_type 2
+[[claude]]
+id = "c1a00002-0000-4000-8000-000000000013"
+project_dir = "rules-19"
+file = "c1a00002-0000-4000-8000-000000000013.jsonl"
+corpus = "claude_rules"
+worktree = { repo = "f-dirty-mixed", path = "$F/dirty-mixed" }
+covers = ["claude: unknown record type"]
+expect = { title = "list the todo items", title_kind = "prompt", last_prompt = "list the todo items", branch = "main", cwd = "$F/dirty-mixed", message_count = 1, started_at = "2026-09-26T10:50:00Z", ended_at = "2026-09-26T10:50:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000013","timestamp":"2026-09-26T10:50:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"list the todo items"}}',
+  '{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}',
+  '{"type":"progress","sessionId":"c1a00002-0000-4000-8000-000000000013","timestamp":"2026-09-26T10:50:10.000Z","data":{}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000013","timestamp":"2026-09-26T10:50:30.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"listing"}]}}',
+]
+
+[[claude]]
+id = "subagent-a1"
+project_dir = "rules-01"
+file = "c1a00002-0000-4000-8000-000000000001/subagents/agent-a1.jsonl"
+corpus = "claude_rules"
+covers = ["claude: subagent file"]
+excluded = "subagent file (projects/*/<sessionId>/subagents/*.jsonl)"
+lines = [
+  '{"type":"user","sessionId":"c1a00002-0000-4000-8000-000000000001","timestamp":"2026-09-26T09:00:05.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":true,"message":{"role":"user","content":"delegated subagent task"}}',
+  '{"type":"assistant","sessionId":"c1a00002-0000-4000-8000-000000000001","timestamp":"2026-09-26T09:00:08.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+]
+
+[[claude]]
+id = "not-a-uuid"
+project_dir = "rules-20"
+file = "not-a-uuid.jsonl"
+corpus = "claude_rules"
+covers = ["claude: non-UUID id"]
+excluded = "non-UUID id (skipped and counted as non_uuid)"
+lines = [
+  '{"type":"user","timestamp":"2026-09-26T11:00:00.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"this file name is not a uuid"}}',
+  '{"type":"assistant","timestamp":"2026-09-26T11:00:10.000Z","cwd":"$F/dirty-mixed","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+# -- corpus incremental --
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000001"
+project_dir = "incr-01"
+file = "c1a00003-0000-4000-8000-000000000001.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["incremental: append 3 lines plus partial"]
+expect = { title = "start the incremental case", title_kind = "prompt", last_prompt = "third prompt completes", branch = "main", cwd = "$F/ahead-behind", message_count = 4, started_at = "2026-09-27T08:00:00Z", ended_at = "2026-09-27T08:02:00Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:00:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"start the incremental case"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"started"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:00:20.000Z","isSidechain":false,"message":{"role":"user","content":"add three more lines"}}',
+]
+
+[[claude.steps]]
+op = "append"
+lines = [
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:01:10.000Z","isSidechain":false,"message":{"role":"user","content":"second prompt line"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:01:20.000Z","message":{"role":"assistant","content":[{"type":"text","text":"two"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T08:02:00.000Z","isSidechain":false,"mess$NOEOL',
+]
+then_scan = true
+expect = { records = 3, offset = 1153, sessions = 1, vanished = 0, message_count = 3 }
+
+[[claude.steps]]
+op = "append"
+lines = [
+  'age":{"role":"user","content":"third prompt completes"}}',
+]
+then_scan = true
+expect = { records = 1, offset = 1340, sessions = 1, vanished = 0, message_count = 4 }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000002"
+project_dir = "incr-02"
+file = "c1a00003-0000-4000-8000-000000000002.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["incremental: truncate"]
+expect = { title = "before the truncate", title_kind = "prompt", last_prompt = "before the truncate", branch = "main", cwd = "$F/ahead-behind", message_count = 1, started_at = "2026-09-27T08:10:00Z", ended_at = "2026-09-27T08:10:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000002","timestamp":"2026-09-27T08:10:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"before the truncate"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000002","timestamp":"2026-09-27T08:10:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000002","timestamp":"2026-09-27T08:10:20.000Z","isSidechain":false,"message":{"role":"user","content":"this prompt will be cut away"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000002","timestamp":"2026-09-27T08:10:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"two"}]}}',
+]
+
+[[claude.steps]]
+op = "truncate"
+to = 2
+then_scan = true
+expect = { records = 2, offset = 408, sessions = 1, vanished = 0, message_count = 1 }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000003"
+project_dir = "incr-03"
+file = "c1a00003-0000-4000-8000-000000000003.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["incremental: truncate then regrow"]
+expect = { title = "regrow keeps the head", title_kind = "prompt", last_prompt = "and a fourth new prompt", branch = "main", cwd = "$F/ahead-behind", message_count = 3, started_at = "2026-09-27T08:20:00Z", ended_at = "2026-09-27T08:21:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:20:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"regrow keeps the head"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:20:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:20:20.000Z","isSidechain":false,"message":{"role":"user","content":"old third prompt text that will vanish"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:20:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"old reply"}]}}',
+]
+
+[[claude.steps]]
+op = "truncate"
+to = 2
+then_scan = false
+
+[[claude.steps]]
+op = "append"
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:21:00.000Z","isSidechain":false,"message":{"role":"user","content":"brand new third prompt with quite a lot more text than the old one had"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:21:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"brand new reply that is also rather longer than before"}]}}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:21:20.000Z","isSidechain":false,"message":{"role":"user","content":"and a fourth new prompt"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000003","timestamp":"2026-09-27T08:21:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"closing"}]}}',
+]
+then_scan = true
+expect = { records = 6, offset = 1254, sessions = 1, vanished = 0, message_count = 3 }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000004"
+project_dir = "incr-04"
+file = "c1a00003-0000-4000-8000-000000000004.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["incremental: title upgrade prompt to custom"]
+expect = { title = "API sketch", title_kind = "custom", last_prompt = "add pagination", branch = "main", cwd = "$F/ahead-behind", message_count = 2, started_at = "2026-09-27T08:30:00Z", ended_at = "2026-09-27T08:31:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000004","timestamp":"2026-09-27T08:30:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"sketch the api"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000004","timestamp":"2026-09-27T08:30:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"sketching"}]}}',
+]
+
+[[claude.steps]]
+op = "append"
+lines = [
+  '{"type":"custom-title","sessionId":"c1a00003-0000-4000-8000-000000000004","customTitle":"API sketch"}',
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000004","timestamp":"2026-09-27T08:31:00.000Z","isSidechain":false,"message":{"role":"user","content":"add pagination"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000004","timestamp":"2026-09-27T08:31:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"paginating"}]}}',
+]
+then_scan = true
+expect = { records = 3, offset = 880, sessions = 1, vanished = 0, message_count = 2, title = "API sketch", title_kind = "custom" }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000005"
+project_dir = "incr-05"
+file = "c1a00003-0000-4000-8000-000000000005.jsonl"
+corpus = "incremental"
+covers = ["incremental: vanished file"]
+excluded = "vanished: the delete step removes the file, so the session is dropped"
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000005","timestamp":"2026-09-27T08:40:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"this file will be deleted"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000005","timestamp":"2026-09-27T08:40:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude.steps]]
+op = "delete"
+then_scan = true
+expect = { records = 0, offset = 0, sessions = 0, vanished = 1 }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000006"
+project_dir = "incr-06"
+file = "c1a00003-0000-4000-8000-000000000006.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["pointer: log replaced after scan"]
+expect = { title = "keep this text pointer", title_kind = "prompt", last_prompt = "keep this text pointer", branch = "main", cwd = "$F/ahead-behind", message_count = 1, started_at = "2026-09-27T08:50:00Z", ended_at = "2026-09-27T08:50:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000006","timestamp":"2026-09-27T08:50:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"keep this text pointer"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000006","timestamp":"2026-09-27T08:50:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude.steps]]
+op = "replace"
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000006","timestamp":"2026-09-27T08:50:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"replacement text in a new file"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000006","timestamp":"2026-09-27T08:50:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+then_scan = false
+expect = { resolves = false }
+
+
+[[claude]]
+id = "c1a00003-0000-4000-8000-000000000007"
+project_dir = "incr-07"
+file = "c1a00003-0000-4000-8000-000000000007.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["pointer: symlink swapped in"]
+expect = { title = "swap a symlink in", title_kind = "prompt", last_prompt = "swap a symlink in", branch = "main", cwd = "$F/ahead-behind", message_count = 1, started_at = "2026-09-27T09:00:00Z", ended_at = "2026-09-27T09:00:10Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00003-0000-4000-8000-000000000007","timestamp":"2026-09-27T09:00:00.000Z","cwd":"$F/ahead-behind","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"swap a symlink in"}}',
+  '{"type":"assistant","sessionId":"c1a00003-0000-4000-8000-000000000007","timestamp":"2026-09-27T09:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude.steps]]
+op = "symlink_swap"
+then_scan = false
+expect = { resolves = false }
+
+# -- corpus privacy --
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000001"
+project_dir = "privacy-01"
+file = "c1a00004-0000-4000-8000-000000000001.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: sk-"]
+expect = { title = "rotate [redacted] before the quokka-tango-01 demo", title_kind = "prompt", last_prompt = "rotate [redacted] before the quokka-tango-01 demo", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:01:00Z", ended_at = "2026-09-25T12:01:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000001","timestamp":"2026-09-25T12:01:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"rotate sk-FIXTUREabcdefgh01234567 before the quokka-tango-01 demo"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000001","timestamp":"2026-09-25T12:01:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000002"
+project_dir = "privacy-02"
+file = "c1a00004-0000-4000-8000-000000000002.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: sk_live/rk_test"]
+expect = { title = "stripe keys [redacted] and [redacted] for walrus-ember-02", title_kind = "prompt", last_prompt = "stripe keys [redacted] and [redacted] for walrus-ember-02", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:02:00Z", ended_at = "2026-09-25T12:02:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000002","timestamp":"2026-09-25T12:02:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"stripe keys sk_live_FIXTURE0123456789 and rk_test_FIXTUREabcdef0123 for walrus-ember-02"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000002","timestamp":"2026-09-25T12:02:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000003"
+project_dir = "privacy-03"
+file = "c1a00004-0000-4000-8000-000000000003.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: AKIA"]
+expect = { title = "aws key [redacted] in the heron-drift-03 notes", title_kind = "prompt", last_prompt = "aws key [redacted] in the heron-drift-03 notes", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:03:00Z", ended_at = "2026-09-25T12:03:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000003","timestamp":"2026-09-25T12:03:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"aws key AKIAIOSFODNN7EXAMPLE in the heron-drift-03 notes"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000003","timestamp":"2026-09-25T12:03:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000004"
+project_dir = "privacy-04"
+file = "c1a00004-0000-4000-8000-000000000004.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: AIza"]
+expect = { title = "maps key [redacted] for ibis-cobalt-04", title_kind = "prompt", last_prompt = "maps key [redacted] for ibis-cobalt-04", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:04:00Z", ended_at = "2026-09-25T12:04:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000004","timestamp":"2026-09-25T12:04:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"maps key AIzaFIXTUREKEYFIXTUREKEYFIXTUREKEYFIXTU for ibis-cobalt-04"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000004","timestamp":"2026-09-25T12:04:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000005"
+project_dir = "privacy-05"
+file = "c1a00004-0000-4000-8000-000000000005.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: gh token"]
+expect = { title = "clone with [redacted] via lynx-basalt-05", title_kind = "prompt", last_prompt = "clone with [redacted] via lynx-basalt-05", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:05:00Z", ended_at = "2026-09-25T12:05:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000005","timestamp":"2026-09-25T12:05:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"clone with ghp_FIXTURE0123456789FIXTURE0123456789FI via lynx-basalt-05"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000005","timestamp":"2026-09-25T12:05:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000006"
+project_dir = "privacy-06"
+file = "c1a00004-0000-4000-8000-000000000006.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: github_pat_"]
+expect = { title = "use [redacted] for osprey-quartz-06", title_kind = "prompt", last_prompt = "use [redacted] for osprey-quartz-06", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:06:00Z", ended_at = "2026-09-25T12:06:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000006","timestamp":"2026-09-25T12:06:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"use github_pat_FIXTURE0123456789abcdef for osprey-quartz-06"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000006","timestamp":"2026-09-25T12:06:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000007"
+project_dir = "privacy-07"
+file = "c1a00004-0000-4000-8000-000000000007.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: npm_"]
+expect = { title = "publish with [redacted] for tapir-indigo-07", title_kind = "prompt", last_prompt = "publish with [redacted] for tapir-indigo-07", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:07:00Z", ended_at = "2026-09-25T12:07:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000007","timestamp":"2026-09-25T12:07:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"publish with npm_FIXTURE0123FIXTURE0123FIXTURE0 for tapir-indigo-07"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000007","timestamp":"2026-09-25T12:07:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000008"
+project_dir = "privacy-08"
+file = "c1a00004-0000-4000-8000-000000000008.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: xox"]
+expect = { title = "slack [redacted] for civet-amber-08", title_kind = "prompt", last_prompt = "slack [redacted] for civet-amber-08", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:08:00Z", ended_at = "2026-09-25T12:08:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000008","timestamp":"2026-09-25T12:08:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"slack xoxb-0123456789-FIXTUREabcde for civet-amber-08"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000008","timestamp":"2026-09-25T12:08:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000009"
+project_dir = "privacy-09"
+file = "c1a00004-0000-4000-8000-000000000009.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: JWT"]
+expect = { title = "session jwt [redacted] for marmot-coral-09", title_kind = "prompt", last_prompt = "session jwt [redacted] for marmot-coral-09", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:09:00Z", ended_at = "2026-09-25T12:09:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000009","timestamp":"2026-09-25T12:09:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"session jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJlRklYVFVSRQ for marmot-coral-09"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000009","timestamp":"2026-09-25T12:09:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000a"
+project_dir = "privacy-10"
+file = "c1a00004-0000-4000-8000-00000000000a.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: Bearer"]
+expect = { title = "send Authorization: [redacted] and check gecko-umber-10", title_kind = "prompt", last_prompt = "send Authorization: [redacted] and check gecko-umber-10", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:10:00Z", ended_at = "2026-09-25T12:10:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000a","timestamp":"2026-09-25T12:10:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"send Authorization: Bearer fixture0123abcd and check gecko-umber-10"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000a","timestamp":"2026-09-25T12:10:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000b"
+project_dir = "privacy-11"
+file = "c1a00004-0000-4000-8000-00000000000b.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: private key"]
+expect = { title = "found [redacted] in the repo, fix bison-slate-11", title_kind = "prompt", last_prompt = "found [redacted] in the repo, fix bison-slate-11", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:11:00Z", ended_at = "2026-09-25T12:11:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000b","timestamp":"2026-09-25T12:11:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"found -----BEGIN RSA PRIVATE KEY----- in the repo, fix bison-slate-11"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000b","timestamp":"2026-09-25T12:11:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000c"
+project_dir = "privacy-12"
+file = "c1a00004-0000-4000-8000-00000000000c.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: password="]
+expect = { title = "set [redacted] and restart otter-maroon-12", title_kind = "prompt", last_prompt = "set [redacted] and restart otter-maroon-12", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:12:00Z", ended_at = "2026-09-25T12:12:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000c","timestamp":"2026-09-25T12:12:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"set password=hunter2fixture and restart otter-maroon-12"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000c","timestamp":"2026-09-25T12:12:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000d"
+project_dir = "privacy-13"
+file = "c1a00004-0000-4000-8000-00000000000d.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: url credentials"]
+expect = { title = "connect to [redacted]db.internal/app for stoat-olive-13", title_kind = "prompt", last_prompt = "connect to [redacted]db.internal/app for stoat-olive-13", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:13:00Z", ended_at = "2026-09-25T12:13:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000d","timestamp":"2026-09-25T12:13:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"connect to postgres://admin:pw0123fixture@db.internal/app for stoat-olive-13"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000d","timestamp":"2026-09-25T12:13:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+# expect assumes redact_emails = true
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000e"
+project_dir = "privacy-14"
+file = "c1a00004-0000-4000-8000-00000000000e.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: email"]
+expect = { title = "mail [redacted] about the loris-teal-14 outage", title_kind = "prompt", last_prompt = "mail [redacted] about the loris-teal-14 outage", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:14:00Z", ended_at = "2026-09-25T12:14:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000e","timestamp":"2026-09-25T12:14:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"mail ada.fixture@example.test about the loris-teal-14 outage"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000e","timestamp":"2026-09-25T12:14:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-00000000000f"
+project_dir = "privacy-15"
+file = "c1a00004-0000-4000-8000-00000000000f.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: truncation multi-byte grapheme"]
+expect = { title = "narwhal-fjord-15 🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é…", title_kind = "prompt", last_prompt = "narwhal-fjord-15 🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é…", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:15:00Z", ended_at = "2026-09-25T12:15:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-00000000000f","timestamp":"2026-09-25T12:15:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"narwhal-fjord-15 🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é🇯🇵é"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-00000000000f","timestamp":"2026-09-25T12:15:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000010"
+project_dir = "privacy-16"
+file = "c1a00004-0000-4000-8000-000000000010.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: truncation pre-ellipsised"]
+expect = { title = "pelican-moss-16 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…", title_kind = "prompt", last_prompt = "pelican-moss-16 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:16:00Z", ended_at = "2026-09-25T12:16:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000010","timestamp":"2026-09-25T12:16:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"pelican-moss-16 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000010","timestamp":"2026-09-25T12:16:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+
+[[claude]]
+id = "c1a00004-0000-4000-8000-000000000011"
+project_dir = "privacy-17"
+file = "c1a00004-0000-4000-8000-000000000011.jsonl"
+corpus = "privacy"
+worktree = { repo = "f-dirty-unstaged", path = "$F/dirty-unstaged" }
+covers = ["privacy: truncation pre-ellipsised"]
+expect = { title = "puffin-lava-17 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…", title_kind = "prompt", last_prompt = "puffin-lava-17 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…", branch = "main", cwd = "$F/dirty-unstaged", message_count = 1, started_at = "2026-09-25T12:17:00Z", ended_at = "2026-09-25T12:17:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00004-0000-4000-8000-000000000011","timestamp":"2026-09-25T12:17:00.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"puffin-lava-17 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…"}}',
+  '{"type":"assistant","sessionId":"c1a00004-0000-4000-8000-000000000011","timestamp":"2026-09-25T12:17:30.000Z","cwd":"$F/dirty-unstaged","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}',
+]
+# -- corpus sanitise --
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000001"
+project_dir = "sanitise-01"
+file = "c1a00005-0000-4000-8000-000000000001.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: ESC [2J", "sanitise: prompt"]
+expect = { title = "wipe the build dir", title_kind = "prompt", last_prompt = "wipe the build dir", branch = "main", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:01:00Z", ended_at = "2026-09-25T13:01:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000001","timestamp":"2026-09-25T13:01:00.000Z","cwd":"$F/no-upstream","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"wipe the \u001b[2Jbuild dir"}}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000001","timestamp":"2026-09-25T13:01:30.000Z","cwd":"$F/no-upstream","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000002"
+project_dir = "sanitise-02"
+file = "c1a00005-0000-4000-8000-000000000002.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: C1 0x9b", "sanitise: prompt"]
+expect = { title = "alert→ done", title_kind = "prompt", last_prompt = "alert→ done", branch = "main", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:02:00Z", ended_at = "2026-09-25T13:02:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000002","timestamp":"2026-09-25T13:02:00.000Z","cwd":"$F/no-upstream","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"alert\u009b→ done"}}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000002","timestamp":"2026-09-25T13:02:30.000Z","cwd":"$F/no-upstream","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000003"
+project_dir = "sanitise-03"
+file = "c1a00005-0000-4000-8000-000000000003.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: U+202E", "sanitise: prompt"]
+expect = { title = "rename reporttxt.exe now", title_kind = "prompt", last_prompt = "rename reporttxt.exe now", branch = "main", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:03:00Z", ended_at = "2026-09-25T13:03:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000003","timestamp":"2026-09-25T13:03:00.000Z","cwd":"$F/no-upstream","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"rename report\u202etxt.exe now"}}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000003","timestamp":"2026-09-25T13:03:30.000Z","cwd":"$F/no-upstream","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000004"
+project_dir = "sanitise-04"
+file = "c1a00005-0000-4000-8000-000000000004.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: U+200B", "sanitise: prompt"]
+expect = { title = "deploy to prod", title_kind = "prompt", last_prompt = "deploy to prod", branch = "main", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:04:00Z", ended_at = "2026-09-25T13:04:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000004","timestamp":"2026-09-25T13:04:00.000Z","cwd":"$F/no-upstream","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"dep\u200bloy to prod"}}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000004","timestamp":"2026-09-25T13:04:30.000Z","cwd":"$F/no-upstream","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000005"
+project_dir = "sanitise-05"
+file = "c1a00005-0000-4000-8000-000000000005.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: branch name"]
+expect = { title = "check the odd branch name", title_kind = "prompt", last_prompt = "check the odd branch name", branch = "feat/\u001b[2Jx\u202ey\u200bz\u009b→end", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:05:00Z", ended_at = "2026-09-25T13:05:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000005","timestamp":"2026-09-25T13:05:00.000Z","cwd":"$F/no-upstream","gitBranch":"feat/\u001b[2Jx\u202ey\u200bz\u009b→end","isSidechain":false,"message":{"role":"user","content":"check the odd branch name"}}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000005","timestamp":"2026-09-25T13:05:30.000Z","cwd":"$F/no-upstream","gitBranch":"feat/\u001b[2Jx\u202ey\u200bz\u009b→end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00005-0000-4000-8000-000000000006"
+project_dir = "sanitise-06"
+file = "c1a00005-0000-4000-8000-000000000006.jsonl"
+corpus = "sanitise"
+worktree = { repo = "f-no-upstream", path = "$F/no-upstream" }
+covers = ["sanitise: prompt"]
+expect = { title = "Sweep red logs", title_kind = "custom", last_prompt = "abc d efred", branch = "main", cwd = "$F/no-upstream", message_count = 1, started_at = "2026-09-25T13:06:00Z", ended_at = "2026-09-25T13:06:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00005-0000-4000-8000-000000000006","timestamp":"2026-09-25T13:06:00.000Z","cwd":"$F/no-upstream","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"a\u0007b\u007fc\nd\te\u200f\u2060\ufeff\u00adf\u001b[31mred\u001b[0m"}}',
+  '{"type":"custom-title","sessionId":"c1a00005-0000-4000-8000-000000000006","customTitle":"Sweep\u001b[31m red\u001b[0m\u200b logs"}',
+  '{"type":"assistant","sessionId":"c1a00005-0000-4000-8000-000000000006","timestamp":"2026-09-25T13:06:30.000Z","cwd":"$F/no-upstream","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+# -- corpus shell --
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000001"
+project_dir = "shell-01"
+file = "c1a00006-0000-4000-8000-000000000001.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell wt space" }
+covers = ["shell: path space"]
+expect = { title = "resume work in wt-space", title_kind = "prompt", last_prompt = "resume work in wt-space", branch = "wt-space", cwd = "$F/shell wt space", message_count = 1, started_at = "2026-09-26T15:01:00Z", ended_at = "2026-09-26T15:01:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000001","timestamp":"2026-09-26T15:01:00.000Z","cwd":"$F/shell wt space","gitBranch":"wt-space","isSidechain":false,"message":{"role":"user","content":"resume work in wt-space"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000001","timestamp":"2026-09-26T15:01:30.000Z","cwd":"$F/shell wt space","gitBranch":"wt-space","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000002"
+project_dir = "shell-02"
+file = "c1a00006-0000-4000-8000-000000000002.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell-wt$dollar" }
+covers = ["shell: path dollar"]
+expect = { title = "resume work in wt-dollar", title_kind = "prompt", last_prompt = "resume work in wt-dollar", branch = "wt-dollar", cwd = "$F/shell-wt$dollar", message_count = 1, started_at = "2026-09-26T15:02:00Z", ended_at = "2026-09-26T15:02:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000002","timestamp":"2026-09-26T15:02:00.000Z","cwd":"$F/shell-wt$dollar","gitBranch":"wt-dollar","isSidechain":false,"message":{"role":"user","content":"resume work in wt-dollar"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000002","timestamp":"2026-09-26T15:02:30.000Z","cwd":"$F/shell-wt$dollar","gitBranch":"wt-dollar","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000003"
+project_dir = "shell-03"
+file = "c1a00006-0000-4000-8000-000000000003.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell-wt`tick" }
+covers = ["shell: path backtick"]
+expect = { title = "resume work in wt-tick", title_kind = "prompt", last_prompt = "resume work in wt-tick", branch = "wt-tick", cwd = "$F/shell-wt`tick", message_count = 1, started_at = "2026-09-26T15:03:00Z", ended_at = "2026-09-26T15:03:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000003","timestamp":"2026-09-26T15:03:00.000Z","cwd":"$F/shell-wt`tick","gitBranch":"wt-tick","isSidechain":false,"message":{"role":"user","content":"resume work in wt-tick"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000003","timestamp":"2026-09-26T15:03:30.000Z","cwd":"$F/shell-wt`tick","gitBranch":"wt-tick","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000004"
+project_dir = "shell-04"
+file = "c1a00006-0000-4000-8000-000000000004.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell-wt;semi" }
+covers = ["shell: path semicolon"]
+expect = { title = "resume work in wt-semi", title_kind = "prompt", last_prompt = "resume work in wt-semi", branch = "wt-semi", cwd = "$F/shell-wt;semi", message_count = 1, started_at = "2026-09-26T15:04:00Z", ended_at = "2026-09-26T15:04:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000004","timestamp":"2026-09-26T15:04:00.000Z","cwd":"$F/shell-wt;semi","gitBranch":"wt-semi","isSidechain":false,"message":{"role":"user","content":"resume work in wt-semi"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000004","timestamp":"2026-09-26T15:04:30.000Z","cwd":"$F/shell-wt;semi","gitBranch":"wt-semi","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000005"
+project_dir = "shell-05"
+file = "c1a00006-0000-4000-8000-000000000005.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell-wt'quote" }
+covers = ["shell: path single quote"]
+expect = { title = "resume work in wt-quote", title_kind = "prompt", last_prompt = "resume work in wt-quote", branch = "wt-quote", cwd = "$F/shell-wt'quote", message_count = 1, started_at = "2026-09-26T15:05:00Z", ended_at = "2026-09-26T15:05:30Z" }
+lines = [
+  '''{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000005","timestamp":"2026-09-26T15:05:00.000Z","cwd":"$F/shell-wt'quote","gitBranch":"wt-quote","isSidechain":false,"message":{"role":"user","content":"resume work in wt-quote"}}''',
+  '''{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000005","timestamp":"2026-09-26T15:05:30.000Z","cwd":"$F/shell-wt'quote","gitBranch":"wt-quote","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}''',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000006"
+project_dir = "shell-06"
+file = "c1a00006-0000-4000-8000-000000000006.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell-wt\nnewline" }
+covers = ["shell: path newline"]
+expect = { title = "resume work in wt-newline", title_kind = "prompt", last_prompt = "resume work in wt-newline", branch = "wt-newline", cwd = "$F/shell-wt\nnewline", message_count = 1, started_at = "2026-09-26T15:06:00Z", ended_at = "2026-09-26T15:06:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000006","timestamp":"2026-09-26T15:06:00.000Z","cwd":"$F/shell-wt\nnewline","gitBranch":"wt-newline","isSidechain":false,"message":{"role":"user","content":"resume work in wt-newline"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000006","timestamp":"2026-09-26T15:06:30.000Z","cwd":"$F/shell-wt\nnewline","gitBranch":"wt-newline","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000007"
+project_dir = "shell-07"
+file = "c1a00006-0000-4000-8000-000000000007.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell" }
+covers = ["shell: branch command substitution"]
+expect = { title = "resume in the hostile branch repo", title_kind = "prompt", last_prompt = "resume in the hostile branch repo", branch = "$(true>marker-rc)", cwd = "$F/shell", message_count = 1, started_at = "2026-09-26T15:07:00Z", ended_at = "2026-09-26T15:07:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000007","timestamp":"2026-09-26T15:07:00.000Z","cwd":"$F/shell","gitBranch":"$(true>marker-rc)","isSidechain":false,"message":{"role":"user","content":"resume in the hostile branch repo"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000007","timestamp":"2026-09-26T15:07:30.000Z","cwd":"$F/shell","gitBranch":"$(true>marker-rc)","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+[[claude]]
+id = "c1a00006-0000-4000-8000-000000000008"
+project_dir = "shell-08"
+file = "c1a00006-0000-4000-8000-000000000008.jsonl"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell" }
+covers = ["shell: branch command substitution"]
+expect = { title = "resume in the hostile branch repo", title_kind = "prompt", last_prompt = "resume in the hostile branch repo", branch = "$(touch marker-rc)", cwd = "$F/shell", message_count = 1, started_at = "2026-09-26T15:08:00Z", ended_at = "2026-09-26T15:08:30Z" }
+lines = [
+  '{"type":"user","sessionId":"c1a00006-0000-4000-8000-000000000008","timestamp":"2026-09-26T15:08:00.000Z","cwd":"$F/shell","gitBranch":"$(touch marker-rc)","isSidechain":false,"message":{"role":"user","content":"resume in the hostile branch repo"}}',
+  '{"type":"assistant","sessionId":"c1a00006-0000-4000-8000-000000000008","timestamp":"2026-09-26T15:08:30.000Z","cwd":"$F/shell","gitBranch":"$(touch marker-rc)","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+]
+
+# ---- Codex thread database rows: [[codex_thread]] (bodies are the linked [[codex_rollout]] rows) ----
+
+[[codex_thread]]
+id = "c0d00004-0000-4000-8000-000000000001"
+created_at = 1790436000
+updated_at = 1790437200
+source = "cli"
+cwd = "$F/shell wt space"
+title = "Resume in the space path"
+git_branch = "wt-space"
+archived = false
+first_user_message = "resume the codex work in the space path"
+corpus = "shell"
+worktree = { repo = "f-shell", path = "$F/shell wt space" }
+covers = ["shell: path space"]
+expect = { title = "Resume in the space path", title_kind = "thread", branch = "wt-space", cwd = "$F/shell wt space", message_count = 0, started_at = "2026-09-26T15:20:00Z", ended_at = "2026-09-26T15:40:00Z" }
+
+[[codex_thread]]
+id = "c0d00001-0000-4000-8000-000000000001"
+rollout_id = "c0d00001-0000-4000-8000-000000000001"
+created_at = 1790521200
+updated_at = 1790524800
+source = "cli"
+cwd = "$F/normal"
+title = "Normal repo cleanup"
+git_branch = "main"
+archived = false
+first_user_message = "please clean up the normal repo"
+corpus = "matching"
+worktree = { repo = "f-normal", path = "$F/normal" }
+covers = ["matching: older_sessions"]
+expect = { title = "Normal repo cleanup", title_kind = "thread", last_prompt = "now run the tests", branch = "main", cwd = "$F/normal", message_count = 2, started_at = "2026-09-27T15:00:00Z", ended_at = "2026-09-27T16:00:00Z" }
+
+[[codex_thread]]
+id = "c0d00001-0000-4000-8000-000000000002"
+rollout_id = "c0d00001-0000-4000-8000-000000000002"
+created_at = 1790416800
+updated_at = 1790420400
+source = "cli"
+cwd = "$F/linked-wt"
+title = ""
+git_branch = "feat-linked"
+archived = false
+first_user_message = "extend the linked feature"
+corpus = "matching"
+worktree = { repo = "f-linked", path = "$F/linked-wt" }
+expect = { title = "extend the linked feature", title_kind = "prompt", last_prompt = "extend the linked feature", branch = "feat-linked", cwd = "$F/linked-wt", message_count = 1, started_at = "2026-09-26T10:00:00Z", ended_at = "2026-09-26T11:00:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000001"
+rollout_id = "c0d00002-0000-4000-8000-000000000001"
+created_at = 1790326800
+updated_at = 1790329200
+source = "cli"
+cwd = "$F/untracked"
+title = "Refactor session loader"
+git_branch = "main"
+archived = false
+first_user_message = "please look at the session loader code"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: title kind thread", "codex: rollout user_message events"]
+expect = { title = "Refactor session loader", title_kind = "thread", last_prompt = "split out the parsing step", branch = "main", cwd = "$F/untracked", message_count = 2, started_at = "2026-09-25T09:00:00Z", ended_at = "2026-09-25T09:40:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000002"
+created_at = 1790327100
+updated_at = 1790327700
+source = "cli"
+cwd = "$F/untracked"
+title = "Spawned helper"
+git_branch = "main"
+archived = false
+first_user_message = "help the parent thread"
+spawn_parent = "c0d00002-0000-4000-8000-000000000001"
+corpus = "codex_rules"
+covers = ["codex: spawn-edge child"]
+excluded = "child: thread_spawn_edges.child_thread_id"
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000003"
+created_at = 1790327160
+updated_at = 1790327760
+source = "{\"subagent\":\"review\"}"
+cwd = "$F/untracked"
+title = "Review helper"
+git_branch = "main"
+archived = false
+first_user_message = "review the parent's diff"
+corpus = "codex_rules"
+covers = ["codex: source subagent child"]
+excluded = "child: source column is JSON with key subagent"
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000004"
+rollout_id = "c0d00002-0000-4000-8000-000000000004"
+created_at = 1790327220
+updated_at = 1790327820
+source = "cli"
+cwd = "$F/untracked"
+title = "Rollout child"
+git_branch = "main"
+archived = false
+first_user_message = "child by parent_thread_id"
+corpus = "codex_rules"
+covers = ["codex: parent_thread_id child"]
+excluded = "child: rollout session_meta.payload.parent_thread_id"
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000005"
+rollout_id = "c0d00002-0000-4000-8000-000000000005"
+created_at = 1790236800
+updated_at = 1790238600
+source = "cli"
+cwd = "$F/untracked"
+title = "Spike archive notes"
+git_branch = "spike"
+archived = true
+first_user_message = "archive the old spike branch"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: archived thread", "codex: rollout in archived_sessions"]
+expect = { title = "Spike archive notes", title_kind = "thread", last_prompt = "archive the old spike branch", branch = "spike", cwd = "$F/untracked", message_count = 1, started_at = "2026-09-24T08:00:00Z", ended_at = "2026-09-24T08:30:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000006"
+created_at = 1790330400
+updated_at = 1790331000
+source = "cli"
+cwd = "$F/untracked"
+title = ""
+git_branch = ""
+archived = false
+first_user_message = "tidy the changelog <system-reminder>ignore this</system-reminder>"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: empty title"]
+expect = { title = "tidy the changelog", title_kind = "prompt", cwd = "$F/untracked", message_count = 0, started_at = "2026-09-25T10:00:00Z", ended_at = "2026-09-25T10:10:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000007"
+created_at = 1790331600
+updated_at = 1790332200
+source = "cli"
+cwd = "$F/untracked"
+title = "add retry logic to fetch"
+git_branch = "feat-retry"
+archived = false
+first_user_message = "add retry logic to fetch"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: title equals first_user_message"]
+expect = { title = "add retry logic to fetch", title_kind = "prompt", branch = "feat-retry", cwd = "$F/untracked", message_count = 0, started_at = "2026-09-25T10:20:00Z", ended_at = "2026-09-25T10:30:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000008"
+created_at = 1790332800
+updated_at = 1790333400
+source = "cli"
+cwd = "$F/untracked"
+title = "migrate the billing tab…"
+git_branch = "main"
+archived = false
+first_user_message = "migrate the billing table to the new schema"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: title equals first_user_message"]
+expect = { title = "migrate the billing tab…", title_kind = "prompt", branch = "main", cwd = "$F/untracked", message_count = 0, started_at = "2026-09-25T10:40:00Z", ended_at = "2026-09-25T10:50:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-000000000009"
+created_at = 1790334000
+updated_at = 1790334600
+source = "cli"
+cwd = "$F/untracked"
+title = "investigate-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-end"
+git_branch = "main"
+archived = false
+first_user_message = "look into the slow query"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: title kind thread"]
+expect = { title = "investigate-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowque…", title_kind = "prompt", branch = "main", cwd = "$F/untracked", message_count = 0, started_at = "2026-09-25T11:00:00Z", ended_at = "2026-09-25T11:10:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-00000000000a"
+rollout_id = "c0d00002-0000-4000-8000-00000000000a"
+created_at = 1790335200
+updated_at = 1790337000
+source = "cli"
+cwd = "$F/untracked"
+title = "Wire codex fallback"
+git_branch = ""
+archived = false
+first_user_message = "wire the codex fallback path"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: empty git_branch with rollout branch"]
+expect = { title = "Wire codex fallback", title_kind = "thread", last_prompt = "check the fallback branch", branch = "feature/codex-x", cwd = "$F/untracked", message_count = 1, started_at = "2026-09-25T11:20:00Z", ended_at = "2026-09-25T11:50:00Z" }
+
+[[codex_thread]]
+id = "c0d00002-0000-4000-8000-00000000000b"
+rollout_id = "c0d00002-0000-4000-8000-00000000000b"
+rollout_path = "$EXT/outside-codex/rollout-2026-09-25T12-00-00-c0d00002-0000-4000-8000-00000000000b.jsonl"
+created_at = 1790337600
+updated_at = 1790338200
+source = "cli"
+cwd = "$F/untracked"
+title = "Outside rollout"
+git_branch = "main"
+archived = false
+first_user_message = "read the outside rollout"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout_path outside CODEX_HOME"]
+expect = { title = "Outside rollout", title_kind = "thread", branch = "main", cwd = "$F/untracked", message_count = 0, started_at = "2026-09-25T12:00:00Z", ended_at = "2026-09-25T12:10:00Z" }
+
+# ---- Codex rollouts: [[codex_rollout]] (thread bodies and standalone fallback-mode files) ----
+
+[[codex_rollout]]
+id = "c0d00001-0000-4000-8000-000000000001"
+file = "sessions/2026/09/27/rollout-2026-09-27T15-00-00-c0d00001-0000-4000-8000-000000000001.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-normal", path = "$F/normal" }
+expect = { title = "please clean up the normal repo", title_kind = "prompt", last_prompt = "now run the tests", branch = "main", cwd = "$F/normal", message_count = 2, started_at = "2026-09-27T15:00:00.117Z", ended_at = "2026-09-27T15:30:00Z" }
+lines = [
+  '{"timestamp":"2026-09-27T15:00:00.532Z","type":"session_meta","payload":{"id":"c0d00001-0000-4000-8000-000000000001","timestamp":"2026-09-27T15:00:00.117Z","cwd":"$F/normal","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-27T15:00:01.000Z","type":"turn_context","payload":{"cwd":"$F/normal","model":"fixture-model"}}',
+  '{"timestamp":"2026-09-27T15:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"please clean up the normal repo"}}',
+  '{"timestamp":"2026-09-27T15:30:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"now run the tests"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00001-0000-4000-8000-000000000002"
+file = "sessions/2026/09/26/rollout-2026-09-26T10-00-00-c0d00001-0000-4000-8000-000000000002.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-linked", path = "$F/linked-wt" }
+expect = { title = "extend the linked feature", title_kind = "prompt", last_prompt = "extend the linked feature", branch = "feat-linked", cwd = "$F/linked-wt", message_count = 1, started_at = "2026-09-26T10:00:00.213Z", ended_at = "2026-09-26T10:00:05Z" }
+lines = [
+  '{"timestamp":"2026-09-26T10:00:00.411Z","type":"session_meta","payload":{"id":"c0d00001-0000-4000-8000-000000000002","timestamp":"2026-09-26T10:00:00.213Z","cwd":"$F/linked-wt","git":{"branch":"feat-linked","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-26T10:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"extend the linked feature"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000001"
+file = "sessions/2026/09/25/rollout-2026-09-25T09-00-00-c0d00002-0000-4000-8000-000000000001.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout user_message events"]
+expect = { title = "please look at the session loader code", title_kind = "prompt", last_prompt = "split out the parsing step", branch = "main", cwd = "$F/untracked", message_count = 2, started_at = "2026-09-25T09:00:00.117Z", ended_at = "2026-09-25T09:20:00Z" }
+lines = [
+  '{"timestamp":"2026-09-25T09:00:00.513Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000001","timestamp":"2026-09-25T09:00:00.117Z","cwd":"$F/untracked","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-25T09:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"please look at the session loader code"}}',
+  '{"timestamp":"2026-09-25T09:10:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"<environment_context>filtered to nothing</environment_context>"}}',
+  '{"timestamp":"2026-09-25T09:20:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"split out the parsing step<task-notification>hidden</task-notification>"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000004"
+file = "sessions/2026/09/25/rollout-2026-09-25T09-07-00-c0d00002-0000-4000-8000-000000000004.jsonl"
+corpus = "codex_rules"
+covers = ["codex: parent_thread_id child"]
+excluded = "child: parent_thread_id set (fallback mode too)"
+lines = [
+  '{"timestamp":"2026-09-25T09:07:00.513Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000004","timestamp":"2026-09-25T09:07:00.117Z","cwd":"$F/untracked","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"},"parent_thread_id":"c0d00002-0000-4000-8000-000000000001"}}',
+  '{"timestamp":"2026-09-25T09:07:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"child by parent_thread_id"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000005"
+file = "archived_sessions/rollout-2026-09-24T08-00-00-c0d00002-0000-4000-8000-000000000005.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout in archived_sessions"]
+expect = { title = "archive the old spike branch", title_kind = "prompt", last_prompt = "archive the old spike branch", branch = "spike", cwd = "$F/untracked", message_count = 1, started_at = "2026-09-24T08:00:00.117Z", ended_at = "2026-09-24T08:10:00Z" }
+lines = [
+  '{"timestamp":"2026-09-24T08:00:00.513Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000005","timestamp":"2026-09-24T08:00:00.117Z","cwd":"$F/untracked","git":{"branch":"spike","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-24T08:10:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"archive the old spike branch"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-00000000000a"
+file = "sessions/2026/09/25/rollout-2026-09-25T11-20-00-c0d00002-0000-4000-8000-00000000000a.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+expect = { title = "check the fallback branch", title_kind = "prompt", last_prompt = "check the fallback branch", branch = "feature/codex-x", cwd = "$F/untracked", message_count = 1, started_at = "2026-09-25T11:20:00.117Z", ended_at = "2026-09-25T11:20:10Z" }
+lines = [
+  '{"timestamp":"2026-09-25T11:20:00.513Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-00000000000a","timestamp":"2026-09-25T11:20:00.117Z","cwd":"$F/untracked","git":{"branch":"feature/codex-x","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-25T11:20:10.000Z","type":"event_msg","payload":{"type":"user_message","message":"check the fallback branch"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-00000000000b"
+file = "$EXT/outside-codex/rollout-2026-09-25T12-00-00-c0d00002-0000-4000-8000-00000000000b.jsonl"
+corpus = "codex_rules"
+covers = ["codex: rollout_path outside CODEX_HOME"]
+excluded = "outside CODEX_HOME: fallback mode never scans it"
+lines = [
+  '{"timestamp":"2026-09-25T12:00:00.513Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-00000000000b","timestamp":"2026-09-25T12:00:00.117Z","cwd":"$F/untracked","git":{"branch":"elsewhere","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-25T12:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"this prompt must not be read"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000101"
+file = "sessions/2026/09/24/rollout-2026-09-24T10-00-00-c0d00002-0000-4000-8000-000000000101.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout user_message events", "codex: database absent fallback"]
+expect = { title = "fix the flaky test", title_kind = "prompt", last_prompt = "run it 20 times", branch = "main", cwd = "$F/untracked/sub", message_count = 2, started_at = "2026-09-24T10:00:00.513Z", ended_at = "2026-09-24T10:05:00Z" }
+lines = [
+  '{"timestamp":"2026-09-24T10:00:00.532Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000101","timestamp":"2026-09-24T10:00:00.513Z","cwd":"$F/untracked","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-24T10:00:01.000Z","type":"turn_context","payload":{"cwd":"$F/untracked/sub","model":"fixture-model"}}',
+  '{"timestamp":"2026-09-24T10:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"fix the flaky test"}}',
+  '{"timestamp":"2026-09-24T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"response item text is ignored here"}]}}',
+  '{"timestamp":"2026-09-24T10:03:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"<user_instructions>filtered to nothing</user_instructions>"}}',
+  '{"timestamp":"2026-09-24T10:05:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"run it 20 times <system-reminder>hidden</system-reminder>"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000102"
+file = "sessions/2026/09/24/rollout-2026-09-24T11-00-00-c0d00002-0000-4000-8000-000000000102.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout without user_message", "codex: rollout injection then user blocks"]
+expect = { title = "actual ask", title_kind = "prompt", last_prompt = "follow up ask more detail", cwd = "$F/untracked", message_count = 2, started_at = "2026-09-24T11:00:00.513Z", ended_at = "2026-09-24T11:05:00Z" }
+lines = [
+  '{"timestamp":"2026-09-24T11:00:00.532Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000102","timestamp":"2026-09-24T11:00:00.513Z","cwd":"$F/untracked"}}',
+  '{"timestamp":"2026-09-24T11:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd is elsewhere</environment_context>"},{"type":"input_text","text":"actual ask"}]}}',
+  '{"timestamp":"2026-09-24T11:00:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"input_text","text":"ack"}]}}',
+  '{"timestamp":"2026-09-24T11:00:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>never a prompt</user_instructions>"}]}}',
+  '{"timestamp":"2026-09-24T11:05:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"follow up ask"},{"type":"input_text","text":"more detail"}]}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000103"
+file = "archived_sessions/rollout-2026-09-23T09-00-00-c0d00002-0000-4000-8000-000000000103.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: rollout in archived_sessions"]
+expect = { title = "shelve the experiment", title_kind = "prompt", last_prompt = "shelve the experiment", branch = "exp/shelf", cwd = "$F/untracked", message_count = 1, started_at = "2026-09-23T09:00:00.513Z", ended_at = "2026-09-23T09:00:10Z" }
+lines = [
+  '{"timestamp":"2026-09-23T09:00:00.532Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000103","timestamp":"2026-09-23T09:00:00.513Z","cwd":"$F/untracked","git":{"branch":"exp/shelf","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-23T09:00:10.000Z","type":"event_msg","payload":{"type":"user_message","message":"shelve the experiment"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000104"
+file = "sessions/2026/09/23/rollout-2026-09-23T10-00-00-c0d00002-0000-4000-8000-000000000104.jsonl"
+corpus = "codex_rules"
+worktree = { repo = "f-untracked", path = "$F/untracked" }
+covers = ["codex: second session_meta"]
+expect = { title = "first meta wins", title_kind = "prompt", last_prompt = "after the second meta", branch = "main", cwd = "$F/untracked", message_count = 2, started_at = "2026-09-23T10:00:00.513Z", ended_at = "2026-09-23T10:00:20Z" }
+lines = [
+  '{"timestamp":"2026-09-23T10:00:00.532Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000104","timestamp":"2026-09-23T10:00:00.513Z","cwd":"$F/untracked","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-23T10:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"first meta wins"}}',
+  '{"timestamp":"2026-09-23T10:00:10.000Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-0000000001ff","timestamp":"2026-09-23T10:00:09.513Z","cwd":"$F/untracked/other","git":{"branch":"other","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-23T10:00:20.000Z","type":"event_msg","payload":{"type":"user_message","message":"after the second meta"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00002-0000-4000-8000-000000000105"
+file = "sessions/2026/09/23/rollout-2026-09-23T11-00-00-c0d00002-0000-4000-8000-000000000105.jsonl"
+corpus = "codex_rules"
+covers = ["codex: parent_thread_id child"]
+excluded = "child: parent_thread_id set"
+lines = [
+  '{"timestamp":"2026-09-23T11:00:00.532Z","type":"session_meta","payload":{"id":"c0d00002-0000-4000-8000-000000000105","timestamp":"2026-09-23T11:00:00.513Z","cwd":"$F/untracked","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"},"parent_thread_id":"c0d00002-0000-4000-8000-000000000001"}}',
+  '{"timestamp":"2026-09-23T11:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"standalone child prompt"}}',
+]
+
+[[codex_rollout]]
+id = "c0d00003-0000-4000-8000-000000000001"
+file = "sessions/2026/09/27/rollout-2026-09-27T09-00-00-c0d00003-0000-4000-8000-000000000001.jsonl"
+corpus = "incremental"
+worktree = { repo = "f-ahead-behind", path = "$F/ahead-behind" }
+covers = ["codex: rollout in archived_sessions"]
+expect = { title = "start the rollout case", title_kind = "prompt", last_prompt = "append one event", branch = "main", cwd = "$F/ahead-behind", message_count = 2, started_at = "2026-09-27T09:00:00.513Z", ended_at = "2026-09-27T09:01:00Z" }
+lines = [
+  '{"timestamp":"2026-09-27T09:00:00.532Z","type":"session_meta","payload":{"id":"c0d00003-0000-4000-8000-000000000001","timestamp":"2026-09-27T09:00:00.513Z","cwd":"$F/ahead-behind","git":{"branch":"main","commit_hash":"0000000000000000000000000000000000000000","repository_url":"https://example.test/fixture.git"}}}',
+  '{"timestamp":"2026-09-27T09:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"start the rollout case"}}',
+]
+
+[[codex_rollout.steps]]
+op = "append"
+lines = [
+  '{"timestamp":"2026-09-27T09:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"append one event"}}',
+]
+then_scan = true
+expect = { records = 1, offset = 565, sessions = 1, vanished = 0, message_count = 2 }
+
+[[codex_rollout.steps]]
+op = "move"
+to = "archived_sessions/rollout-2026-09-27T09-00-00-c0d00003-0000-4000-8000-000000000001.jsonl"
+then_scan = true
+expect = { records = 0, offset = 565, sessions = 1, vanished = 0, message_count = 2 }
+
+
+# ============================== big log, matching, perf, mcp_200 ==============================
+
+# 64 MiB on one line, for P33's peak-RSS check (< 48 MB).
+[[big_log]]
+source = "claude"
+bytes = 67_108_864
+single_line = true
+
+# Counted over corpus = "matching" only (20 sessions): 16 matched to a worktree, 4 unmatched. See "Matching corpus" above.
+[matching]
+matched = 16
+non_repo = 1
+path_gone = 1
+outside_root = 2
+
+# P40 corpus: 50 repos (20 of them linked worktrees), 5,000 synthetic logs, about 500 MB.
+[perf]
+repos = 50
+linked_worktrees = 20
+logs = 5000
+bytes = 500_000_000
+
+# P34: 200 Claude sessions in root F worktrees; the tools' answers must be truncated to 16 KiB.
+[mcp_200]
+sessions = 200
+
+# ============================== [demo] (vhs demo sessions; no corpus) ==============================
+
+[demo]
+repos = ["demo-api", "demo-web", "demo-docs", "demo-infra"]
+
+[[demo.claude]]
+id = "c1a00007-0000-4000-8000-000000000001"
+project_dir = "demo-01"
+file = "c1a00007-0000-4000-8000-000000000001.jsonl"
+lines = [
+  '{"type":"user","sessionId":"c1a00007-0000-4000-8000-000000000001","timestamp":"2026-09-28T09:00:00.000Z","cwd":"$DEMO/api-gateway","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"the retry test is flaky, find out why"}}',
+  '{"type":"assistant","sessionId":"c1a00007-0000-4000-8000-000000000001","timestamp":"2026-09-28T09:00:40.000Z","cwd":"$DEMO/api-gateway","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}',
+  '{"type":"custom-title","sessionId":"c1a00007-0000-4000-8000-000000000001","customTitle":"Fix flaky retry test"}',
+  '{"type":"last-prompt","sessionId":"c1a00007-0000-4000-8000-000000000001","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":"now run it 20 times"}',
+]
+
+[[demo.claude]]
+id = "c1a00007-0000-4000-8000-000000000002"
+project_dir = "demo-02"
+file = "c1a00007-0000-4000-8000-000000000002.jsonl"
+lines = [
+  '{"type":"user","sessionId":"c1a00007-0000-4000-8000-000000000002","timestamp":"2026-09-27T11:00:00.000Z","cwd":"$DEMO/api-gateway-retry","gitBranch":"fix/retry-backoff","isSidechain":false,"message":{"role":"user","content":"add exponential backoff to the retry loop"}}',
+  '{"type":"assistant","sessionId":"c1a00007-0000-4000-8000-000000000002","timestamp":"2026-09-27T11:00:40.000Z","cwd":"$DEMO/api-gateway-retry","gitBranch":"fix/retry-backoff","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}',
+  '{"type":"ai-title","sessionId":"c1a00007-0000-4000-8000-000000000002","aiTitle":"Add retry backoff"}',
+]
+
+[[demo.claude]]
+id = "c1a00007-0000-4000-8000-000000000003"
+project_dir = "demo-03"
+file = "c1a00007-0000-4000-8000-000000000003.jsonl"
+lines = [
+  '{"type":"user","sessionId":"c1a00007-0000-4000-8000-000000000003","timestamp":"2026-09-26T14:00:00.000Z","cwd":"$DEMO/web-app","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"sketch the layout for the new dashboard"}}',
+  '{"type":"assistant","sessionId":"c1a00007-0000-4000-8000-000000000003","timestamp":"2026-09-26T14:00:40.000Z","cwd":"$DEMO/web-app","gitBranch":"main","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}',
+  '{"type":"ai-title","sessionId":"c1a00007-0000-4000-8000-000000000003","aiTitle":"Dashboard layout"}',
+]
+
+[[demo.claude]]
+id = "c1a00007-0000-4000-8000-000000000004"
+project_dir = "demo-04"
+file = "c1a00007-0000-4000-8000-000000000004.jsonl"
+lines = [
+  '{"type":"user","sessionId":"c1a00007-0000-4000-8000-000000000004","timestamp":"2026-09-27T16:00:00.000Z","cwd":"$DEMO/web-app-nav","gitBranch":"feat-nav","isSidechain":false,"message":{"role":"user","content":"build the nav component with keyboard support"}}',
+  '{"type":"assistant","sessionId":"c1a00007-0000-4000-8000-000000000004","timestamp":"2026-09-27T16:00:40.000Z","cwd":"$DEMO/web-app-nav","gitBranch":"feat-nav","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}',
+  '{"type":"custom-title","sessionId":"c1a00007-0000-4000-8000-000000000004","customTitle":"Build the nav component"}',
+  '{"type":"last-prompt","sessionId":"c1a00007-0000-4000-8000-000000000004","leafUuid":"00000000-0000-4000-8000-00000000beef","lastPrompt":"wire up the arrow keys"}',
+]
+
+[[demo.codex_thread]]
+id = "c0d00005-0000-4000-8000-000000000001"
+created_at = 1790496000
+updated_at = 1790501400
+source = "cli"
+cwd = "$DEMO/web-app-nav"
+title = "Audit dark mode"
+git_branch = "feat-nav"
+archived = false
+first_user_message = "audit the dark mode colours"
+
+[[demo.codex_thread]]
+id = "c0d00005-0000-4000-8000-000000000002"
+created_at = 1790341200
+updated_at = 1790344800
+source = "cli"
+cwd = "$DEMO/infra"
+title = "Rotate the staging config"
+git_branch = "main"
+archived = false
+first_user_message = "rotate the staging config values"
+
