@@ -224,7 +224,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Expected test outputs:** `python3 scripts/check-manifest.py sessions` → `ok`.
 
 ## Phase 07b — Manifest, part 3: revision 12 hostile fixtures *(after P08)*
-**Files:** `tests/fixtures/MANIFEST.toml` (edit), `scripts/check-manifest.py` (edit: bullet list only).
+**Files:** `tests/fixtures/MANIFEST.toml` (edit), `scripts/check-manifest.py` (edit: bullet list and `special` enum only).
 **Changes:** add `"hostile: index-bombs"`, `"hostile: index-deep-ok"`, `"hostile: nested-probe"`, `"hostile: exec-type"`, `"hostile: big-tracked"`, `"hostile: pattern-blob-bomb"`, `"hostile: rename-bomb"` to the checker's hard-coded list first (checker red), then the `[[repo]]` entries under root `H` per spec §10.2 revision 12 (six `index-bombs` repos, two `index-deep-ok`, both `exec-type`, both `pattern-blob-bomb`), with `special` values added to the enum and the header comment; `in_clean = false` for all of them.
 **Acceptance criteria:**
 - [ ] With only the checker edit applied, `python3 scripts/check-manifest.py git` exits non-zero naming the seven new bullets; with the manifest entries, it prints `ok`.
@@ -351,7 +351,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 **Files:** `crates/rollcall-git/src/open.rs`, `crates/rollcall-git/src/trust.rs`.
 **Changes:** spec §4.4 revision 12: `sharedindex.*` on the pre-open list; pattern-file caps 256 KiB (`info/exclude`, `info/attributes`, worktree-root `.gitignore` / `.gitattributes`, the user's excludes file); index validation (streamed iterative parse of each `index` and linked `sharedindex.*`, versions 2/3/4, `TREE` / `UNTR` depth ≤ 1,024, `REUC` ≤ 1 MiB, no chained `link`); override `core.bigFileThreshold=1m` at open.
 **Acceptance criteria:**
-- [ ] Hand-built index bytes (valid checksum) each → `untrusted git dir`: `TREE` depth 1,025; `UNTR` depth 1,025; `REUC` 2 MiB; entry past EOF; name > 4,096 bytes; `link` → FIFO `sharedindex` (watchdog, no block); `link` → symlinked `sharedindex`; chained `link`. Depth exactly 1,024 in a v2 and a v4 index → ok. A real-git index with `TREE`, `REUC` (from a conflicted merge) and `UNTR` (`core.untrackedCache=true`) → ok.
+- [ ] Hand-built index bytes (valid checksum) each → `untrusted git dir`: `TREE` depth 1,025; `UNTR` depth 1,025; `REUC` 2 MiB; entry past EOF; name > 4,096 bytes; `link` → FIFO `sharedindex` (watchdog, no block); `link` → symlinked `sharedindex`; chained `link`. Depth exactly 1,024 in a v2 and a v4 index → ok. A real-git `git update-index --split-index` repo → ok. A real-git index with `TREE`, `REUC` (from a conflicted merge) and `UNTR` (`core.untrackedCache=true`) → ok.
 - [ ] Each pattern file at 256 KiB → ok, 256 KiB + 1 → untrusted; a `sharedindex.x` symlink → untrusted.
 - [ ] After open, the resolved `core.bigFileThreshold` is 1 MiB when the repo-local config sets `0` and when it sets `1g`.
 **Expected test outputs:** `cargo test -p rollcall-git --locked -- open:: trust::` → ≥ 20 more passed than before this phase.
@@ -366,7 +366,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] Forced `Trust::Reduced` → `upstream` / `ahead` / `behind` null; a corrupted commit-graph chain does not change `ahead` / `behind`.
 - [ ] 10,001 commits (`git fast-import`) → `ahead = 10000` and walked-commit counter ≤ 10,001.
 - [ ] Squash-merged branch → `merged = false`.
-- [ ] Revision 12: untracked `sub/.git/HEAD` FIFO → `untracked_count` counts `sub` once, returns before the watchdog; a submodule's worktree files are not counted in the parent (equality with `git status --porcelain=v2 -uall` on both); 100755 entry over a symlink and over a FIFO → `git error: unsafe tracked file` (watchdog); a 300 MiB sparse tracked file under `core.autocrlf=true` + `* ident` → `dirty_count = 1` with peak RSS < 100 MB; a 300 KiB subdirectory `.gitattributes` blob, and eight 200 KiB skip-worktree `.gitignore` blobs → `git error: pattern files too large`; two 60 MiB one-byte-line blobs, staged `git mv` + edit → `dirty_count = 2` in < 10 s.
+- [ ] Revision 12: untracked `sub/.git/HEAD` FIFO → `untracked_count` counts `sub` once, returns before the watchdog (no git oracle: real git blocks on that FIFO); an untracked nested repo with a regular `HEAD`, and a submodule's worktree files, are counted as `git status --porcelain=v2 -uall` counts them; 100755 entry over a symlink and over a FIFO → `git error: unsafe tracked file` (watchdog); a 300 MiB sparse tracked file under `core.autocrlf=true` + `* ident` → `dirty_count = 1` with a `#[cfg(test)]` read counter in rollcall's `CompareBlobs` at 0 (RSS is gated in P35); a 300 KiB subdirectory `.gitattributes` blob, and eight 200 KiB skip-worktree `.gitignore` blobs → `git error: pattern files too large`; two 60 MiB one-byte-line blobs, staged `git mv` + edit → `dirty_count = 2` in < 10 s.
 **Expected test outputs:** `cargo test -p rollcall-git --locked -- state::` → ≥ 24 passed.
 
 ## Phase 21 — `discover` / `repo_state` entry points and deadline
