@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use gix::bstr::BString;
 use rollcall_core::GitOptions;
 
 use crate::classify::{GitFile, resolve_git_file};
@@ -28,18 +29,29 @@ const ALLOC_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 const BIG_FILE_THRESHOLD: &str = "1m";
 
 /// `Options::isolated()` (not just `Config::isolated()`, see the gix audit note N1) plus the
-/// open-time overrides. `forced_trust` exists only for tests; production always passes `None`
-/// so gix derives trust from ownership.
-fn hardened_options(forced_trust: Option<gix::sec::Trust>) -> gix::open::Options {
+/// open-time overrides. `index_file` is the absolute path of the opened git dir's `index`.
+/// `forced_trust` exists only for tests; production always passes `None` so gix derives trust
+/// from ownership.
+fn hardened_options(
+    index_file: &Path,
+    forced_trust: Option<gix::sec::Trust>,
+) -> gix::open::Options {
+    let mut index_override = BString::from("gitoxide.core.indexFile=");
+    index_override.extend_from_slice(gix::path::into_bstr(index_file).as_ref());
     let options = gix::open::Options::isolated()
         .open_path_as_is(true)
         .config_overrides([
-            "core.commitGraph=false".to_string(),
-            format!("gitoxide.objects.allocLimit={ALLOC_LIMIT_BYTES}"),
+            BString::from("core.commitGraph=false"),
+            format!("gitoxide.objects.allocLimit={ALLOC_LIMIT_BYTES}").into(),
             // Above this a blob is treated as binary and never loaded (rename similarity).
-            format!("core.bigFileThreshold={BIG_FILE_THRESHOLD}"),
+            format!("core.bigFileThreshold={BIG_FILE_THRESHOLD}").into(),
             // Keeps gix's index decode on the thread rollcall's own validation mirrors.
-            "index.threads=1".to_string(),
+            BString::from("index.threads=1"),
+            // The path keys a repo-local `gitoxide.*` section could point off the pre-open
+            // list (§4.4 gitoxide path keys); `shallow` is joined to the common dir.
+            BString::from("gitoxide.core.shallowFile=shallow"),
+            index_override,
+            BString::from("gitoxide.objects.replaceRefBase=refs/replace/"),
         ]);
     match forced_trust {
         Some(trust) => options.with(trust),
@@ -55,8 +67,11 @@ fn open_with(
 ) -> Result<gix::Repository, String> {
     let open_failed =
         |e: &dyn std::fmt::Display| format!("{OPEN_FAILED}{}: {e}", git_dir.display());
-    let mut repo =
-        gix::open_opts(git_dir, hardened_options(forced_trust)).map_err(|e| open_failed(&e))?;
+    let index_file = std::path::absolute(git_dir.join("index")).map_err(|e| open_failed(&e))?;
+    let mut repo = gix::open_opts(git_dir, hardened_options(&index_file, forced_trust))
+        .map_err(|e| open_failed(&e))?;
+    // A scan never needs objects written after open; a miss must not re-list packs.
+    repo.objects.refresh_never();
     let mut snapshot = repo.config_snapshot_mut();
     strip_dangerous_config(&mut snapshot);
     let excludes = opts
@@ -181,7 +196,9 @@ mod tests {
     use gix::status::plumbing::index_as_worktree_with_renames::{Entry, VisitEntry};
 
     use super::*;
-    use crate::testgit::{add_worktree, git, init_bare, init_repo, tempdir_real, within};
+    use crate::testgit::{
+        add_worktree, commit_file, git, init_bare, init_repo, tempdir_real, within,
+    };
 
     const UNTRUSTED: &str = "untrusted worktree path";
     const MARKER: &str = "marker-filter-x";
@@ -428,10 +445,82 @@ mod tests {
         }
     }
 
+    fn seed_hostile_path_keys(dir: &Path) {
+        for (key, value) in [
+            ("gitoxide.core.shallowFile", "/dev/zero"),
+            ("gitoxide.core.indexFile", "/dev/zero"),
+            ("gitoxide.objects.replaceRefBase", "objects/pack/"),
+            ("core.useReplaceRefs", "false"),
+        ] {
+            git(dir, &["config", key, value]);
+        }
+    }
+
+    #[test]
+    fn gitoxide_path_keys_are_pinned_whatever_the_repo_says() {
+        let (_t, base) = tempdir_real();
+        let repo_dir = base.join("r");
+        init_repo(&repo_dir);
+        seed_hostile_path_keys(&repo_dir);
+
+        let repo = open(&repo_dir.join(".git"), &benign(&base));
+
+        assert_eq!(repo.shallow_file(), repo.common_dir().join("shallow"));
+        assert_eq!(repo.index_path(), repo.git_dir().join("index"));
+        assert!(repo.index_path().is_absolute());
+        assert_eq!(
+            raw(&repo, "gitoxide.objects.replaceRefBase").as_deref(),
+            Some("refs/replace/")
+        );
+    }
+
+    #[test]
+    fn a_linked_worktrees_index_is_its_admin_dirs() {
+        let (_t, base) = tempdir_real();
+        let main = base.join("main");
+        let linked = base.join("wt");
+        init_repo(&main);
+        add_worktree(&main, &linked, "feature");
+        seed_hostile_path_keys(&main);
+        let admin = main.join(".git/worktrees/wt");
+
+        let repo = open(&admin, &benign(&base));
+
+        assert_eq!(repo.index_path(), admin.join("index"));
+        assert_eq!(repo.shallow_file(), repo.common_dir().join("shallow"));
+        assert_eq!(repo.common_dir().canonicalize().unwrap(), main.join(".git"));
+    }
+
+    #[test]
+    fn objects_written_after_open_are_not_found_but_earlier_ones_are() {
+        let (_t, base) = tempdir_real();
+        let repo_dir = base.join("r");
+        init_repo(&repo_dir);
+        git(&repo_dir, &["repack", "-q", "-a", "-d"]);
+        let head = git(&repo_dir, &["rev-parse", "HEAD"]);
+        let head = gix::ObjectId::from_hex(head.trim().as_bytes()).unwrap();
+        let repo = open(&repo_dir.join(".git"), &benign(&base));
+        assert!(repo.find_object(head).is_ok(), "present at open");
+
+        // Packed, not loose: a loose object is found by path whatever the refresh mode. A
+        // commit is reachable, so the incremental repack takes it into a new pack.
+        commit_file(&repo_dir, "later", "written after open\n", "later");
+        git(&repo_dir, &["repack", "-q", "-d"]);
+        let later = git(&repo_dir, &["rev-parse", "HEAD"]);
+        let later = gix::ObjectId::from_hex(later.trim().as_bytes()).unwrap();
+
+        assert!(repo.find_object(later).is_err(), "written after open");
+        assert!(repo.find_object(head).is_ok(), "still found");
+    }
+
     #[test]
     fn open_options_are_fully_isolated() {
         // Audit note N1: only `Options::isolated()` denies environment access.
-        assert!(hardened_options(None).permissions.is_isolated());
+        assert!(
+            hardened_options(Path::new("/index"), None)
+                .permissions
+                .is_isolated()
+        );
     }
 
     // ---- gix-level positive control -----------------------------------------------------

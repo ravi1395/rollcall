@@ -25,6 +25,8 @@ const INDEX_CAP: u64 = 256 * MIB;
 /// `refs/` entries (and all-caps pseudo-ref entries) examined per call before giving up.
 const MAX_REF_ENTRIES: usize = 10_000;
 const MAX_ALTERNATE_HOPS: usize = 8;
+/// Entries of one `objects/pack` that gix lists whole at open (§4.4, P15b U-15).
+const MAX_PACK_ENTRIES: usize = 10_000;
 
 /// Index extension caps and the nesting bound (§4.4 index validation, P15a U-4 / U-8).
 const TREE_EXT_CAP: u64 = 16 * MIB;
@@ -284,8 +286,33 @@ fn alternate_entries(bytes: &[u8], file: &Path) -> Result<Vec<PathBuf>, String> 
     Ok(entries)
 }
 
+/// Every entry of an object dir's `pack` must be a regular file, and there may be at most
+/// [`MAX_PACK_ENTRIES`]: gix lists the whole directory at open. Counts while reading, so the
+/// listing is never collected.
+fn check_pack_dir(objects: &Path) -> Result<(), String> {
+    let pack = objects.join("pack");
+    let Some(entries) = read_dir_opt(&pack)? else {
+        return Ok(());
+    };
+    for (seen, entry) in entries.enumerate() {
+        if seen >= MAX_PACK_ENTRIES {
+            return Err(format!(
+                "{UNTRUSTED_GIT_DIR}: {}: more than {MAX_PACK_ENTRIES} entries",
+                pack.display()
+            ));
+        }
+        let entry = entry.map_err(|e| untrusted(&pack, &e.to_string()))?;
+        let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if !is_file {
+            return Err(untrusted(&entry.path(), "not a regular file"));
+        }
+    }
+    Ok(())
+}
+
 /// Follows `objects/info/alternates` the way gix will (relative entries resolve against the
-/// root objects dir), checking each hop's `info/alternates`; the 9th hop is refused.
+/// root objects dir), checking each hop's `pack` dir and `info/alternates`; the 9th hop is
+/// refused.
 fn check_alternates_chain(common: &Path) -> Result<(), String> {
     let objects = common.join("objects");
     let mut visited = HashSet::new();
@@ -299,6 +326,7 @@ fn check_alternates_chain(common: &Path) -> Result<(), String> {
             if !visited.insert(real) {
                 continue;
             }
+            check_pack_dir(&dir)?;
             let file = dir.join("info/alternates");
             check_file(&file, SMALL_FILE_CAP)?;
             let bytes = match read_small_file(&file, SMALL_FILE_CAP) {
@@ -1092,6 +1120,95 @@ mod tests {
         .unwrap();
         let owned = dir.clone();
         assert!(within(move || check(&owned)).is_ok());
+    }
+
+    /// `(guard, git dir, pack dir)` for the repo's own object dir and for an alternate's.
+    fn pack_dirs() -> Vec<(tempfile::TempDir, PathBuf, PathBuf)> {
+        let (own_guard, own) = bare();
+        let own_pack = own.join("objects/pack");
+        let (alt_guard, via_alt) = alternates_chain(1);
+        let alt_pack = via_alt.parent().unwrap().join("alt1/pack");
+        vec![(own_guard, own, own_pack), (alt_guard, via_alt, alt_pack)]
+    }
+
+    fn fill_pack(pack: &Path, entries: usize) {
+        fs::create_dir_all(pack).unwrap();
+        for i in 0..entries {
+            File::create(pack.join(format!("f{i}"))).unwrap();
+        }
+    }
+
+    #[test]
+    fn pack_dir_at_the_entry_cap_is_trusted_and_one_over_is_untrusted() {
+        for (_g, dir, pack) in pack_dirs() {
+            fill_pack(&pack, MAX_PACK_ENTRIES);
+            assert!(check(&dir).is_ok(), "{}", pack.display());
+            File::create(pack.join("one-too-many")).unwrap();
+            expect_untrusted(check(&dir));
+        }
+    }
+
+    #[test]
+    fn pack_dir_symlink_entry_is_untrusted() {
+        for (_g, dir, pack) in pack_dirs() {
+            fill_pack(&pack, 1);
+            make_symlink(&pack.join("evil.pack"));
+            expect_untrusted(check(&dir));
+        }
+    }
+
+    #[test]
+    fn pack_dir_fifo_entry_is_untrusted() {
+        for (_g, dir, pack) in pack_dirs() {
+            fill_pack(&pack, 1);
+            make_fifo(&pack.join("evil.pack"));
+            expect_untrusted(within(move || check(&dir)));
+        }
+    }
+
+    #[test]
+    fn pack_dir_subdirectory_entry_is_untrusted() {
+        for (_g, dir, pack) in pack_dirs() {
+            fs::create_dir_all(pack.join("sub")).unwrap();
+            expect_untrusted(check(&dir));
+        }
+    }
+
+    /// A repo-local `gitoxide.core.indexFile` names a 1,025-level `TREE` chain, which the
+    /// validation never sees; the open override makes gix read the repo's own clean index.
+    #[test]
+    fn repo_local_index_file_redirect_is_not_read() {
+        let (_t, base) = tempdir_real();
+        let repo_dir = base.join("r");
+        init_repo(&repo_dir);
+        let git_dir = repo_dir.join(".git");
+        let evil = git_dir.join("evil");
+        fs::write(
+            &evil,
+            build_index(2, &[b"a"], &[(b"TREE", tree_chain(1025))]),
+        )
+        .unwrap();
+        git(
+            &repo_dir,
+            &["config", "gitoxide.core.indexFile", evil.to_str().unwrap()],
+        );
+        assert!(
+            check(&git_dir).is_ok(),
+            "the redirect is invisible to the checks"
+        );
+        let opts = rollcall_core::GitOptions {
+            root: base.clone(),
+            home: base.join("nowhere-home"),
+            skip_paths: Vec::new(),
+            repo_budget: std::time::Duration::from_secs(5),
+            excludes_file: None,
+        };
+
+        let repo = crate::trust::open_hardened(&git_dir, &opts).expect("open");
+        let index = repo.open_index().expect("the clean index decodes");
+
+        assert_eq!(repo.index_path(), git_dir.join("index"));
+        assert_eq!(index.entries().len(), 1, "README only, not the evil index");
     }
 
     #[test]
