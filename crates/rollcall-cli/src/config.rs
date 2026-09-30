@@ -120,7 +120,306 @@ impl fmt::Display for UsageError {
 
 impl std::error::Error for UsageError {}
 
+/// Every key a config file may set; flag-only fields of `Config` are deliberately absent.
+const CONFIG_KEYS: [&str; 9] = [
+    "roots",
+    "skip_dirs",
+    "stale_days",
+    "redact_prompts",
+    "redact_emails",
+    "walk_budget_entries",
+    "walk_budget_secs",
+    "repo_budget_secs",
+    "clipboard",
+];
+
+/// `$XDG_CONFIG_HOME/rollcall/config.toml`, else `~/.config/rollcall/config.toml`. Like the
+/// cache directory, a relative `XDG_CONFIG_HOME` is invalid per the XDG spec and ignored.
+fn config_path(env: &EnvPaths) -> Option<PathBuf> {
+    let base = match env.xdg_config_home.as_ref().filter(|p| p.is_absolute()) {
+        Some(xdg) => xdg.clone(),
+        None => env.home.as_ref()?.join(".config"),
+    };
+    Some(base.join("rollcall/config.toml"))
+}
+
+fn unknown_keys(table: &toml::Table) -> Vec<&str> {
+    table
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !CONFIG_KEYS.contains(k))
+        .collect()
+}
+
+/// §3.2: finite, > 0, and representable as a `Duration` (rejects `nan`, `inf`, `1e30`).
+fn check_repo_budget(secs: f64) -> Result<(), UsageError> {
+    if secs > 0.0 && std::time::Duration::try_from_secs_f64(secs).is_ok() {
+        return Ok(());
+    }
+    Err(UsageError(format!(
+        "config: repo_budget_secs must be a finite number > 0 that fits a duration, got {secs}"
+    )))
+}
+
+fn read_config(env: &EnvPaths) -> Result<Config, UsageError> {
+    let path = config_path(env)
+        .ok_or_else(|| UsageError("cannot locate the config file: HOME is not set".to_string()))?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(e) => return Err(UsageError(format!("cannot read {}: {e}", path.display()))),
+    };
+    let invalid =
+        |e: toml::de::Error| UsageError(format!("invalid config {}: {e}", path.display()));
+    let table: toml::Table = text.parse().map_err(invalid)?;
+    for key in unknown_keys(&table) {
+        eprintln!(
+            "rollcall: warning: unknown config key `{key}` in {}",
+            path.display()
+        );
+    }
+    let config: Config = table.try_into().map_err(invalid)?;
+    check_repo_budget(config.repo_budget_secs)?;
+    Ok(config)
+}
+
+fn resolve_now(env: &EnvPaths) -> Result<Timestamp, UsageError> {
+    let Some(raw) = &env.rollcall_now else {
+        return Ok(Timestamp::now());
+    };
+    raw.to_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
+        UsageError(format!(
+            "ROLLCALL_NOW is not an RFC 3339 timestamp: {raw:?}"
+        ))
+    })
+}
+
 /// Reads the config file, applies `flags` over it, resolves "now" and the cache directory.
-pub fn load(_flags: &CommonFlags, _env: EnvPaths) -> Result<Ctx, UsageError> {
-    unimplemented!()
+pub fn load(flags: &CommonFlags, env: EnvPaths) -> Result<Ctx, UsageError> {
+    let mut config = read_config(&env)?;
+    config.submodules = flags.walk.submodules;
+    config.follow_symlinks = flags.walk.follow_symlinks;
+    config.yes = flags.yes;
+    let now = resolve_now(&env)?;
+    // The config file can sit under an absolute XDG_CONFIG_HOME, but the cache needs HOME.
+    let home = env
+        .home
+        .as_deref()
+        .ok_or_else(|| UsageError("HOME is not set".to_string()))?;
+    let cache_dir = rollcall_store::cache_dir(home, env.xdg_cache_home.as_deref());
+    Ok(Ctx {
+        config,
+        now,
+        env,
+        cache_dir,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::cli::WalkFlags;
+
+    /// An env whose HOME is a tempdir, with `toml` (if any) at the default config path.
+    fn env_with(toml: Option<&str>) -> (TempDir, EnvPaths) {
+        let home = TempDir::new().unwrap();
+        let env = EnvPaths {
+            home: Some(home.path().to_path_buf()),
+            ..EnvPaths::default()
+        };
+        if let Some(text) = toml {
+            write_config(&env, text);
+        }
+        (home, env)
+    }
+
+    fn write_config(env: &EnvPaths, text: &str) {
+        let path = config_path(env).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn load_toml(text: &str) -> Result<Ctx, UsageError> {
+        let (_home, env) = env_with(Some(text));
+        load(&CommonFlags::default(), env)
+    }
+
+    #[test]
+    fn missing_file_gives_the_defaults() {
+        let (_home, env) = env_with(None);
+        let ctx = load(&CommonFlags::default(), env).unwrap();
+        assert_eq!(ctx.config, Config::default());
+    }
+
+    #[test]
+    fn every_key_is_read() {
+        let ctx = load_toml(
+            r#"
+roots = ["/a", "/b"]
+skip_dirs = ["vendor"]
+stale_days = 30
+redact_prompts = true
+redact_emails = true
+walk_budget_entries = 10
+walk_budget_secs = 3
+repo_budget_secs = 0.5
+clipboard = "osc52"
+"#,
+        )
+        .unwrap();
+        let want = Config {
+            roots: vec!["/a".into(), "/b".into()],
+            skip_dirs: vec!["vendor".into()],
+            stale_days: 30,
+            redact_prompts: true,
+            redact_emails: true,
+            walk_budget_entries: 10,
+            walk_budget_secs: 3,
+            repo_budget_secs: 0.5,
+            clipboard: Clipboard::Osc52,
+            ..Config::default()
+        };
+        assert_eq!(ctx.config, want);
+    }
+
+    #[test]
+    fn unknown_keys_warn_and_the_run_continues() {
+        let text = "stale_days = 3\nbogus = 1\nsubmodules = true\n";
+        let table: toml::Table = text.parse().unwrap();
+        assert_eq!(unknown_keys(&table), ["bogus", "submodules"]);
+        let ctx = load_toml(text).unwrap();
+        assert_eq!(ctx.config.stale_days, 3);
+        assert!(
+            !ctx.config.submodules,
+            "a flag-only field is never read from TOML"
+        );
+    }
+
+    #[test]
+    fn invalid_toml_and_wrong_types_are_usage_errors() {
+        for text in [
+            "stale_days = ",
+            "stale_days = \"7\"",
+            "stale_days = -1",
+            "roots = \"/a\"",
+            "redact_prompts = 1",
+            "clipboard = \"paste\"",
+            "repo_budget_secs = \"5\"",
+        ] {
+            assert!(load_toml(text).is_err(), "accepted: {text}");
+        }
+    }
+
+    #[test]
+    fn repo_budget_must_be_positive_finite_and_a_duration() {
+        for bad in ["0", "0.0", "-1.5", "nan", "inf", "-inf", "1e30"] {
+            let err = load_toml(&format!("repo_budget_secs = {bad}")).unwrap_err();
+            assert!(err.0.contains("repo_budget_secs"), "{bad}: {err}");
+        }
+        for (good, want) in [("0.25", 0.25), ("5", 5.0), ("3600.0", 3600.0)] {
+            let ctx = load_toml(&format!("repo_budget_secs = {good}")).unwrap();
+            assert_eq!(ctx.config.repo_budget_secs, want);
+        }
+    }
+
+    #[test]
+    fn rollcall_now_must_be_rfc_3339() {
+        let (_home, mut env) = env_with(None);
+        env.rollcall_now = Some("2026-09-30T12:00:00Z".into());
+        let ctx = load(&CommonFlags::default(), env.clone()).unwrap();
+        assert_eq!(
+            ctx.now,
+            "2026-09-30T12:00:00Z".parse::<Timestamp>().unwrap()
+        );
+        for bad in ["yesterday", "2026-09-30", "1700000000", ""] {
+            env.rollcall_now = Some(bad.into());
+            assert!(
+                load(&CommonFlags::default(), env.clone()).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unset_rollcall_now_uses_the_clock() {
+        let (_home, env) = env_with(None);
+        let before = Timestamp::now();
+        let ctx = load(&CommonFlags::default(), env).unwrap();
+        assert!(ctx.now >= before);
+    }
+
+    #[test]
+    fn flags_are_applied_and_config_roots_are_kept() {
+        let (_home, env) = env_with(Some("roots = [\"/r\"]"));
+        let flags = CommonFlags {
+            walk: WalkFlags {
+                submodules: true,
+                follow_symlinks: true,
+            },
+            yes: true,
+            no_scan: false,
+        };
+        let cfg = load(&flags, env).unwrap().config;
+        assert!(cfg.submodules && cfg.follow_symlinks && cfg.yes);
+        assert_eq!(cfg.roots, [PathBuf::from("/r")]);
+    }
+
+    #[test]
+    fn config_path_prefers_an_absolute_xdg_config_home() {
+        let env = EnvPaths {
+            home: Some("/home/u".into()),
+            xdg_config_home: Some("/xdg".into()),
+            ..EnvPaths::default()
+        };
+        assert_eq!(
+            config_path(&env).unwrap(),
+            Path::new("/xdg/rollcall/config.toml")
+        );
+        let default = Path::new("/home/u/.config/rollcall/config.toml");
+        let unset = EnvPaths {
+            xdg_config_home: None,
+            ..env.clone()
+        };
+        assert_eq!(config_path(&unset).unwrap(), default);
+        let relative = EnvPaths {
+            xdg_config_home: Some("rel".into()),
+            ..env
+        };
+        assert_eq!(config_path(&relative).unwrap(), default);
+    }
+
+    #[test]
+    fn the_file_is_read_from_xdg_config_home() {
+        let (xdg, mut env) = env_with(None);
+        env.xdg_config_home = Some(xdg.path().join("cfg"));
+        write_config(&env, "stale_days = 99");
+        let ctx = load(&CommonFlags::default(), env).unwrap();
+        assert_eq!(ctx.config.stale_days, 99);
+    }
+
+    #[test]
+    fn cache_dir_comes_from_the_store() {
+        let (home, mut env) = env_with(None);
+        env.xdg_cache_home = Some(home.path().join("xc"));
+        let want = rollcall_store::cache_dir(home.path(), env.xdg_cache_home.as_deref());
+        assert_eq!(load(&CommonFlags::default(), env).unwrap().cache_dir, want);
+    }
+
+    #[test]
+    fn no_home_is_a_usage_error() {
+        assert!(load(&CommonFlags::default(), EnvPaths::default()).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_config_path_is_a_usage_error_not_defaults() {
+        let (_home, env) = env_with(None);
+        let path = config_path(&env).unwrap();
+        // A directory where the file should be.
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(load(&CommonFlags::default(), env).is_err());
+    }
 }
