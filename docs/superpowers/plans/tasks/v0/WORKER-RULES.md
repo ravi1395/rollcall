@@ -43,3 +43,4 @@ their work and touch only your phase's files.
   `status` (`passed` | `failed` | `blocked`), `files_changed`, `tests_run` (each command with
   the quoted result line), `criteria` (each phase acceptance criterion → how it is proven:
   test name or command + output), `decisions` (any choice the plan left open), `blockers`.
+- **Never run rollcall against the real home:** any manual run of the binary sets `HOME` (and `XDG_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) to a scratch dir — on macOS the cache lives under `$HOME/Library/Caches` regardless of `XDG_CACHE_HOME`.

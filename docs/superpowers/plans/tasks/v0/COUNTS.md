@@ -18,3 +18,4 @@ Actual measured counts after each lane/phase merge on `impl/v0`. Baseline row me
 | D P37 | 0ba28a6 | 578 / 0 / 5 (cli lib 76 + 1 ignored until P31) | clean | clean |
 | C1 P18c | c7fac6c | 586 / 0 / 5 (git 239) | clean | clean |
 | B1 P07c, C4 P27c | dffdf2a | 586 / 0 / 5 (checks added inside existing selftests) | clean | clean |
+| D P30 | cd1aef8 | 619 / 0 / 5 (cli lib 109 + 1 ignored) | clean | clean |
