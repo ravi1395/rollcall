@@ -33,6 +33,9 @@ their work and touch only your phase's files.
   agent logs (`~/.claude`, `~/.codex`) — never read them. Network access in code.
 - **Ponytail (R4):** simplest code that meets the spec; no unrequested abstractions. It never
   cuts spec scope.
+- **Portability:** CI runs Linux (ext4) and macOS (APFS). Don't assume a fresh inode after
+  remove-then-create (ext4 reuses it: create the replacement first, then rename over), sort
+  directory listings before asserting order, and gate OS-specific behaviour with `cfg`.
 - **Blocking tests:** anything that runs rollcall, opens FIFOs, or could hang runs under a
   watchdog (R3).
 - **No git:** never `git add/commit/stash/checkout/reset/push`. Leave edits in the tree.
