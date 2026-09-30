@@ -1,0 +1,435 @@
+[
+  {
+    "path": "$F/untrusted-path",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/untrusted-path",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$HOME",
+        "external": true,
+        "stale_reason": null,
+        "error": "untrusted worktree path"
+      }
+    ],
+    "_why": "Repo order is the spec 3.3 sort for a run with empty agent dirs (the 10.1 default sandbox): attention desc, last_activity_at desc (null last), path asc. First: attention 4 (worktree error), last_activity 2026-09-10T09:00Z (main tip) beats the null-activity error rows."
+  },
+  {
+    "path": "$F/bad-gitdir",
+    "kind": "normal",
+    "contains_root": false,
+    "error": "bad gitdir: ",
+    "worktrees": [],
+    "_why": "`.git` file `gitdir: ../does-not-exist` (target not an existing directory, spec 4.1) => repo-level error row, worktrees []; kind normal (unclassifiable row, same as the fifo_git convention). Attention 4, activity null: sorted by path among the nulls."
+  },
+  {
+    "path": "$F/corrupted",
+    "kind": "normal",
+    "contains_root": false,
+    "error": "open failed: ",
+    "worktrees": [],
+    "_why": "core.repositoryformatversion = 7 passes pre-open, fails gix open (spec 12.1 #2). Repo-level error, worktrees []."
+  },
+  {
+    "path": "$F/untrusted-gitdir",
+    "kind": "normal",
+    "contains_root": false,
+    "error": "untrusted git dir",
+    "worktrees": [],
+    "_why": "`shallow` is a symlink to a sparse 4 GiB file: the pre-open check (spec 4.4) refuses without opening. Worktrees []."
+  },
+  {
+    "path": "$F/no-upstream",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/no-upstream",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/ahead-behind",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/ahead-behind",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/dirty-mixed",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/dirty-mixed",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/dirty-staged",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/dirty-staged",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/dirty-unstaged",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/dirty-unstaged",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/excludes",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/excludes",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/untracked",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/untracked",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/merged",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/merged",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/merged-wt",
+        "external": false,
+        "stale_reason": "merged",
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/inactive",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/inactive",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/inactive-wt",
+        "external": false,
+        "stale_reason": "inactive",
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/missing",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/missing",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/missing-wt",
+        "external": false,
+        "stale_reason": "missing",
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$EXT/case-b-main",
+    "kind": "external_main",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$EXT/case-b-main",
+        "external": true,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/case-b-wt",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/case-a-main",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/case-a-main",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$EXT/case-a-wt",
+        "external": true,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/linked",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/linked",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/linked-wt",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/shell",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/shell",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell wt space",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell-wt\nnewline",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell-wt$dollar",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell-wt'quote",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell-wt;semi",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      },
+      {
+        "path": "$F/shell-wt`tick",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/normal",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/normal",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/detached",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/detached",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/nest-outer",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/nest-outer",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/nest-outer/inner",
+    "kind": "nested",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/nest-outer/inner",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/nest-outer/vendor/proj",
+    "kind": "nested",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/nest-outer/vendor/proj",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/no-default",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/no-default",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/sub-old-parent",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/sub-old-parent",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/sub-parent",
+    "kind": "normal",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [
+      {
+        "path": "$F/sub-parent",
+        "external": false,
+        "stale_reason": null,
+        "error": null
+      }
+    ]
+  },
+  {
+    "path": "$F/bare/proj.git",
+    "kind": "bare",
+    "contains_root": false,
+    "error": null,
+    "worktrees": [],
+    "_why": "Bare repo: branch/ref info only, worktrees []. Attention 0 and activity null (no worktrees) => last."
+  }
+]
