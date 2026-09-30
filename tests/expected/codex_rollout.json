@@ -1,0 +1,122 @@
+[
+ {
+  "id": "c0d00001-0000-4000-8000-000000000001",
+  "title": "please clean up the normal repo",
+  "title_kind": "prompt",
+  "last_prompt": "now run the tests",
+  "branch": "main",
+  "cwd": "$F/normal",
+  "message_count": 2,
+  "started_at": "2026-09-27T15:00:00.117Z",
+  "ended_at": "2026-09-27T15:30:00Z",
+  "_why": "Fallback: title = first human prompt (kind prompt); started_at = session_meta.payload.timestamp (.117), ended_at = max top-level timestamp (15:30:00); cwd from turn_context."
+ },
+ {
+  "id": "c0d00001-0000-4000-8000-000000000002",
+  "title": "extend the linked feature",
+  "title_kind": "prompt",
+  "last_prompt": "extend the linked feature",
+  "branch": "feat-linked",
+  "cwd": "$F/linked-wt",
+  "message_count": 1,
+  "started_at": "2026-09-26T10:00:00.213Z",
+  "ended_at": "2026-09-26T10:00:05Z",
+  "_why": "Fallback: session_meta payload.timestamp .213 is started_at; the session_meta line timestamp (.411) is earlier than the last event so ended_at is 10:00:05."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000001",
+  "title": "please look at the session loader code",
+  "title_kind": "prompt",
+  "last_prompt": "split out the parsing step",
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 2,
+  "started_at": "2026-09-25T09:00:00.117Z",
+  "ended_at": "2026-09-25T09:20:00Z",
+  "_why": "The <environment_context> user_message filters to nothing (not counted); count 2; ended_at is the last event (09:20:00)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000005",
+  "title": "archive the old spike branch",
+  "title_kind": "prompt",
+  "last_prompt": "archive the old spike branch",
+  "branch": "spike",
+  "cwd": "$F/untracked",
+  "message_count": 1,
+  "started_at": "2026-09-24T08:00:00.117Z",
+  "ended_at": "2026-09-24T08:10:00Z",
+  "_why": "Rollout file in archived_sessions is scanned in fallback mode; ended_at = its own last timestamp (08:10:00)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-00000000000a",
+  "title": "check the fallback branch",
+  "title_kind": "prompt",
+  "last_prompt": "check the fallback branch",
+  "branch": "feature/codex-x",
+  "cwd": "$F/untracked",
+  "message_count": 1,
+  "started_at": "2026-09-25T11:20:00.117Z",
+  "ended_at": "2026-09-25T11:20:10Z",
+  "_why": "Fallback: branch from session_meta git.branch (feature/codex-x)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000101",
+  "title": "fix the flaky test",
+  "title_kind": "prompt",
+  "last_prompt": "run it 20 times",
+  "branch": "main",
+  "cwd": "$F/untracked/sub",
+  "message_count": 2,
+  "started_at": "2026-09-24T10:00:00.513Z",
+  "ended_at": "2026-09-24T10:05:00Z",
+  "_why": "user_message events exist, so response_item text is ignored; cwd from the latest turn_context ($F/untracked/sub); the <user_instructions> message filters to nothing; last_prompt has its <system-reminder> suffix cut."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000102",
+  "title": "actual ask",
+  "title_kind": "prompt",
+  "last_prompt": "follow up ask more detail",
+  "branch": null,
+  "cwd": "$F/untracked",
+  "message_count": 2,
+  "started_at": "2026-09-24T11:00:00.513Z",
+  "ended_at": "2026-09-24T11:05:00Z",
+  "_why": "No user_message events: response_item user messages are used; [injection, user] blocks keep only the user block; the pure <user_instructions> message is not a prompt; blocks of the last message join with a space. No git in session_meta: branch null."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000103",
+  "title": "shelve the experiment",
+  "title_kind": "prompt",
+  "last_prompt": "shelve the experiment",
+  "branch": "exp/shelf",
+  "cwd": "$F/untracked",
+  "message_count": 1,
+  "started_at": "2026-09-23T09:00:00.513Z",
+  "ended_at": "2026-09-23T09:00:10Z",
+  "_why": "Archived rollout; branch from session_meta."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000104",
+  "title": "first meta wins",
+  "title_kind": "prompt",
+  "last_prompt": "after the second meta",
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 2,
+  "started_at": "2026-09-23T10:00:00.513Z",
+  "ended_at": "2026-09-23T10:00:20Z",
+  "_why": "The second session_meta (other id, cwd, branch) is ignored for id/cwd/branch, but its top-level timestamp still counts toward the max; ended_at is the last message (10:00:20)."
+ },
+ {
+  "id": "c0d00003-0000-4000-8000-000000000001",
+  "title": "start the rollout case",
+  "title_kind": "prompt",
+  "last_prompt": "append one event",
+  "branch": "main",
+  "cwd": "$F/ahead-behind",
+  "message_count": 2,
+  "started_at": "2026-09-27T09:00:00.513Z",
+  "ended_at": "2026-09-27T09:01:00Z",
+  "_why": "State after the last step: the append added a prompt (count 2); the move to archived_sessions changes nothing in the fields."
+ }
+]

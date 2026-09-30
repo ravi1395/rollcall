@@ -1,0 +1,108 @@
+{
+ "_doc": "Expected session matching for the `matching` corpus (Codex in DB mode, no --submodules). `worktrees` lists only the worktrees hosting matched sessions; every other worktree has last_session null and older_sessions 0. matched = sum(1 + older_sessions) = 16. `unmatched` are the doctor counts.",
+ "worktrees": [
+  {
+   "path": "$F/case-a-main",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-00000000000d"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/detached",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-00000000000e"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/dirty-staged",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-00000000000c"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/inactive-wt",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000007"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/linked",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000003"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/linked-wt",
+   "last_session": {
+    "id": "c0d00001-0000-4000-8000-000000000002"
+   },
+   "older_sessions": 1,
+   "_why": "Claude ..04 (09-25T09:00:30Z) and Codex thread c0d00001-..0002 (09-26T11:00:00Z): last_session = the thread, older_sessions 1."
+  },
+  {
+   "path": "$F/merged",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000005"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/merged-wt",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000006"
+   },
+   "older_sessions": 0
+  },
+  {
+   "path": "$F/missing-wt",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000009"
+   },
+   "older_sessions": 0,
+   "_why": "The session cwd equals the missing worktree path, which therefore matches it (spec 6.5)."
+  },
+  {
+   "path": "$F/nest-outer",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-00000000000b"
+   },
+   "older_sessions": 0,
+   "_why": "The session cwd is $F/nest-outer itself."
+  },
+  {
+   "path": "$F/nest-outer/inner",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-00000000000a"
+   },
+   "older_sessions": 0,
+   "_why": "Longest prefix: the session cwd $F/nest-outer/inner matches the nested repo worktree, not $F/nest-outer."
+  },
+  {
+   "path": "$F/normal",
+   "last_session": {
+    "id": "c0d00001-0000-4000-8000-000000000001"
+   },
+   "older_sessions": 2,
+   "_why": "Three matched sessions: Claude ..01 (09-24), Claude ..02 (cwd $F/normal/src, 09-26), Codex thread c0d00001-..0001 (09-27T16:00:00Z, the latest): last_session = the Codex thread, older_sessions 2."
+  },
+  {
+   "path": "$F/sub-parent",
+   "last_session": {
+    "id": "c1a00001-0000-4000-8000-000000000008"
+   },
+   "older_sessions": 0,
+   "_why": "The session cwd $F/sub-parent/libs/child lies in a hidden submodule (no --submodules): it matches the parent worktree."
+  }
+ ],
+ "unmatched": {
+  "non_repo": 1,
+  "path_gone": 1,
+  "outside_root": 2
+ },
+ "_why_unmatched": "non_repo: cwd $F/bare exists under the root, in no worktree. path_gone: $F/gone-project never exists. outside_root: $EXT/case-a-wt (an external worktree is not a candidate) and $EXT/outside-repo."
+}

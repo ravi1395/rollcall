@@ -1,0 +1,159 @@
+[
+ {
+  "path": "$F/untrusted-path",
+  "attention": 4,
+  "last_activity_at": "2026-09-10T09:00:00Z",
+  "_why": "Attention 4 (its $HOME worktree is an error row). No matched session; last_activity = main tip 2026-09-10T09:00Z (the errored worktree has null last_commit_at). Attention 4 ties break on activity: this one is non-null, so it is first.",
+  "_doc": "Repo order for the 12.1 #3 run: root F, agent dirs populated with the `matching` corpus only (Codex in DB mode), ROLLCALL_NOW = meta.now. Sort: attention desc, last_activity_at desc (null last), path asc. Repo attention = max over its worktrees and its own error (spec 3.3). last_activity_at = max over the repo worktrees last_commit_at and matched sessions ended_at."
+ },
+ {
+  "path": "$F/bad-gitdir",
+  "attention": 4,
+  "last_activity_at": null,
+  "_why": "Repo-level error row: attention 4, no worktrees, activity null; the three null-activity error rows sort by path (bad-gitdir < corrupted < untrusted-gitdir)."
+ },
+ {
+  "path": "$F/corrupted",
+  "attention": 4,
+  "last_activity_at": null
+ },
+ {
+  "path": "$F/untrusted-gitdir",
+  "attention": 4,
+  "last_activity_at": null
+ },
+ {
+  "path": "$F/no-upstream",
+  "attention": 3,
+  "last_activity_at": "2026-09-11T09:00:00Z",
+  "_why": "Attention 3 (unpushed 2). Activity = HEAD branch feat-up tip 2026-09-11 (up two). Attention-3 rows sort by activity: no-upstream (09-11) before ahead-behind (09-06)."
+ },
+ {
+  "path": "$F/ahead-behind",
+  "attention": 3,
+  "last_activity_at": "2026-09-06T09:00:00Z",
+  "_why": "Attention 3 (ahead 2). Activity = main tip \"local two\" 2026-09-06T09:00Z; the remote-only commit is not the worktree HEAD. Its `incremental` sessions are not materialised in this run."
+ },
+ {
+  "path": "$F/dirty-staged",
+  "attention": 2,
+  "last_activity_at": "2026-09-27T11:00:30Z",
+  "_why": "Attention 2. Matched Claude session ..0c ends 2026-09-27T11:00:30Z, later than the main tip (09-10): activity comes from the session (spec 3.3). Sorts first among the attention-2 repos."
+ },
+ {
+  "path": "$F/dirty-mixed",
+  "attention": 2,
+  "last_activity_at": "2026-09-10T09:00:00Z",
+  "_why": "Attention 2; no `matching` session (claude_rules is not materialised for this run). Activity = main tip 2026-09-10T09:00Z. The four attention-2 repos without sessions tie on activity and fall to path order."
+ },
+ {
+  "path": "$F/dirty-unstaged",
+  "attention": 2,
+  "last_activity_at": "2026-09-10T09:00:00Z"
+ },
+ {
+  "path": "$F/excludes",
+  "attention": 2,
+  "last_activity_at": "2026-09-10T09:00:00Z"
+ },
+ {
+  "path": "$F/untracked",
+  "attention": 2,
+  "last_activity_at": "2026-09-10T09:00:00Z"
+ },
+ {
+  "path": "$F/missing",
+  "attention": 1,
+  "last_activity_at": "2026-09-24T17:00:30Z",
+  "_why": "Attention 1 (the missing worktree has stale_reason missing). The missing worktree has null last_commit_at, but the session whose cwd equals its path matches it (spec 6.5), so activity = that session ended_at 2026-09-24T17:00:30Z."
+ },
+ {
+  "path": "$F/merged",
+  "attention": 1,
+  "last_activity_at": "2026-09-22T16:00:30Z",
+  "_why": "Attention 1 (merged-wt stale). Sessions ..05 (09-21T15:00:30Z) and ..06 (09-22T16:00:30Z) are later than the main tip 09-20: activity = 2026-09-22T16:00:30Z."
+ },
+ {
+  "path": "$F/inactive",
+  "attention": 1,
+  "last_activity_at": "2026-09-19T11:00:30Z",
+  "_why": "Attention 1 (inactive-wt stale). Session ..07 ends 2026-09-19T11:00:30Z, later than the main tip 2026-09-15."
+ },
+ {
+  "path": "$F/normal",
+  "attention": 0,
+  "last_activity_at": "2026-09-27T16:00:00Z",
+  "_why": "Attention 0. Codex thread c0d00001-..0001 (Codex DB mode: ended_at = updated_at) ends 2026-09-27T16:00:00Z, the latest of its three matched sessions. In rollout-only mode this would be 15:30:00Z; this oracle assumes DB mode (state_5.sqlite present, as in the matching corpus)."
+ },
+ {
+  "path": "$F/nest-outer",
+  "attention": 0,
+  "last_activity_at": "2026-09-27T09:00:30Z",
+  "_why": "Attention 0. Session ..0b (cwd = the outer repo itself) ends 2026-09-27T09:00:30Z. The nested repos are their own rows and are not merged into it."
+ },
+ {
+  "path": "$F/nest-outer/inner",
+  "attention": 0,
+  "last_activity_at": "2026-09-27T08:00:30Z",
+  "_why": "Nested repo, its own row. The session with cwd under inner matches inner (longest prefix), ends 2026-09-27T08:00:30Z."
+ },
+ {
+  "path": "$F/detached",
+  "attention": 0,
+  "last_activity_at": "2026-09-26T12:00:30Z",
+  "_why": "Attention 0. HEAD is commits[0] (detached:0, 2026-09-10); session ..0e ends 2026-09-26T12:00:30Z."
+ },
+ {
+  "path": "$F/linked",
+  "attention": 0,
+  "last_activity_at": "2026-09-26T11:00:00Z",
+  "_why": "Attention 0. Codex thread ..0002 on linked-wt ends 2026-09-26T11:00:00Z (DB mode), later than ..03, ..04 and the feat-linked tip 09-22."
+ },
+ {
+  "path": "$F/sub-parent",
+  "attention": 0,
+  "last_activity_at": "2026-09-26T10:00:30Z",
+  "_why": "Attention 0. The session whose cwd is in the hidden submodule matches the parent and ends 2026-09-26T10:00:30Z."
+ },
+ {
+  "path": "$F/case-a-main",
+  "attention": 0,
+  "last_activity_at": "2026-09-25T13:00:30Z",
+  "_why": "Attention 0. The external linked worktree counts as a worktree of this repo (feat-a tip 09-22); session ..0d ends 2026-09-25T13:00:30Z. The session in $EXT/case-a-wt is outside_root and does not count."
+ },
+ {
+  "path": "$EXT/case-b-main",
+  "attention": 0,
+  "last_activity_at": "2026-09-22T09:00:00Z",
+  "_why": "external_main row: attention 0, activity = feat-b tip 2026-09-22T09:00:00Z (its worktree inside F). Ties with $F/shell on 2026-09-22T09:00:00Z; tie broken by path, `$EXT` sorting before `$F` (P09 assumption: the harness places roots so that holds)."
+ },
+ {
+  "path": "$F/shell",
+  "attention": 0,
+  "last_activity_at": "2026-09-22T09:00:00Z",
+  "_why": "Attention 0. The shell worktrees all sit on branches created from the hostile-branch tip dated 2026-09-22T09:00:00Z; no matching session. Tie with $EXT/case-b-main: see that row."
+ },
+ {
+  "path": "$F/nest-outer/vendor/proj",
+  "attention": 0,
+  "last_activity_at": "2026-09-10T09:00:00Z",
+  "_why": "Attention 0, no session, activity = 2026-09-10T09:00:00Z. The three rows tied at 09-10 (vendor/proj, no-default, sub-old-parent) sort by path."
+ },
+ {
+  "path": "$F/no-default",
+  "attention": 0,
+  "last_activity_at": "2026-09-10T09:00:00Z"
+ },
+ {
+  "path": "$F/sub-old-parent",
+  "attention": 0,
+  "last_activity_at": "2026-09-10T09:00:00Z",
+  "_why": "Activity 2026-09-10T09:00:00Z by the P09 builder assumption (the gitlink commit is dated 2026-09-10)."
+ },
+ {
+  "path": "$F/bare/proj.git",
+  "attention": 0,
+  "last_activity_at": null,
+  "_why": "Bare repo: no worktrees, attention 0, activity null: last."
+ }
+]

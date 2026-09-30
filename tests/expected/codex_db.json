@@ -1,0 +1,122 @@
+[
+ {
+  "id": "c0d00001-0000-4000-8000-000000000001",
+  "title": "Normal repo cleanup",
+  "title_kind": "thread",
+  "last_prompt": "now run the tests",
+  "branch": "main",
+  "cwd": "$F/normal",
+  "message_count": 2,
+  "started_at": "2026-09-27T15:00:00Z",
+  "ended_at": "2026-09-27T16:00:00Z",
+  "_why": "DB title \"Normal repo cleanup\" is not a prefix/substring of first_user_message: kind thread. started/ended from created_at/updated_at (1790521200 / 1790524800), not the rollout. last_prompt and message_count from the rollout (2 user_message events)."
+ },
+ {
+  "id": "c0d00001-0000-4000-8000-000000000002",
+  "title": "extend the linked feature",
+  "title_kind": "prompt",
+  "last_prompt": "extend the linked feature",
+  "branch": "feat-linked",
+  "cwd": "$F/linked-wt",
+  "message_count": 1,
+  "started_at": "2026-09-26T10:00:00Z",
+  "ended_at": "2026-09-26T11:00:00Z",
+  "_why": "Empty DB title: first_user_message after the 5.0 filter (kind prompt). Rollout supplies last_prompt and count 1."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000001",
+  "title": "Refactor session loader",
+  "title_kind": "thread",
+  "last_prompt": "split out the parsing step",
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 2,
+  "started_at": "2026-09-25T09:00:00Z",
+  "ended_at": "2026-09-25T09:40:00Z",
+  "_why": "Title differs from first_user_message: thread. Rollout: three user_message events, the <environment_context> one filters to nothing and is not a prompt, so count 2; last_prompt has the <task-notification> suffix cut."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000005",
+  "title": "Spike archive notes",
+  "title_kind": "thread",
+  "last_prompt": "archive the old spike branch",
+  "branch": "spike",
+  "cwd": "$F/untracked",
+  "message_count": 1,
+  "started_at": "2026-09-24T08:00:00Z",
+  "ended_at": "2026-09-24T08:30:00Z",
+  "_why": "Archived thread: the rollout lives in archived_sessions (under CODEX_HOME, so accepted). Times come from the DB row (08:00 / 08:30), not the rollout (08:10)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000006",
+  "title": "tidy the changelog",
+  "title_kind": "prompt",
+  "last_prompt": null,
+  "branch": null,
+  "cwd": "$F/untracked",
+  "message_count": 0,
+  "started_at": "2026-09-25T10:00:00Z",
+  "ended_at": "2026-09-25T10:10:00Z",
+  "_why": "Empty title: first_user_message filtered (cut at <system-reminder>, trimmed), kind prompt. Empty git_branch and no rollout: branch null, last_prompt null, message_count 0."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000007",
+  "title": "add retry logic to fetch",
+  "title_kind": "prompt",
+  "last_prompt": null,
+  "branch": "feat-retry",
+  "cwd": "$F/untracked",
+  "message_count": 0,
+  "started_at": "2026-09-25T10:20:00Z",
+  "ended_at": "2026-09-25T10:30:00Z",
+  "_why": "Title equals first_user_message: kind prompt."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000008",
+  "title": "migrate the billing tab…",
+  "title_kind": "prompt",
+  "last_prompt": null,
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 0,
+  "started_at": "2026-09-25T10:40:00Z",
+  "ended_at": "2026-09-25T10:50:00Z",
+  "_why": "Title minus its trailing \"…\" is a prefix of first_user_message: kind prompt. Already 24 graphemes, so the \"…\" stays (spec 3.3)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-000000000009",
+  "title": "investigate-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowqueries-slowque…",
+  "title_kind": "prompt",
+  "last_prompt": null,
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 0,
+  "started_at": "2026-09-25T11:00:00Z",
+  "ended_at": "2026-09-25T11:10:00Z",
+  "_why": "Title is over 200 graphemes: kind prompt; rendered as the first 199 graphemes plus \"…\" = 200 (the title has no spaces or multi-byte characters, so a cut at 199 characters is a grapheme cut)."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-00000000000a",
+  "title": "Wire codex fallback",
+  "title_kind": "thread",
+  "last_prompt": "check the fallback branch",
+  "branch": "feature/codex-x",
+  "cwd": "$F/untracked",
+  "message_count": 1,
+  "started_at": "2026-09-25T11:20:00Z",
+  "ended_at": "2026-09-25T11:50:00Z",
+  "_why": "Empty git_branch: branch from the rollout session_meta.payload.git.branch. Title kind thread."
+ },
+ {
+  "id": "c0d00002-0000-4000-8000-00000000000b",
+  "title": "Outside rollout",
+  "title_kind": "thread",
+  "last_prompt": null,
+  "branch": "main",
+  "cwd": "$F/untracked",
+  "message_count": 0,
+  "started_at": "2026-09-25T12:00:00Z",
+  "ended_at": "2026-09-25T12:10:00Z",
+  "_why": "rollout_path is outside CODEX_HOME so the rollout is ignored (bad_rollout_path 1): last_prompt null, count 0. Title \"Outside rollout\" vs first message \"read the outside rollout\": kind thread only under a case-sensitive substring test (spec 5.2 does not say; flagged)."
+ }
+]
