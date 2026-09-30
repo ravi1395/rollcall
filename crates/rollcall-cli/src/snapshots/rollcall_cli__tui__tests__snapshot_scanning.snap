@@ -1,0 +1,36 @@
+---
+source: crates/rollcall-cli/src/tui.rs
+expression: text(&render(&scanning()))
+---
+ rollcall ─ /srv/demo ─ 0 repos · 0 worktrees · not scanned yet                                                 [r]escan
+ scanning… 7 repos found
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ j/k move · enter expand · tab pane · / filter · c copy cd · o open · r rescan · ? help · q quit

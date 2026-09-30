@@ -1,0 +1,36 @@
+---
+source: crates/rollcall-cli/src/tui.rs
+expression: text(&render(&stale_header()))
+---
+ rollcall ─ /srv/demo ─ 5 repos · 8 worktrees · scanned 0s ago · stale                                          [r]escan
+┌ Repos ───────────────────────┐┌ CRM ─────────────────────────────────────────────────────────────────────────────────┐
+│▶ CRM          ●2 ↑3 2 stale  ││  main                           ✓ clean                codex 1d "fix flaky e2e"      │
+│  sutra        ●5 no-upstream ││  ui-refine/css                  ●2 ↑3                  claude 2h "consolidate dark mo│
+│  agentrec     ↑1             ││  chore/post-pr1                 merged·stale           claude 3d "post-PR1 cleanup"  │
+│  games        quiet 9d       ││  spike                          ext missing                                          │
+│  uv           quiet 21d      ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││ Older sessions (ui-refine/css)                                                       │
+│                              ││  2 more                                                                              │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ j/k move  enter expand  tab pane  / filter  R resume  Y copy resume  c copy cd  o open  r rescan  ? help  q quit
