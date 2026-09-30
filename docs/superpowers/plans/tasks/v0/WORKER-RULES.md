@@ -1,8 +1,8 @@
 # Worker rules — every rollcall v0 phase
 
 You implement exactly one plan phase. Sources of truth, in order: the spec
-`docs/superpowers/specs/2026-09-29-rollcall-design.md` (rev 10, the contract), the plan
-`docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md` (rev 5) — read its § Execution rules
+`docs/superpowers/specs/2026-09-29-rollcall-design.md` (rev 12, the contract), the plan
+`docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md` (rev 6) — read its § Execution rules
 R1–R6, § Interfaces, § Fixture manifest schema, and your phase section in full, plus every
 spec section your phase names. Other workers share the codebase in other worktrees; preserve
 their work and touch only your phase's files.

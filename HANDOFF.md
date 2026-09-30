@@ -1,5 +1,7 @@
 # HANDOFF — 2026-09-30 impl/v0 (~/Projects/rollcall), end of session 2
 
+**Status: CONSUMED** by session 3 (2026-09-30 22:28); archived as `.handoffs/20260930-222812-HANDOFF.md`. Not active state.
+
 Goal (author's `/goal`): the run is done when the final **Opus** skeptic gate reports every spec §12.1 criterion 1–18 MET. Spec rev 12 is the contract: `docs/superpowers/specs/2026-09-29-rollcall-design.md`. Plan rev 6: `docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md`. Run mechanics: `docs/superpowers/plans/tasks/v0/ORIENTATION.md`. Worker rules: `WORKER-RULES.md`; risks: `RISKS.md`; counts: `COUNTS.md` (same dir). Previous handoffs are in `.handoffs/`.
 
 ## Model roles (author, restated 2026-09-30; same as ORIENTATION "Run mechanics")
