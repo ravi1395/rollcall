@@ -23,6 +23,8 @@
 #   hang_probe_worktree_config enclosing_root tree_bomb tree_bomb_long excludes_file   (excludes_file added by P07, spec rev 11)
 #   index_bomb index_deep_ok nested_probe exec_type big_tracked pattern_blob_bomb rename_bomb   (added by P07b, spec rev 12;
 #   no new keys: their parameters ride in `target` and `config`, grammar under "Revision 12 hostile specials" below)
+#   gitoxide_keys pack_bomb objects_pack_flood tree_deep_big   (added by P07c, spec rev 13; no new keys: parameters in
+#   `target` and `config`, grammar under "Revision 13 hostile specials" below)
 #
 # ---- Conventions the schema left open (fixed by P07; P27b builds to these) ----
 # Build order per repo: init (initial branch = first commit's branch), commits, branches, worktrees, state and edit, then
@@ -113,6 +115,30 @@
 # rename_bomb: `target` = "big-a.txt>big-b.txt:62914560:line1". Two 60 MiB (62,914,560-byte) blobs of one-byte lines ("x\n"
 #   repeated): big-a.txt is committed after `commits`; then `git mv big-a.txt big-b.txt` and line 1 of big-b.txt is changed to "y"
 #   (same length) and staged.
+
+# ---- Revision 13 hostile specials (P07c; P27c builds to these; all in root H, in_clean = false by root) ----
+# Built like any special repo (init, `commits`, `config`, then `target` as the last step, no git command after). Units as above.
+# gitoxide_keys: `target` names the variant and `config` carries the gitoxide key(s), written into the repo-local config file
+#   directly. A `config` value of the form "git-dir:<name>" is replaced by the absolute path of <git dir>/<name>; other values
+#   are literal. The repo's own `index` stays the ordinary clean one written by `commits`.
+#     shallow_dev_zero    config gitoxide.core.shallowFile = "/dev/zero".
+#     shallow_fifo        config gitoxide.core.shallowFile = "git-dir:shallow-fifo"; that path is a FIFO.
+#     index_file_chain    config gitoxide.core.indexFile = "git-dir:evil"; <git dir>/evil is an index (DIRC, version 2, valid
+#                         SHA-1 trailer) whose TREE extension nests 1,025 levels deep (one child per level).
+#     replace_ref_base    config core.useReplaceRefs = "false" and gitoxide.objects.replaceRefBase = "objects/pack/"; the
+#                         builder creates objects/pack/evil, a 256 MiB (268,435,456-byte) sparse regular file.
+# pack_bomb: `target` names the variant. The builder writes <git dir>/objects/pack/pack-<sha1 of the sorted object ids>.pack and a
+#   valid version 2 .idx byte by byte (python3 hashlib/zlib), and the HEAD ref names the commit given below.
+#     ref_delta_self_head      the HEAD commit is one REF_DELTA entry whose base id is its own id (declared size 0).
+#     ref_delta_self_attr      HEAD commit and its tree are ordinary objects; the index names a stage-0 sub/.gitattributes whose
+#                              blob is a REF_DELTA whose base id is its own id, with a valid two-byte delta header (source size,
+#                              target size). `commits` holds README.md only; sub/ is absent from the work tree.
+#     ofs_delta_chain:8000000  the HEAD commit ends a chain of 8,000,000 OFS_DELTA entries, each two bytes (a 16 MB pack).
+# objects_pack_flood: `target` = "empty_files:10001": objects/pack holds 10,001 empty regular files (pack-flood-00000 ...).
+# tree_deep_big: `target` = "levels=5,tree_bytes=26MiB,next_name=1,blob_name=160". HEAD's tree chain is `levels` deep; each tree
+#   is `tree_bytes` (27,262,976) bytes, its first entry by name the next level's tree (a name of `next_name` bytes: "a"), the rest
+#   blob entries with `blob_name`-byte names (about 145,000 entries, 22 MiB of path bytes per tree). The builder writes loose
+#   tree objects directly and points the initial commit at the top one; `commits` holds README.md only (replaced by the chain).
 
 # ---- Session-fixture conventions (fixed by P08; P28 builds to these, P10 / P33 / P35 / P39 judge against them) ----
 # Rows. [[claude]]: id (the session id rollcall must report), project_dir (directory name under $CLAUDE_PROJECTS; opaque, rollcall
@@ -1301,6 +1327,138 @@ covers = ["hostile: rename-bomb"]
 head = "main"
 commits = [
   { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# rename-bomb\n" } },
+]
+
+# ---- revision 13 (P07c); parameters in the header section "Revision 13 hostile specials" ----
+
+[[repo]]
+id = "h-gitoxide-keys-shallow-dev-zero"
+root = "H"
+path = "gitoxide-keys-shallow-dev-zero"
+kind = "special"
+special = "gitoxide_keys"
+in_clean = false
+target = "shallow_dev_zero"
+covers = ["hostile: gitoxide-keys"]
+head = "main"
+config = { "gitoxide.core.shallowFile" = "/dev/zero" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# gitoxide-keys-shallow-dev-zero\n" } },
+]
+
+[[repo]]
+id = "h-gitoxide-keys-shallow-fifo"
+root = "H"
+path = "gitoxide-keys-shallow-fifo"
+kind = "special"
+special = "gitoxide_keys"
+in_clean = false
+target = "shallow_fifo"
+covers = ["hostile: gitoxide-keys"]
+head = "main"
+config = { "gitoxide.core.shallowFile" = "git-dir:shallow-fifo" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# gitoxide-keys-shallow-fifo\n" } },
+]
+
+[[repo]]
+id = "h-gitoxide-keys-index-file-chain"
+root = "H"
+path = "gitoxide-keys-index-file-chain"
+kind = "special"
+special = "gitoxide_keys"
+in_clean = false
+target = "index_file_chain"
+covers = ["hostile: gitoxide-keys"]
+head = "main"
+config = { "gitoxide.core.indexFile" = "git-dir:evil" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# gitoxide-keys-index-file-chain\n" } },
+]
+
+[[repo]]
+id = "h-gitoxide-keys-replace-ref-base"
+root = "H"
+path = "gitoxide-keys-replace-ref-base"
+kind = "special"
+special = "gitoxide_keys"
+in_clean = false
+target = "replace_ref_base"
+covers = ["hostile: gitoxide-keys"]
+head = "main"
+config = { "core.useReplaceRefs" = "false", "gitoxide.objects.replaceRefBase" = "objects/pack/" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# gitoxide-keys-replace-ref-base\n" } },
+]
+
+[[repo]]
+id = "h-pack-bomb-ref-delta-self-head"
+root = "H"
+path = "pack-bomb-ref-delta-self-head"
+kind = "special"
+special = "pack_bomb"
+in_clean = false
+target = "ref_delta_self_head"
+covers = ["hostile: pack-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# pack-bomb-ref-delta-self-head\n" } },
+]
+
+[[repo]]
+id = "h-pack-bomb-ref-delta-self-attr"
+root = "H"
+path = "pack-bomb-ref-delta-self-attr"
+kind = "special"
+special = "pack_bomb"
+in_clean = false
+target = "ref_delta_self_attr"
+covers = ["hostile: pack-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# pack-bomb-ref-delta-self-attr\n" } },
+]
+
+[[repo]]
+id = "h-pack-bomb-ofs-delta-chain"
+root = "H"
+path = "pack-bomb-ofs-delta-chain"
+kind = "special"
+special = "pack_bomb"
+in_clean = false
+target = "ofs_delta_chain:8000000"
+covers = ["hostile: pack-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# pack-bomb-ofs-delta-chain\n" } },
+]
+
+[[repo]]
+id = "h-objects-pack-flood"
+root = "H"
+path = "objects-pack-flood"
+kind = "special"
+special = "objects_pack_flood"
+in_clean = false
+target = "empty_files:10001"
+covers = ["hostile: objects-pack-flood"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# objects-pack-flood\n" } },
+]
+
+[[repo]]
+id = "h-tree-deep-big"
+root = "H"
+path = "tree-deep-big"
+kind = "special"
+special = "tree_deep_big"
+in_clean = false
+target = "levels=5,tree_bytes=26MiB,next_name=1,blob_name=160"
+covers = ["hostile: tree-deep-big"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# tree-deep-big\n" } },
 ]
 
 # ============================== root home (refused-root suggestions; 7 repos at depth 1-3 + one under a skip dir) ==============================
