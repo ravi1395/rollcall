@@ -469,3 +469,330 @@ fn build_all_git() {
     };
     assert_eq!(first(find("f-ahead-behind")), first(find("x-origin-b")));
 }
+
+// ------------------------------------------------------- session builder (P28)
+
+use super::build_sessions::{
+    CodexMode, build_big_log, build_corpora, build_demo_root, build_mcp_200, build_perf_root,
+    log_bytes,
+};
+use rusqlite::{Connection, OpenFlags};
+
+const ALL_CORPORA: [Corpus; 7] = [
+    Corpus::Matching,
+    Corpus::ClaudeRules,
+    Corpus::CodexRules,
+    Corpus::Incremental,
+    Corpus::Privacy,
+    Corpus::Sanitise,
+    Corpus::Shell,
+];
+const STATE_DB: &str = "state_5.sqlite";
+const BIG_LOG_BYTES: u64 = 64 * 1024 * 1024;
+const OVERSIZE_LINE: usize = 1 << 20;
+/// Rollouts under `$CODEX_HOME` in fallback mode (`expect_counts`: 10 sessions) plus 2 children.
+const FALLBACK_ROLLOUTS: usize = 10 + 2;
+/// `threads` rows of matching + codex_rules (`expect_counts`: 10 sessions) plus 3 children.
+const DB_THREADS: i64 = 10 + 3;
+/// Claude files of claude_rules + matching + incremental (`expect_counts`: 43 sessions) plus 3 excluded.
+const CLAUDE_FILES: usize = 43 + 3;
+
+fn files_under(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.map(Result::unwrap) {
+        let path = entry.path();
+        if entry.file_type().unwrap().is_dir() {
+            files_under(&path, ext, out);
+        } else if path.extension().is_some_and(|e| e == ext) {
+            out.push(path);
+        }
+    }
+}
+
+fn jsonl_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    files_under(dir, "jsonl", &mut out);
+    out
+}
+
+fn open_db(codex_home: &Path) -> Connection {
+    Connection::open_with_flags(codex_home.join(STATE_DB), OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("open state_5.sqlite")
+}
+
+fn count(conn: &Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |r| r.get(0)).expect(sql)
+}
+
+#[test]
+fn schemas() {
+    let dir = repo_root().join("schema/examples");
+    let (mut valid, mut invalid) = (0, 0);
+    for entry in std::fs::read_dir(&dir).unwrap().map(Result::unwrap) {
+        let name = entry.file_name().into_string().unwrap();
+        let (schema, kind) = name
+            .strip_suffix(".json")
+            .and_then(|stem| stem.split_once('.'))
+            .unwrap_or_else(|| panic!("example {name} is not <schema>.<kind>.json"));
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
+        let result = validate(schema, &doc);
+        if kind == "valid" {
+            assert_eq!(result, Ok(()), "{name} must validate");
+            valid += 1;
+        } else if kind.starts_with("invalid-") {
+            assert!(result.is_err(), "{name} must fail validation");
+            invalid += 1;
+        } else {
+            panic!("example {name}: kind must be `valid` or `invalid-*`");
+        }
+    }
+    assert!(
+        valid >= 4 && invalid >= 4,
+        "{valid} valid, {invalid} invalid examples"
+    );
+}
+
+#[test]
+fn line_tokens() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut tokens = Tokens::new(tmp.path().join("fifos"));
+    tokens.add("$F", "/f".into());
+    let lines = [
+        r#"{"cwd":"$F/a","pad":"$PAD:5"}"#.to_string(),
+        r#"{"partial":"x"}$NOEOL"#.to_string(),
+    ];
+    let out = String::from_utf8(log_bytes(&tokens, &lines)).unwrap();
+    assert_eq!(
+        out,
+        "{\"cwd\":\"/f/a\",\"pad\":\"xxxxx\"}\n{\"partial\":\"x\"}"
+    );
+}
+
+#[test]
+fn build_all_sessions() {
+    let m = manifest();
+    let w = fresh(Which::H);
+    build_corpora(&w, &ALL_CORPORA, CodexMode::Db);
+    for r in &m.claude {
+        let path = w.sb.claude_projects().join(&r.project_dir).join(&r.file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("claude row {}: {}: {e}", r.id, path.display()));
+        assert!(!text.contains("$PAD"), "{}", r.id);
+        assert_eq!(text.lines().count(), r.lines.len(), "{}", r.id);
+    }
+    let oversize = m
+        .claude
+        .iter()
+        .find(|r| r.lines.iter().any(|l| l.contains("$PAD:")))
+        .expect("a row carries a $PAD line");
+    let path =
+        w.sb.claude_projects()
+            .join(&oversize.project_dir)
+            .join(&oversize.file);
+    let longest = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(str::len)
+        .max();
+    assert!(longest > Some(OVERSIZE_LINE), "the $PAD line is oversize");
+
+    let conn = open_db(&w.sb.codex_home);
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_table_info('threads') ORDER BY name")
+        .unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut required: Vec<String> = rollcall_sessions::codex_db::REQUIRED_COLUMNS
+        .map(String::from)
+        .to_vec();
+    required.sort();
+    assert_eq!(columns, required, "threads columns drifted from §5.2");
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM threads"),
+        m.codex_thread.len() as i64
+    );
+    let spawned = m
+        .codex_thread
+        .iter()
+        .filter(|t| t.spawn_parent.is_some())
+        .count() as i64;
+    assert!(spawned >= 1);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM thread_spawn_edges"),
+        spawned
+    );
+    // A linked rollout exists, even the one outside $CODEX_HOME.
+    let linked = m.codex_thread.iter().filter(|t| t.rollout_id.is_some());
+    for t in linked {
+        let path: String = conn
+            .query_row(
+                "SELECT rollout_path FROM threads WHERE id = ?1",
+                [&t.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(Path::new(&path).is_file(), "thread {}: {path}", t.id);
+    }
+}
+
+#[test]
+fn corpus_selection() {
+    let m = manifest();
+    let in_corpus = |c: Corpus| m.claude.iter().filter(|r| r.corpus == c).count();
+    let w = fresh(Which::H);
+    build_corpora(&w, &[Corpus::Matching, Corpus::CodexRules], CodexMode::Db);
+    assert_eq!(
+        count(&open_db(&w.sb.codex_home), "SELECT COUNT(*) FROM threads"),
+        DB_THREADS
+    );
+    assert_eq!(
+        jsonl_under(&w.sb.claude_projects()).len(),
+        in_corpus(Corpus::Matching)
+    );
+
+    let fb = fresh(Which::H);
+    let corpora = [Corpus::ClaudeRules, Corpus::CodexRules, Corpus::Incremental];
+    build_corpora(&fb, &corpora, CodexMode::Fallback);
+    assert!(
+        !fb.sb.codex_home.join(STATE_DB).exists(),
+        "fallback mode has no database"
+    );
+    assert_eq!(jsonl_under(&fb.sb.codex_home).len(), FALLBACK_ROLLOUTS);
+    assert_eq!(
+        jsonl_under(&fb.sb.claude_projects()).len(),
+        in_corpus(Corpus::ClaudeRules) + in_corpus(Corpus::Incremental)
+    );
+
+    let all = fresh(Which::H);
+    build_corpora(
+        &all,
+        &[Corpus::ClaudeRules, Corpus::Matching, Corpus::Incremental],
+        CodexMode::Db,
+    );
+    assert_eq!(jsonl_under(&all.sb.claude_projects()).len(), CLAUDE_FILES);
+}
+
+#[test]
+fn big_log_and_mcp_200() {
+    let w = fresh(Which::H);
+    build_big_log(&w);
+    let logs = jsonl_under(&w.sb.claude_projects());
+    assert_eq!(logs.len(), 1);
+    let bytes = std::fs::read(&logs[0]).unwrap();
+    assert_eq!(bytes.len() as u64, BIG_LOG_BYTES);
+    assert!(!bytes.contains(&b'\n'), "one line, no newline");
+
+    let w = fresh(Which::H);
+    build_mcp_200(&w);
+    let logs = jsonl_under(&w.sb.claude_projects());
+    assert_eq!(logs.len(), manifest().mcp_200.sessions as usize);
+    let ids: std::collections::BTreeSet<_> = logs.iter().map(|p| p.file_stem().unwrap()).collect();
+    assert_eq!(ids.len(), logs.len(), "session ids are distinct");
+}
+
+#[test]
+fn perf_builder_is_exact() {
+    let spec = Perf {
+        repos: 6,
+        linked_worktrees: 2,
+        logs: 10,
+        bytes: 10 * 30_000 + 7,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("perf");
+    std::fs::create_dir_all(&root).unwrap();
+    assert_eq!(build_perf_root(&root, &spec), spec.bytes);
+    let logs = jsonl_under(&root.join(".agents"));
+    assert_eq!(logs.len(), spec.logs as usize);
+    let total: u64 = logs
+        .iter()
+        .map(|p| std::fs::metadata(p).unwrap().len())
+        .sum();
+    assert_eq!(total, spec.bytes);
+    for log in &logs {
+        for line in std::fs::read_to_string(log).unwrap().lines() {
+            serde_json::from_str::<serde_json::Value>(line).expect("every log line is JSON");
+        }
+    }
+    let repos: Vec<PathBuf> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join(".git").exists())
+        .collect();
+    assert_eq!(repos.len(), spec.repos as usize);
+    let linked = repos.iter().filter(|p| p.join(".git").is_file()).count();
+    assert_eq!(linked, spec.linked_worktrees as usize);
+}
+
+#[test]
+fn demo_builder() {
+    let m = manifest();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = base.join("demo");
+    std::fs::create_dir_all(&root).unwrap();
+    build_demo_root(&root);
+    let sb = Sandbox::new(&base.join("sandbox"));
+    let git = |dir: &str, args: &[&str]| -> String {
+        let mut cmd = sb.command(git_path());
+        cmd.current_dir(root.join(dir)).args(args);
+        let out = spawn_watchdog(cmd, FSCK_DEADLINE).unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    for id in &m.demo.repos {
+        let r = m.repo.iter().find(|r| &r.id == id).unwrap();
+        assert!(root.join(&r.path).join(".git").exists(), "{id}");
+        for wt in &r.worktrees {
+            assert!(
+                root.join(&wt.path).join(".git").is_file(),
+                "{id} worktree {}",
+                wt.path
+            );
+        }
+    }
+    let ahead_behind = git(
+        "api-gateway",
+        &["rev-list", "--left-right", "--count", "main...origin/main"],
+    );
+    assert_eq!(ahead_behind, "2\t1");
+    let status = git("api-gateway", &["status", "--porcelain"]);
+    assert!(
+        status.contains("M README.md") && status.contains("?? scratch.md"),
+        "{status}"
+    );
+    let logs = jsonl_under(&root.join(".agents"));
+    assert_eq!(logs.len(), m.demo.claude.len());
+    let root_str = root.to_str().unwrap();
+    for log in logs {
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            !text.contains("$DEMO") && text.contains(root_str),
+            "{}",
+            log.display()
+        );
+    }
+    let conn = open_db(&root.join(".agents/codex"));
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM threads"),
+        m.demo.codex_thread.len() as i64
+    );
+    let cwd: String = conn
+        .query_row(
+            "SELECT cwd FROM threads WHERE id = ?1",
+            [&m.demo.codex_thread[0].id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(cwd.starts_with(root_str), "{cwd}");
+}
