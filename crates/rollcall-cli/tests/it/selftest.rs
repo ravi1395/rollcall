@@ -129,7 +129,7 @@ const MIN_FSCK_REPOS: usize = 20;
 const SPARSE_BIG_LEN: u64 = 4 << 30;
 const BIG_TRACKED_LEN: u64 = 1 << 30;
 /// Specials in the manifest's enum; a row for each must have been built.
-const SPECIAL_COUNT: usize = 27;
+const SPECIAL_COUNT: usize = 31;
 
 fn git_in(w: &World, dir: &Path, args: &[&str]) -> std::process::Output {
     let mut cmd = w.sb.command(git_path());
@@ -215,6 +215,140 @@ fn only_admin_dir(gitdir: &Path) -> PathBuf {
         .collect();
     assert_eq!(dirs.len(), 1, "{dirs:?}");
     dirs.remove(0)
+}
+
+const FLOOD_FILES: usize = 10_001;
+const DEEP_TREE_BYTES: usize = 26 << 20;
+const OFS_LINKS: usize = 8_000_000;
+const EVIL_PACK_FILE_LEN: u64 = 256 << 20;
+const PACK_HEADER_LEN: usize = 12;
+const OBJECT_ID_LEN: usize = 20;
+const EVIL_TREE_NODES: usize = 1025;
+
+fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|w| *w == needle)
+        .count()
+}
+
+fn config_of(gitdir: &Path) -> String {
+    std::fs::read_to_string(gitdir.join("config")).unwrap()
+}
+
+/// The repo-local config carries the gitoxide key(s); the hostile file each one names exists.
+fn assert_gitoxide_keys(w: &World, r: &Repo, path: &Path, gitdir: &Path, python: &Path) {
+    let cfg = config_of(gitdir);
+    match r.target.as_deref().unwrap() {
+        "shallow_dev_zero" => assert!(cfg.contains("shallowFile = \"/dev/zero\""), "{cfg}"),
+        "shallow_fifo" => {
+            let fifo = gitdir.join("shallow-fifo");
+            assert!(
+                cfg.contains(&format!("shallowFile = \"{}\"", fifo.display())),
+                "{cfg}"
+            );
+            assert!(file_type(&fifo).is_fifo());
+        }
+        "index_file_chain" => {
+            let evil = gitdir.join("evil");
+            assert!(
+                cfg.contains(&format!("indexFile = \"{}\"", evil.display())),
+                "{cfg}"
+            );
+            let bytes = std::fs::read(&evil).unwrap();
+            assert_eq!(&bytes[..4], b"DIRC");
+            assert!(index_trailer_is_valid(python, &evil), "evil index checksum");
+            // One TREE node per level: every node but the last has one child.
+            assert_eq!(count_occurrences(&bytes, b"\0-1 1\n"), EVIL_TREE_NODES - 1);
+            assert_eq!(count_occurrences(&bytes, b"\0-1 0\n"), 1);
+            // The repo's own index is the ordinary clean one (git ignores the gitoxide key).
+            assert_eq!(git_ok(w, path, &["ls-files"]).trim(), "README.md");
+            assert!(index_trailer_is_valid(python, &gitdir.join("index")));
+        }
+        "replace_ref_base" => {
+            assert!(cfg.contains("useReplaceRefs = \"false\""), "{cfg}");
+            assert!(cfg.contains("replaceRefBase = \"objects/pack/\""), "{cfg}");
+            let evil = std::fs::metadata(gitdir.join("objects/pack/evil")).unwrap();
+            assert!(evil.is_file());
+            assert_eq!(evil.len(), EVIL_PACK_FILE_LEN);
+        }
+        other => panic!("gitoxide_keys target {other}"),
+    }
+}
+
+/// The one pack and its `.idx`: header bytes, entry bytes and both SHA-1 trailers, checked independently
+/// of the builder. Real git runs only on the ordinary objects of variant (ii): a self-referencing or
+/// 8,000,000-link delta pack is exactly what makes a reader loop, so variants (i) and (iii) are never
+/// given to git (`git verify-pack` on (i) would fail or hang, and is not run).
+fn assert_pack_bomb(w: &World, r: &Repo, path: &Path, gitdir: &Path, python: &Path) {
+    let target = r.target.as_deref().unwrap();
+    let dir = gitdir.join("objects/pack");
+    let mut names: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 2, "{names:?}");
+    let (idx_path, pack_path) = (&names[0], &names[1]);
+    assert_eq!(idx_path.extension().unwrap(), "idx");
+    assert_eq!(pack_path.extension().unwrap(), "pack");
+    assert_eq!(idx_path.file_stem(), pack_path.file_stem());
+    let stem = pack_path.file_stem().unwrap().to_str().unwrap();
+    assert!(stem.starts_with("pack-") && stem.len() == 5 + 40, "{stem}");
+
+    let pack = std::fs::read(pack_path).unwrap();
+    let idx = std::fs::read(idx_path).unwrap();
+    assert_eq!(&pack[..4], b"PACK");
+    assert_eq!(&pack[4..8], &2u32.to_be_bytes());
+    assert_eq!(&idx[..8], b"\xfftOc\0\0\0\x02");
+    assert!(index_trailer_is_valid(python, pack_path), "pack checksum");
+    assert!(index_trailer_is_valid(python, idx_path), "idx checksum");
+    assert_eq!(
+        idx[idx.len() - 40..idx.len() - 20],
+        pack[pack.len() - 20..],
+        "idx names its pack"
+    );
+
+    let count = u32::from_be_bytes(pack[8..12].try_into().unwrap()) as usize;
+    let id_at = PACK_HEADER_LEN + 1;
+    match target {
+        "ref_delta_self_head" | "ref_delta_self_attr" => {
+            assert_eq!(count, 1);
+            // Type 7 (REF_DELTA); the low size nibble is the declared inflated size: 0, or 2 for the delta header.
+            let want = if target == "ref_delta_self_head" {
+                0x70
+            } else {
+                0x72
+            };
+            assert_eq!(pack[PACK_HEADER_LEN], want);
+            // The base id is the entry's own id, the only id the .idx lists.
+            let own = &idx[8 + 256 * 4..8 + 256 * 4 + OBJECT_ID_LEN];
+            assert_eq!(&pack[id_at..id_at + OBJECT_ID_LEN], own);
+        }
+        "ofs_delta_chain:8000000" => {
+            assert_eq!(count, OFS_LINKS + 1);
+            // One 9-byte blob, then OFS_DELTA links of two bytes each (type 6, size 0; distance 9 then 2).
+            assert_eq!(pack.len(), PACK_HEADER_LEN + 9 + 2 * OFS_LINKS + 20);
+            assert_eq!(
+                &pack[PACK_HEADER_LEN + 9..PACK_HEADER_LEN + 13],
+                b"\x60\x09\x60\x02"
+            );
+            assert_eq!(&pack[pack.len() - 22..pack.len() - 20], b"\x60\x02");
+        }
+        other => panic!("pack_bomb target {other}"),
+    }
+    if target == "ref_delta_self_attr" {
+        assert_eq!(
+            git_ok(w, path, &["cat-file", "-t", "HEAD"]).trim(),
+            "commit"
+        );
+        assert_eq!(
+            git_ok(w, path, &["cat-file", "-t", "HEAD^{tree}"]).trim(),
+            "tree"
+        );
+        let staged = git_ok(w, path, &["ls-files", "-s"]);
+        assert!(staged.contains("0\tsub/.gitattributes"), "{staged}");
+    }
 }
 
 /// One assertion block per special: the builder must have produced the hostile shape, not just a directory.
@@ -350,6 +484,30 @@ fn assert_special(w: &World, r: &Repo, special: Special, python: &Path) {
             let script =
                 "import sys,zlib\nprint(zlib.decompress(open(sys.argv[1],'rb').read())[:16])";
             assert_eq!(python_out(python, script, &obj), "b'tree 1073741824\\x00'");
+        }
+        Special::GitoxideKeys => assert_gitoxide_keys(w, r, &path, &gitdir, python),
+        Special::PackBomb => assert_pack_bomb(w, r, &path, &gitdir, python),
+        Special::ObjectsPackFlood => {
+            let entries: Vec<_> = std::fs::read_dir(gitdir.join("objects/pack"))
+                .unwrap()
+                .map(|e| e.unwrap())
+                .collect();
+            assert_eq!(entries.len(), FLOOD_FILES);
+            for e in entries {
+                let meta = e.metadata().unwrap();
+                assert!(meta.is_file() && meta.len() == 0, "{:?}", e.path());
+            }
+        }
+        Special::TreeDeepBig => {
+            // Git never parses a tree to report its size; the chain is five trees, the last entry a blob.
+            for (levels, path_in_tree) in ["", "a", "a/a", "a/a/a", "a/a/a/a"].iter().enumerate() {
+                let spec = format!("HEAD:{path_in_tree}");
+                assert_eq!(git_ok(w, &path, &["cat-file", "-t", &spec]).trim(), "tree");
+                let size = git_ok(w, &path, &["cat-file", "-s", &spec]);
+                assert_eq!(size.trim(), DEEP_TREE_BYTES.to_string(), "level {levels}");
+            }
+            let bottom = git_ok(w, &path, &["cat-file", "-t", "HEAD:a/a/a/a/a"]);
+            assert_eq!(bottom.trim(), "blob");
         }
         Special::EnclosingRoot => assert!(path.join("sub/dir/keep.txt").is_file()),
         Special::Drivers => {

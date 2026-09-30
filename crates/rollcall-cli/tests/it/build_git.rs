@@ -22,6 +22,7 @@ const BUDGET_DIR: &str = "budget";
 const SPARSE_FILE: &str = "sparse-4gib";
 const SPARSE_BIG_LEN: u64 = 4 << 30;
 const BIG_TRACKED_LEN: u64 = 1 << 30;
+const REPLACE_BASE_LEN: u64 = 256 << 20;
 const MIB: usize = 1 << 20;
 /// Nesting of the accepted positive control (every node on the path counts, root included).
 const DEEP_OK_NODES: usize = 1024;
@@ -43,6 +44,55 @@ const BIG_TREE_CLAIM: &str = "tree 1073741824";
 
 const SEAL_SCRIPT: &str = "import hashlib,sys\np=sys.argv[1]\nd=open(p,'rb').read()\nopen(p,'ab').write(hashlib.sha1(d).digest())";
 const BIG_TREE_SCRIPT: &str = "import os,sys,zlib\np=sys.argv[1]\nraw=zlib.decompress(open(p,'rb').read())\nhead,body=raw.split(b'\\0',1)\nassert head.startswith(b'tree ')\nos.chmod(p,0o644)\nopen(p,'wb').write(zlib.compress(b'tree 1073741824\\0'+body))";
+
+/// Writes `<pack dir>/pack-<sha1 of the sorted ids>.{pack,idx}` (version 2 idx, real SHA-1 trailers); argv:
+/// pack dir, kind, link count, hex id of the one listed object. The pack lists only that object; the
+/// `ofs` kind's 8,000,000 links are two-byte entries with no deflate stream, as in the P15b probe.
+const PACK_SCRIPT: &str = r#"import hashlib,os,struct,sys,zlib
+d,kind,n,hexid=sys.argv[1],sys.argv[2],int(sys.argv[3]),sys.argv[4]
+x=bytes.fromhex(hexid)
+if kind=='ref_head':
+    body=b'\x70'+x+zlib.compress(b'');count,last,crc=1,12,zlib.crc32(body)
+elif kind=='ref_attr':
+    body=b'\x72'+x+zlib.compress(b'\0\0');count,last,crc=1,12,zlib.crc32(body)
+else:
+    blob=b'\x30'+zlib.compress(b'')
+    body=blob+b'\x60'+bytes([len(blob)])+b'\x60\x02'*(n-1)
+    count,last,crc=n+1,12+len(blob)+2*(n-1),zlib.crc32(b'\x60\x02')
+pack=b'PACK'+struct.pack('>II',2,count)+body
+pack+=hashlib.sha1(pack).digest()
+idx=b'\xfftOc'+struct.pack('>I',2)
+idx+=b''.join(struct.pack('>I',1 if b>=x[0] else 0) for b in range(256))
+idx+=x+struct.pack('>II',crc,last)+pack[-20:]
+idx+=hashlib.sha1(idx).digest()
+name=os.path.join(d,'pack-'+hashlib.sha1(x).hexdigest())
+open(name+'.pack','wb').write(pack)
+open(name+'.idx','wb').write(idx)"#;
+
+/// Loose tree chain; argv: git dir, blob hex, levels, bytes per tree, blob name length. Prints the top tree id.
+/// The first entry of each tree is `a` (the next tree; a blob at the bottom), then blobs `b0000000aaa...`;
+/// 27,262,976 is not a multiple of the 188-byte entry, so the last name absorbs the remainder.
+const TREE_SCRIPT: &str = r#"import hashlib,os,sys,zlib
+g,blob,levels,total,nl=sys.argv[1],bytes.fromhex(sys.argv[2]),int(sys.argv[3]),int(sys.argv[4]),int(sys.argv[5])
+def put(body):
+    raw=b'tree %d\0'%len(body)+body
+    h=hashlib.sha1(raw).hexdigest()
+    d=os.path.join(g,'objects',h[:2]);os.makedirs(d,exist_ok=True)
+    open(os.path.join(d,h[2:]),'wb').write(zlib.compress(raw,1))
+    return bytes.fromhex(h)
+child=None
+for _ in range(levels):
+    first=b'40000 a\0'+child if child else b'100644 a\0'+blob
+    k,pad=divmod(total-len(first),7+nl+1+20)
+    names=[b'b%07d'%i+b'a'*(nl-8) for i in range(k)]
+    names[-1]+=b'a'*pad
+    body=first+b''.join(b'100644 '+n+b'\0'+blob for n in names)
+    assert len(body)==total
+    child=put(body)
+print(child.hex())"#;
+/// Object id the self-referencing REF_DELTA entries name as their base (their own id).
+const SELF_DELTA_ID: &str = "1111111111111111111111111111111111111111";
+const GIT_DIR_PREFIX: &str = "git-dir:";
 
 pub fn build(which: Which, w: &mut World, m: &Manifest) {
     let cx = Ctx { w, m };
@@ -511,6 +561,14 @@ fn config_value(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// `git-dir:<name>` is the absolute path of `<git dir>/<name>`; anything else is substituted like a path token.
+fn config_path(cx: &Ctx, gitdir: &Path, value: &str) -> String {
+    match value.strip_prefix(GIT_DIR_PREFIX) {
+        Some(name) => gitdir.join(name).to_string_lossy().into_owned(),
+        None => cx.subst(value),
+    }
+}
+
 /// Appends `config` entries to the git dir's config file; last assignment wins, and no git command runs.
 fn write_config(cx: &Ctx, r: &Repo, gitdir: &Path) {
     if r.config.is_empty() {
@@ -525,7 +583,7 @@ fn write_config(cx: &Ctx, r: &Repo, gitdir: &Path) {
         };
         text.push_str(&format!(
             "{header}\n\t{name} = {}\n",
-            config_value(&cx.subst(value))
+            config_value(&config_path(cx, gitdir, value))
         ));
     }
     let file = gitdir.join("config");
@@ -544,6 +602,8 @@ fn before_config(cx: &Ctx, r: &Repo, path: &Path) {
         Special::BigObject => big_object(cx, path),
         Special::PatternBlobBomb => pattern_blob_bomb(cx, r, path),
         Special::RenameBomb => rename_bomb(cx, r, path),
+        Special::TreeDeepBig => tree_deep_big(cx, r, path),
+        Special::PackBomb => pack_bomb_index(cx, r, path),
         _ => {}
     }
 }
@@ -694,6 +754,51 @@ fn rename_bomb(cx: &Ctx, r: &Repo, dir: &Path) {
     cx.git(dir, &["add", "--", to]);
 }
 
+fn target_value<'a>(target: &'a str, key: &str) -> &'a str {
+    target
+        .split(',')
+        .find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
+        .unwrap_or_else(|| panic!("target {target} has no {key}"))
+}
+
+/// `target` = `levels=N,tree_bytes=<n>MiB,next_name=1,blob_name=N`: loose trees from python3, one commit on the top.
+fn tree_deep_big(cx: &Ctx, r: &Repo, dir: &Path) {
+    let target = r.target.as_deref().expect("tree_deep_big target");
+    assert_eq!(
+        target_value(target, "next_name"),
+        "1",
+        "the chain entry is `a`"
+    );
+    let tree_bytes: usize = target_value(target, "tree_bytes")
+        .strip_suffix("MiB")
+        .and_then(|n| n.parse::<usize>().ok())
+        .expect("tree_bytes=<n>MiB")
+        * MIB;
+    let blob = hash_object(cx, dir, b"x\n");
+    let out = Command::new(python())
+        .args(["-c", TREE_SCRIPT])
+        .arg(dir.join(".git"))
+        .args([&blob, target_value(target, "levels")])
+        .arg(tree_bytes.to_string())
+        .arg(target_value(target, "blob_name"))
+        .output()
+        .expect("run python3");
+    assert!(
+        out.status.success(),
+        "tree chain: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    replace_head_tree(cx, r, dir, String::from_utf8_lossy(&out.stdout).trim());
+}
+
+/// Variant (ii) needs a stage-0 index entry for a blob that exists only as a bad pack entry (git, not the pack, adds it).
+fn pack_bomb_index(cx: &Ctx, r: &Repo, dir: &Path) {
+    if r.target.as_deref() == Some("ref_delta_self_attr") {
+        let cacheinfo = format!("100644,{SELF_DELTA_ID},sub/.gitattributes");
+        cx.git(dir, &["update-index", "--add", "--cacheinfo", &cacheinfo]);
+    }
+}
+
 // ------------------------------------------------------ target replacement
 
 /// The last step of a repo; no git command runs here or afterwards (index specials run `rev-parse` first).
@@ -758,6 +863,17 @@ fn apply_target(cx: &Ctx, r: &Repo, path: &Path, gitdir: &Path) {
             fs::remove_file(&file).unwrap_or_else(|e| panic!("rm {}: {e}", file.display()));
             sparse_file(&file, BIG_TRACKED_LEN);
         }
+        Special::GitoxideKeys => gitoxide_keys(cx, path, gitdir, target),
+        Special::PackBomb => pack_bomb(gitdir, target),
+        Special::ObjectsPackFlood => {
+            let count: usize = target
+                .strip_prefix("empty_files:")
+                .and_then(|n| n.parse().ok())
+                .expect("empty_files:<n>");
+            for i in 0..count {
+                write_file(&gitdir.join(format!("objects/pack/pack-flood-{i:05}")), "");
+            }
+        }
         _ => {}
     }
 }
@@ -786,6 +902,49 @@ fn symlinked_file(cx: &Ctx, r: &Repo, path: &Path, gitdir: &Path, target: &str) 
         write_file(&gitdir.join(file), format!("{}\n", helper.display()));
     } else {
         replace_with_symlink(&gitdir.join(target), &sparse);
+    }
+}
+
+/// The config keys are already written; this creates the hostile file each one names.
+fn gitoxide_keys(cx: &Ctx, path: &Path, gitdir: &Path, target: &str) {
+    match target {
+        "shallow_dev_zero" => {}
+        "shallow_fifo" => mkfifo(&gitdir.join("shallow-fifo")),
+        "index_file_chain" => {
+            let chain = [(*b"TREE", tree_chain(TOO_DEEP_NODES))];
+            write_index(cx, path, &gitdir.join("evil"), 2, &chain);
+        }
+        "replace_ref_base" => sparse_file(&gitdir.join("objects/pack/evil"), REPLACE_BASE_LEN),
+        other => panic!("gitoxide_keys target {other}"),
+    }
+}
+
+/// `target` = `ref_delta_self_head`, `ref_delta_self_attr` or `ofs_delta_chain:<links>`.
+fn pack_bomb(gitdir: &Path, target: &str) {
+    let (kind, links) = match target.split_once(':') {
+        Some(("ofs_delta_chain", n)) => ("ofs", n),
+        None if target == "ref_delta_self_head" => ("ref_head", "0"),
+        None if target == "ref_delta_self_attr" => ("ref_attr", "0"),
+        _ => panic!("pack_bomb target {target}"),
+    };
+    let pack_dir = gitdir.join("objects/pack");
+    fs::create_dir_all(&pack_dir).expect("create objects/pack");
+    let out = Command::new(python())
+        .args(["-c", PACK_SCRIPT])
+        .arg(&pack_dir)
+        .args([kind, links, SELF_DELTA_ID])
+        .output()
+        .expect("run python3");
+    assert!(
+        out.status.success(),
+        "pack {target}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Variant (ii) keeps its ordinary HEAD; (i) and (iii) point the branch at the object the pack holds.
+    if target != "ref_delta_self_attr" {
+        let head = fs::read_to_string(gitdir.join("HEAD")).expect("read HEAD");
+        let branch = head.strip_prefix("ref: ").expect("symbolic HEAD").trim();
+        write_file(&gitdir.join(branch), format!("{SELF_DELTA_ID}\n"));
     }
 }
 

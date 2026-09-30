@@ -118,6 +118,10 @@ pub enum Special {
     BigTracked,
     PatternBlobBomb,
     RenameBomb,
+    GitoxideKeys,
+    PackBomb,
+    ObjectsPackFlood,
+    TreeDeepBig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
