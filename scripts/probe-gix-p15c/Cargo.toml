@@ -1,0 +1,9 @@
+[package]
+name = "probe-p15c"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+gix = { version = "=0.88.0", default-features = false, features = ["sha1", "status", "revision"] }
+
+[workspace]
