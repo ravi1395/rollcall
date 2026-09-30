@@ -8,9 +8,9 @@ while time.monotonic() - t0 < secs and p.poll() is None:
         rss = int(out) // 1024
         d = rss - prev; maxd = max(maxd, d); prev = rss; peak = max(peak, rss)
         samples.append((round(time.monotonic()-t0, 3), rss))
-        if cross384 is None and rss > 384: cross384 = round(time.monotonic()-t0, 3)
+        if cross384 is None and rss > 320: cross384 = round(time.monotonic()-t0, 3)
     time.sleep(tick)
 alive = p.poll() is None
 if alive: p.kill()
-print(f"{mode} {fx.split('/')[-2]}: peak={peak}MiB max_delta_per_tick={maxd}MiB first>384MiB@{cross384}s exited={not alive} rc={p.returncode} n={len(samples)}")
+print(f"{mode} {fx.split('/')[-2]}: peak={peak}MiB max_delta_per_tick={maxd}MiB first>320MiB@{cross384}s exited={not alive} rc={p.returncode} n={len(samples)}")
 print(" samples:", samples[:6], "...", samples[-4:])
