@@ -24,6 +24,8 @@ const STRIPPED_CORE_KEYS: [&str; 6] = [
 const NO_EXCLUDES: &str = "/dev/null";
 /// `gitoxide.objects.allocLimit` = 64 MiB, in bytes.
 const ALLOC_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+/// `core.bigFileThreshold` = 1 MiB, in git's own suffix syntax.
+const BIG_FILE_THRESHOLD: &str = "1m";
 
 /// `Options::isolated()` (not just `Config::isolated()`, see the gix audit note N1) plus the
 /// open-time overrides. `forced_trust` exists only for tests; production always passes `None`
@@ -34,6 +36,10 @@ fn hardened_options(forced_trust: Option<gix::sec::Trust>) -> gix::open::Options
         .config_overrides([
             "core.commitGraph=false".to_string(),
             format!("gitoxide.objects.allocLimit={ALLOC_LIMIT_BYTES}"),
+            // Above this a blob is treated as binary and never loaded (rename similarity).
+            format!("core.bigFileThreshold={BIG_FILE_THRESHOLD}"),
+            // Keeps gix's index decode on the thread rollcall's own validation mirrors.
+            "index.threads=1".to_string(),
         ]);
     match forced_trust {
         Some(trust) => options.with(trust),
@@ -384,6 +390,42 @@ mod tests {
             snapshot.integer("gitoxide.objects.allocLimit"),
             Some(64 * 1024 * 1024)
         );
+    }
+
+    #[test]
+    fn big_file_threshold_is_1_mib_whatever_the_repo_says() {
+        for local in ["0", "1g"] {
+            let (_t, base) = tempdir_real();
+            let repo_dir = base.join("r");
+            init_repo(&repo_dir);
+            git(&repo_dir, &["config", "core.bigFileThreshold", local]);
+
+            let repo = open(&repo_dir.join(".git"), &benign(&base));
+
+            assert_eq!(
+                repo.config_snapshot().integer("core.bigFileThreshold"),
+                Some(1024 * 1024),
+                "repo-local {local}"
+            );
+        }
+    }
+
+    #[test]
+    fn index_threads_is_one_whatever_the_repo_says() {
+        for local in ["0", "8"] {
+            let (_t, base) = tempdir_real();
+            let repo_dir = base.join("r");
+            init_repo(&repo_dir);
+            git(&repo_dir, &["config", "index.threads", local]);
+
+            let repo = open(&repo_dir.join(".git"), &benign(&base));
+
+            assert_eq!(
+                repo.config_snapshot().integer("index.threads"),
+                Some(1),
+                "repo-local {local}"
+            );
+        }
     }
 
     #[test]
