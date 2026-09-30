@@ -287,7 +287,7 @@ pub struct WalkOptions {
     pub budget: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitOptions {
     pub root: PathBuf,
     pub home: PathBuf,
@@ -297,7 +297,7 @@ pub struct GitOptions {
     pub excludes_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveredRepo {
     pub git_dir: PathBuf,
     pub workdir: Option<PathBuf>,
@@ -308,7 +308,7 @@ pub struct DiscoveredRepo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkedWorktree {
     pub path: PathBuf,
     pub admin_dir: PathBuf,
