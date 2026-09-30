@@ -1,11 +1,11 @@
 # gix 0.88 read-site audit
 
-**UNCOVERED count: 6 open.** Part 1 (P14): 0 after spec revision 11 (was 3 at first audit: U-1, U-2, U-3 below — each now covered by a revision 11 check; rows keep their original analysis and carry a `→ covered (rev 11)` note). Part 2a (P15a): **6 open** (U-4 .. U-9, "UNCOVERED findings from P15a" below), each reproduced or traced in the locked sources; §4.4 is not weakened, every proposed check only adds coverage. Parts 2b and 2c: not started, not counted.
+**UNCOVERED count: 0 open.** Part 1 (P14): 0 after spec revision 11 (was 3 at first audit: U-1, U-2, U-3 below — each now covered by a revision 11 check; rows keep their original analysis and carry a `→ covered (rev 11)` note). Part 2a (P15a): 0 after spec revision 12 (was **6 open**: U-4 .. U-9, "UNCOVERED findings from P15a" below), each reproduced or traced in the locked sources; §4.4 is not weakened, every proposed check only adds coverage. Parts 2b and 2c: not started, not counted.
 
 | Part | Phase | State |
 |---|---|---|
-| 1: config, refs, open | P14 | written 2026-09-30, **blocked** on U-1, U-2, U-3 |
-| 2a: index, status, worktree reads | P15a | written 2026-09-30 against spec rev 11, **blocked** on U-4, U-5, U-6, U-7, U-8, U-9 |
+| 1: config, refs, open | P14 | written 2026-09-30; U-1, U-2, U-3 covered by spec rev 11 |
+| 2a: index, status, worktree reads | P15a | written 2026-09-30 against spec rev 11; U-4 .. U-9 covered by spec rev 12 (in-process guards, §4.4) |
 | 2b: object store and history | P15b | not started |
 | 2c: spawn sites and API confirmation | P15c | not started |
 
@@ -389,6 +389,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 
 ### U-4: index extensions: unbounded recursion (a) and unbounded retained size (b)
 
+→ **covered (rev 12):** index validation (depth ≤ 1,024, `REUC` ≤ 1 MiB) + 16 MiB worker stack.
+
 - **(a) What it reads:** the `TREE` extension (`gix-index/src/extension/tree/decode.rs:one_recursive`) and the `UNTR` extension (`extension/untracked_cache.rs:decode_directory_block`) are decoded by recursion with one native stack frame per nesting level and no depth limit. The allocation limit is applied to sizes (`subtree_count * size_of::<Tree>()`), not depth. A `TREE` node needs 6 bytes (`\0-1 1\n`), so the 256 MiB the pre-open list allows is ~42 million levels.
 - **(b) What it reads:** the `REUC` extension (`extension/resolve_undo.rs:decode`) builds one `ResolvePath` (name + three optional stages, ~120 bytes) per 7 input bytes and takes no allocation limit: `extension/decode.rs:all` passes `alloc_limit_bytes` to `tree::decode` and `untracked_cache::decode` only.
 - **Reachable from:** `Repository::open_index` -> `gix_index::File::at` -> `State::from_bytes` -> `extension::decode::all`, so every status of every worktree, and X3 for the rename resource cache. The bytes come from `<git_dir>/index`, which the pre-open list admits up to 256 MiB.
@@ -398,6 +400,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 
 ### U-5: the dirwalk probes every untracked directory for a nested repository, reading `<dir>/.git`, `HEAD`, `commondir`, `gitdir` unbounded
 
+→ **covered (rev 12):** `recurse_repositories(true)` + §3.3 `untracked_count` rule.
+
 - **What it reads:** `gix-dir/src/walk/classify.rs:maybe_upgrade_to_repository` calls `gix_discover::is_git` on `<dir>/.git` (`gix-discover/src/is.rs:git_with_metadata`). For a `.git` directory it checks that `<dir>/.git/HEAD` exists and then calls `find_loose("HEAD")` (`gix-ref` `ref_contents`: `File::open`, `read_to_end`, symlinks followed, FIFO blocks; P14 R1); for a `.git` regular file it reads the `gitdir:` line (`from_gitdir_file`, D1, 64 KiB cap applied after the open) and probes the named directory the same way, plus `commondir` and `gitdir`.
 - **Reachable from:** `index_worktree_status` with default dirwalk options (`recurse_repositories: false`, X6): once per untracked, non-ignored directory (`classify::path`, "kind = maybe_upgrade_to_repository(...)"), and once per tracked gitlink directory. With `classify_untracked_bare_repositories` (off by default) it would also read `<dir>/HEAD` of every untracked directory itself.
 - **Why §4.4 does not cover it:** the pre-open list names the repo's own git dir and the three worktree-root files. A nested `.git` inside the worktree is a different repository that rollcall's §4.1 walk lists as its own `nested` row, but (i) the parent's status probes it regardless of what that row's pre-open check said, (ii) the §4.1 walk skips `node_modules`, `target`, `.venv` and friends and does not descend past its budget, while the dirwalk enters all of them, and (iii) the parent's status can run before or concurrently with the nested row.
@@ -405,6 +409,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 - **Check that would cover it (author's choice):** (1) run the dirwalk with `recurse_repositories(true)`, which returns before `is_git`, and drop from the count any entry under a directory that contains a `.git` entry (rollcall already knows nested repos from §4.1; for `node_modules`-style skipped directories it must decide the counting rule), after confirming on a fixture that gitlink directories are still classified; or (2) before status, a bounded rollcall-side walk of the worktree directories that `lstat`s every `.git` entry, applies the pre-open rule to `.git` (file <= 4 KiB, or directory) and to `<dir>/.git/HEAD` (regular, 4 KiB), and follows a `gitdir:` target one hop with the same rule; that walk must itself honour the deadline. Fixtures: `nested-git-head-symlink`, `nested-git-head-fifo`, `nested-git-file-gitdir`.
 
 ### U-6: tracked worktree files are read with attacker-chosen kind and, under built-in filters, without a size bound
+
+→ **covered (rev 12):** pre-status 100755 `lstat` check (a) + rollcall `CompareBlobs` 64 MiB cap and `thread_limit: Some(1)` (b).
 
 - **(a) type confusion.** An index entry of mode 100755 whose worktree path is a symlink, FIFO, socket or device gets no type change from `change_to_match_fs_with_values`, so status opens it (`std::fs::File::open` follows the symlink; the FIFO blocks). Unfiltered, a followed symlink costs at most its lstat length in hashed bytes (bounded); filtered, see (b). A FIFO blocks the worker.
 - **(b) unbounded filtered read.** `gix-filter/src/pipeline/convert.rs:convert_to_git` does `src.read_to_end` into memory whenever `ident`, `working-tree-encoding`, or an eol conversion applies: `ident` / `working-tree-encoding` / `text` / `eol` from any attribute source, or repo-local `core.autocrlf` / `core.eol` (not stripped by §4.4). No `.gitattributes` is needed: `core.autocrlf = true` in `.git/config` (regular, small, passes pre-open) suffices. The size shortcut does not help (attacker-set `stat.size == 0` with a non-empty blob id skips it). The file can be a regular file of any size the attacker managed to unpack (a sparse or highly compressible archive), or, via (a), a symlink to `/dev/zero`.
@@ -415,6 +421,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 
 ### U-7: pattern files taken from index blobs are parsed with 40x to 70x memory amplification and no size cap other than the 64 MiB allocation limit
 
+→ **covered (rev 12):** pre-status `try_header` caps 256 KiB each / 1 MiB total; pre-open pattern caps 256 KiB.
+
 - **What it reads:** `.gitattributes` and `.gitignore` content from the object database: `gix-worktree/src/stack/state/attributes.rs:push_directory` (`find_blob`) when the source is `IdMapping` (always for the rename resource cache, X3; the worktree file is not consulted there), `IdMappingThenWorktree`, or the fallback of `WorktreeThenIdMapping` when the worktree copy is absent; `state/ignore.rs:push_directory` when the index entry has `SKIP_WORKTREE` and the worktree copy is absent. The blob read is under the allocation limit; the parse is not: `gix-glob` / `gix-attributes` / `gix-ignore` keep about 40x (ignore) to 70x (attributes) their input.
 - **Reachable from:** `tree_index_status` (rename similarity candidates ask for attributes of both paths, so the `.gitattributes` blobs of every directory along the path are parsed), and `index_worktree_status`. The stack keeps one parsed list per directory level on the current path, so an attacker who points `.gitattributes` in many nested directories at the same 64 MiB blob multiplies it by depth.
 - **Why §4.4 does not cover it:** the 1 MiB pre-open caps apply to worktree files only; the same bytes arriving as a blob are bounded by `allocLimit`, 64x larger, and the amplification is not accounted for anywhere.
@@ -423,6 +431,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 
 ### U-8: split index: `sharedindex.<checksum>` is read unbounded and is not on the pre-open list
 
+→ **covered (rev 12):** `sharedindex.*` on the pre-open list, validated like `index`, chained `link` refused.
+
 - **What it reads:** `gix-index/src/extension/link.rs:dissolve_into` opens `<dir of the index>/sharedindex.<checksum>` (name from the index's `link` extension) through `File::at`: `File::open` (follows symlinks, blocks on a FIFO), a private `mmap`, then hashes `metadata().len() - hash_len` bytes unless `index.skipHash`. The shared index may itself carry a `link` extension, so a chain of files is read, one per hash, each hash computable by the attacker back to front.
 - **Reachable from:** `open_index` whenever the (pre-open-checked) index carries a `link` extension; any status.
 - **Why §4.4 does not cover it:** `index` is on the list, `sharedindex.*` is not. The decode of the shared file is under the allocation limit; the read, map and hash are not.
@@ -430,6 +440,8 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 - **Check that would cover it:** add every entry of the form `sharedindex.*` in the index's directory (git dir, and each linked admin dir) to the pre-open list with the `index` rule (regular, non-symlink, 256 MiB). Fixture: `sharedindex-fifo`, `sharedindex-symlink`.
 
 ### U-9: rename similarity: per-pair memory and time are unbounded by the 64 MiB allocation limit; `core.bigFileThreshold` is repo-controlled
+
+→ **covered (rev 12):** `core.bigFileThreshold=1m` override.
 
 - **What it reads:** `gix-diff/src/rewrites/tracker.rs:find_match` loads both blobs of every candidate pair (`Platform::set_resource` -> `convert_to_diffable`, DF1) and runs `InternedInput::new` + `Diff::compute`. §4.4 covers this with "`Rewrites { .. limit: 1000 }` (at most 1,000 pair checks) and the allocation limit". The limit does bound the pair count (`num_src * num_dst > limit` skips the inexact pass) and the allocation limit bounds each blob to 64 MiB. Neither bounds what a pair costs.
 - **Reachable from:** `tree_index_status` with `TrackRenames::Given(Rewrites { percentage: Some(0.5), .. })`: any repo whose HEAD-to-index difference contains at least one addition and one deletion of text blobs; up to 1,000 source-times-destination permutations are then compared.

@@ -1,6 +1,8 @@
-# Plan: rollcall v0 — revision 5  (45 phases in 9 lanes, branch: `impl/v0` in the main checkout; lane worktrees from agent isolation)
+# Plan: rollcall v0 — revision 6  (47 phases in 9 lanes, branch: `impl/v0` in the main checkout; lane worktrees from agent isolation)
 
-**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 10). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 12). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+
+**Revision 6** (2026-09-30, implementation run) follows spec revision 12 (P15a audit U-4 .. U-9, in-process guards chosen by the author): new phases P07b (manifest + checker for the revision 12 hostile fixtures) and P18b (pre-open and open additions, since P18/P19 are merged); P15c, P20, P21, P27b and P35 gain revision 12 items. R1 still holds: every revision 12 change lands in files those phases already own; P07b is the one sanctioned edit of `scripts/check-manifest.py` after P07.
 
 **Revision 5** records the author's answers to Q1–Q3 (§ Open questions). Revision 4 folded in plan red-team rounds 1–3 (Opus reviewers; findings and dispositions in `2026-09-29-rollcall-v0-plan-redteam.md`). Spec-level defects went to spec revisions 7–9; revision 10 records the author's Q3 answers. Phases P15 and P27 are split into lettered parts, so numbering stays stable.
 
@@ -136,12 +138,12 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 | Lane | Phases (serial inside) | Starts after |
 |---|---|---|
 | A — scaffold | 01 → 03 → 04; 02 in parallel with 03 | — |
-| B1 — oracles | 05 → 06; 07 → 08; 09 after 07; 10 after 08 and 09 | A |
+| B1 — oracles | 05 → 06; 07 → 08 → 07b; 09 after 07; 10 after 08 and 09 | A |
 | B2 — core functions | 11 → 12 → 13 | A |
-| C1 — git | 14 → 15a → 15b → 15c (audit docs) ∥ 16 → 17; 18 after 15c and 17 → 19 → 20 → 21 | A |
+| C1 — git | 14 → 15a → 15b → 15c (audit docs) ∥ 16 → 17; 18 after 15c and 17 → 19 → 18b → 20 → 21 | A |
 | C2 — sessions | 22 → 23 → 24 → 25 | A + P11 |
 | C3 — store | 26 | A |
-| C4 — generator | 27a → 27b → 28 | A + B1 |
+| C4 — generator | 27a → 27b → 28 | A + B1 (incl. 07b) |
 | D — cli (one crate, serial) | 29 → 30 → … → 39 | B2, C1–C4 merged |
 | E — release | 40 → 42 (both edit `ci.yml`); 41 orchestrator-owned | D |
 
@@ -221,6 +223,14 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] `python3 scripts/check-manifest.py sessions`: every §10.2 "Claude fixtures", "Codex fixtures", "Incremental reads", "Pointer resolution", "Matching", "Privacy", "Sanitising", "Shell safety" bullet covered; matched / unmatched counts equal `[matching]` and sum to 20; ≥ 16 sessions in corpus `privacy` carry prompt text.
 **Expected test outputs:** `python3 scripts/check-manifest.py sessions` → `ok`.
 
+## Phase 07b — Manifest, part 3: revision 12 hostile fixtures *(after P08)*
+**Files:** `tests/fixtures/MANIFEST.toml` (edit), `scripts/check-manifest.py` (edit: bullet list only).
+**Changes:** add `"hostile: index-bombs"`, `"hostile: index-deep-ok"`, `"hostile: nested-probe"`, `"hostile: exec-type"`, `"hostile: big-tracked"`, `"hostile: pattern-blob-bomb"`, `"hostile: rename-bomb"` to the checker's hard-coded list first (checker red), then the `[[repo]]` entries under root `H` per spec §10.2 revision 12 (six `index-bombs` repos, two `index-deep-ok`, both `exec-type`, both `pattern-blob-bomb`), with `special` values added to the enum and the header comment; `in_clean = false` for all of them.
+**Acceptance criteria:**
+- [ ] With only the checker edit applied, `python3 scripts/check-manifest.py git` exits non-zero naming the seven new bullets; with the manifest entries, it prints `ok`.
+- [ ] `expect F_repos` / `expect F_worktrees` unchanged (all new repos are under `H`).
+**Expected test outputs:** `python3 scripts/check-manifest.py git` → `ok: <n> repos, all bullets covered`; `python3 scripts/check-manifest.py sessions` → `ok`.
+
 ## Phase 09 — Oracles: discovery, status *(after P07)*
 **Files:** `tests/expected/discovery.json`, `tests/expected/status.json`.
 **Changes:** hand-derived from the manifest and spec, never by running rollcall. `discovery.json` has exactly the array shape of the §12.1 #1 jq projection; `status.json` is an array of `{ path, branch, detached, upstream, ahead, behind, unpushed, dirty_count, untracked_count, stale_reason, attention, error }`. Paths as `$F/…`, `$EXT/…`; errors as their §4.1 prefix; optional per-row `_why` (the harness strips `_`-keys).
@@ -294,7 +304,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 15c — gix audit, part 2c: spawn sites and API confirmation *(after P15b)*
 **Files:** `docs/audits/gix-0.88-read-sites.md` (edit).
-**Changes:** every process-spawn site (`gix-command`, `gix-filter` drivers, credential helpers) with why it is unreachable after §4.4 stripping; memory-growth paths without an interrupt (e.g. `index_from_tree`, spec rev 8's HEAD tree bound). Confirms at 0.88: `open::Options::isolated`, `config_snapshot_mut`, `remove_section_by_id`, `sections_and_ids`, `tree_index_status`, `index_worktree_status(…, submodule, …, should_interrupt, …)`, `SubmoduleStatus` returning `Ok(None)`, `with_hidden`, `use_commit_graph`, `core.commitGraph`, `gitoxide.objects.allocLimit`.
+**Changes:** revision 6: also confirms at 0.88 `CompareBlobs` (custom impl allowed by `index_worktree_status`), dirwalk `recurse_repositories` / `classify_untracked_bare_repositories`, `Options::thread_limit`, `core.bigFileThreshold` as a config override. Every process-spawn site (`gix-command`, `gix-filter` drivers, credential helpers) with why it is unreachable after §4.4 stripping; memory-growth paths without an interrupt (e.g. `index_from_tree`, spec rev 8's HEAD tree bound). Confirms at 0.88: `open::Options::isolated`, `config_snapshot_mut`, `remove_section_by_id`, `sections_and_ids`, `tree_index_status`, `index_worktree_status(…, submodule, …, should_interrupt, …)`, `SubmoduleStatus` returning `Ok(None)`, `with_hidden`, `use_commit_graph`, `core.commitGraph`, `gitoxide.objects.allocLimit`.
 **Acceptance criteria:** as P14; every spawn site is "unreachable because …" or UNCOVERED.
 **Expected test outputs:** n/a (document).
 
@@ -337,9 +347,18 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] Production open leaves `git_dir_trust` unset (never forced to `Full`); forcing `Trust::Reduced` yields a repo whose resolved config excludes repo-local values.
 **Expected test outputs:** `cargo test -p rollcall-git --locked -- trust::` → ≥ 12 passed.
 
+## Phase 18b — Pre-open and open, revision 12 *(after P19)*
+**Files:** `crates/rollcall-git/src/open.rs`, `crates/rollcall-git/src/trust.rs`.
+**Changes:** spec §4.4 revision 12: `sharedindex.*` on the pre-open list; pattern-file caps 256 KiB (`info/exclude`, `info/attributes`, worktree-root `.gitignore` / `.gitattributes`, the user's excludes file); index validation (streamed iterative parse of each `index` and linked `sharedindex.*`, versions 2/3/4, `TREE` / `UNTR` depth ≤ 1,024, `REUC` ≤ 1 MiB, no chained `link`); override `core.bigFileThreshold=1m` at open.
+**Acceptance criteria:**
+- [ ] Hand-built index bytes (valid checksum) each → `untrusted git dir`: `TREE` depth 1,025; `UNTR` depth 1,025; `REUC` 2 MiB; entry past EOF; name > 4,096 bytes; `link` → FIFO `sharedindex` (watchdog, no block); `link` → symlinked `sharedindex`; chained `link`. Depth exactly 1,024 in a v2 and a v4 index → ok. A real-git index with `TREE`, `REUC` (from a conflicted merge) and `UNTR` (`core.untrackedCache=true`) → ok.
+- [ ] Each pattern file at 256 KiB → ok, 256 KiB + 1 → untrusted; a `sharedindex.x` symlink → untrusted.
+- [ ] After open, the resolved `core.bigFileThreshold` is 1 MiB when the repo-local config sets `0` and when it sets `1g`.
+**Expected test outputs:** `cargo test -p rollcall-git --locked -- open:: trust::` → ≥ 20 more passed than before this phase.
+
 ## Phase 20 — Per-worktree git state
 **Files:** `crates/rollcall-git/src/state.rs`.
-**Changes:** spec rev 9 HEAD tree bound first (iterative walk via `gix::traverse::tree::depthfirst` with a counting `Visit` that cancels, deadline every 1,024 entries; caps 1,000,000 entries / 128 MiB path bytes / depth 4,096 → `git error: HEAD tree too large`; the walked tree id is passed on); then §3.3 fields: default branch, upstream, ahead / behind / unpushed (saturating at 10,000; deadline check every 256 commits; `cfg(test)` walked-commit counter), `dirty_count` (spec rev 8: union by destination path of `tree_index_status` with `TrackRenames::Given(Rewrites { copies: None, percentage: Some(0.5), limit: 1000, ..Default::default() })` and `index_worktree_status` with rewrites `None`, rollcall `SubmoduleStatus` → `Ok(None)`), `untracked_count` (files), `last_commit_at`, `merged`, `detached`, `head`, missing-worktree branch.
+**Changes:** spec rev 9 HEAD tree bound first (iterative walk via `gix::traverse::tree::depthfirst` with a counting `Visit` that cancels, deadline every 1,024 entries; caps 1,000,000 entries / 128 MiB path bytes / depth 4,096 → `git error: HEAD tree too large`; the walked tree id is passed on); then §3.3 fields: default branch, upstream, ahead / behind / unpushed (saturating at 10,000; deadline check every 256 commits; `cfg(test)` walked-commit counter), `dirty_count` (spec rev 8: union by destination path of `tree_index_status` with `TrackRenames::Given(Rewrites { copies: None, percentage: Some(0.5), limit: 1000, ..Default::default() })` and `index_worktree_status` with rewrites `None`, rollcall `SubmoduleStatus` → `Ok(None)`), `untracked_count` (files), `last_commit_at`, `merged`, `detached`, `head`, missing-worktree branch. Revision 6 (spec §4.4 revision 12): status call shape (`thread_limit: Some(1)`, dirwalk `recurse_repositories(true)`, rollcall `CompareBlobs` with the 64 MiB cap over `FastEq`), the §3.3 revision 12 `untracked_count` rule in the delegate, and the pre-status checks (a) 100755 over non-regular → `git error: unsafe tracked file`, (b) pattern blobs → `git error: pattern files too large`.
 **Acceptance criteria:**
 - [ ] Each §10.2 "Git state" case asserts a hard-coded expected value (non-zero where the case intends it) **and** equality with `git status --porcelain=v2 --branch --untracked-files=all` / `git rev-list --count` on the same tempdir repo.
 - [ ] Staged-only change → `dirty_count = 1`; staged plus a further unstaged edit of the same path → 1; `git mv` rename → 1; `git mv` plus an unstaged edit of the destination → 1; unstaged `mv a b` → `dirty_count = 1`, `untracked_count = 1` (matches git).
@@ -347,15 +366,17 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] Forced `Trust::Reduced` → `upstream` / `ahead` / `behind` null; a corrupted commit-graph chain does not change `ahead` / `behind`.
 - [ ] 10,001 commits (`git fast-import`) → `ahead = 10000` and walked-commit counter ≤ 10,001.
 - [ ] Squash-merged branch → `merged = false`.
-**Expected test outputs:** `cargo test -p rollcall-git --locked -- state::` → ≥ 18 passed.
+- [ ] Revision 12: untracked `sub/.git/HEAD` FIFO → `untracked_count` counts `sub` once, returns before the watchdog; a submodule's worktree files are not counted in the parent (equality with `git status --porcelain=v2 -uall` on both); 100755 entry over a symlink and over a FIFO → `git error: unsafe tracked file` (watchdog); a 300 MiB sparse tracked file under `core.autocrlf=true` + `* ident` → `dirty_count = 1` with peak RSS < 100 MB; a 300 KiB subdirectory `.gitattributes` blob, and eight 200 KiB skip-worktree `.gitignore` blobs → `git error: pattern files too large`; two 60 MiB one-byte-line blobs, staged `git mv` + edit → `dirty_count = 2` in < 10 s.
+**Expected test outputs:** `cargo test -p rollcall-git --locked -- state::` → ≥ 24 passed.
 
 ## Phase 21 — `discover` / `repo_state` entry points and deadline
 **Files:** `crates/rollcall-git/src/lib.rs` (bodies only).
-**Changes:** `repo_state` spawns a detached worker per repo; the timer starts before pre-open checks; a per-repo `AtomicBool` interrupt is set at the deadline; the worker checks the deadline at stage boundaries and a late result is discarded; `RepoState.pending` for abandoned workers; a sleep seam around the state call under `#[cfg(any(test, feature = "test-hooks"))]` (`GitOptions` gains no field; the seam reads a `static` set by tests); submodule rows via the same hardened open.
+**Changes:** `repo_state` spawns a detached worker per repo; the timer starts before pre-open checks; a per-repo `AtomicBool` interrupt is set at the deadline; the worker checks the deadline at stage boundaries and a late result is discarded; `RepoState.pending` for abandoned workers; a sleep seam around the state call under `#[cfg(any(test, feature = "test-hooks"))]` (`GitOptions` gains no field; the seam reads a `static` set by tests); submodule rows via the same hardened open. Revision 6: the worker is spawned with `std::thread::Builder::stack_size(16 MiB)` (spec §4.4 index validation).
 **Acceptance criteria:**
 - [ ] `repo_budget = 1 µs` on 3 tempdir repos (normal, bare, linked) → every row `timed out`.
 - [ ] Sleep hook 200 ms, budget 50 ms → row `timed out`; `pending` is false at return and true after the worker finishes (awaited via a test-only channel).
 - [ ] A `core.repositoryformatversion = 7` repo → its row starts `open failed: ` with `worktrees: []`; siblings unaffected.
+- [ ] Revision 6: an index whose `TREE` chain is exactly 1,024 levels decodes through `repo_state` without aborting the test process.
 **Expected test outputs:** `cargo test -p rollcall-git --locked` → ≥ 80 passed, 0 failed.
 
 ---
@@ -434,7 +455,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 27b — Git fixture builder *(after P27a)*
 **Files:** `crates/rollcall-cli/tests/it/build_git.rs`; mech: `selftest.rs` addition.
-**Changes:** every `[[repo]]` kind and special; `big_object` zlib via `python3`.
+**Changes:** every `[[repo]]` kind and special; `big_object` zlib via `python3`; revision 6: the P07b specials, incl. index files written byte by byte with a SHA-1 trailer (versions 2 and 4) and sparse files via `set_len`.
 **Acceptance criteria:**
 - [ ] `selftest::f_clean_fsck`: `git fsck` (under watchdog) passes on every `F_clean` repo and fails on the `corrupted` repo.
 - [ ] `selftest::build_all_git`: `F`, `H`, `EXT`, `budget`, `home` all build (exercises every special, keeping builders live).
@@ -508,7 +529,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 35 — Gates: hostile, privacy, store (§12.1 #8, #10, #12)
 **Files:** `crates/rollcall-cli/tests/it/hostile.rs`, `crates/rollcall-cli/tests/it/privacy.rs`; mech: `store.rs`.
-**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos, `tree-bomb` and `tree-bomb-long`. #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
+**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos, `tree-bomb` and `tree-bomb-long`, and every revision 12 assertion (`index-bombs`, `index-deep-ok`, `nested-probe`, `exec-type`, `big-tracked`, `pattern-blob-bomb`, `rename-bomb`). #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
 **Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- hostile:: privacy:: store::` → ≥ 20 passed.
 
 ## Phase 36 — TUI rendering (§12.1 #15; #13's TUI part)
