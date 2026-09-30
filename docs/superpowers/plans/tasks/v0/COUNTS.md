@@ -14,3 +14,4 @@ Actual measured counts after each lane/phase merge on `impl/v0`. Baseline row me
 | C4 P28 | 089d79e | 500 / 0 / 4 (cli it 15 + 2 ignored materialize) | clean | clean |
 | D P29, C1 P21 | 2f39ccd | 525 / 0 / 4 (git 231, cli lib 23) | clean | clean |
 | D P38 | c2730bf | 541 / 0 / 4 (cli lib 39) | clean | clean |
+| D P36 (+ spec rev 13 round 1 fixes) | 5b23879+P36 | 558 / 0 / 4 (cli lib 57) | clean | clean |
