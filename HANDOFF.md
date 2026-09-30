@@ -8,6 +8,9 @@ Goal (author's `/goal`): run is done when the final Opus skeptic gate reports ev
 - P15a merged (`46306d9`); audit U-4..U-9 annotated `covered (rev 12)`, UNCOVERED count 0.
 - Spec revision 12 + plan revision 6 (`827cbb2`): author chose in-process guards (no subprocess isolation). Per-finding choices: red-team log section "P15a gix read-site audit → spec revision 12"; the spec text is in §3.3 `untracked_count` and §4.4 (index validation, big-file threshold, status call shape, pre-status checks, pattern-file budget), plus the §10.2 hostile fixtures.
 
+- Rev 12 independent skeptic (Fable `skeptical-reviewer`): round 1 FAIL. The blocker was that wide `TREE`/`UNTR` index extensions could retain about 10× their size; fixed in `8945aac` with size caps and `index.threads=1`. Round 2 **GATE PASS** on all six criteria. Post-pass record fixes are in `2882fd9`. Residual risks are in `RISKS.md` (last bullet). Probes: `scripts/probe-index-bomb` (16 MiB TREE → 178 MiB peak, re-run this session) and `scripts/probe-index-ext-sizes.py`.
+- impl/v0 is 12 commits ahead of origin and NOT pushed; waiting on the author.
+
 ## In progress
 - P20 `worktree-agent-a1908ee2d13fad1d7` @ `ba59068`: WIP, 5 `unimplemented!`, never run. Next: re-dispatch P20 on that branch (ff it to impl/v0 first) with the plan rev 6 P20 items; it runs after P18b.
 
