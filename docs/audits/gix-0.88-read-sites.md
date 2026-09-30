@@ -389,7 +389,7 @@ Shared observation: U-4 to U-9 are all either **non-interruptible** (a blocking 
 
 ### U-4: index extensions: unbounded recursion (a) and unbounded retained size (b)
 
-→ **covered (rev 12):** index validation (depth ≤ 1,024, `REUC` ≤ 1 MiB) + 16 MiB worker stack.
+→ **covered (rev 12):** rollcall-side index validation: depth ≤ 1,024; per-extension caps `TREE` 16 MiB, `UNTR` 4 MiB, `REUC` 1 MiB (gix's allocation limit is per node, not per extension); `index.threads=1` (when threaded with `EOIE`, gix reads the extension table from the `EOIE` offset on its own thread); 16 MiB worker stack as margin.
 
 - **(a) What it reads:** the `TREE` extension (`gix-index/src/extension/tree/decode.rs:one_recursive`) and the `UNTR` extension (`extension/untracked_cache.rs:decode_directory_block`) are decoded by recursion with one native stack frame per nesting level and no depth limit. The allocation limit is applied to sizes (`subtree_count * size_of::<Tree>()`), not depth. A `TREE` node needs 6 bytes (`\0-1 1\n`), so the 256 MiB the pre-open list allows is ~42 million levels.
 - **(b) What it reads:** the `REUC` extension (`extension/resolve_undo.rs:decode`) builds one `ResolvePath` (name + three optional stages, ~120 bytes) per 7 input bytes and takes no allocation limit: `extension/decode.rs:all` passes `alloc_limit_bytes` to `tree::decode` and `untracked_cache::decode` only.
