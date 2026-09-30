@@ -11,3 +11,4 @@ Actual measured counts after each lane/phase merge on `impl/v0`. Baseline row me
 | lane B1 P07b/P09/P10, C4 P27a | 4866407 | 408 / 0 / 2 (core 105, git 136, sessions 135, store 16 + 2 ignored, cli 10, cli it 6) | clean | clean |
 | C1 P18b | ce781ee | 441 / 0 / 2 (git 169) | clean | clean |
 | C1 P20 (+ core serde derives, spec rev 13) | 3709e11 | 493 / 0 / 2 (git 219) | clean | clean |
+| C4 P28 | 089d79e | 500 / 0 / 4 (cli it 15 + 2 ignored materialize) | clean | clean |
