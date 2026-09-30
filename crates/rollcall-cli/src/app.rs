@@ -706,9 +706,7 @@ mod tests {
         assert_eq!(ch(&mut bad, 'Y'), Action::None);
     }
 
-    /// Depends on P31: `output::display_line` is `unimplemented!()` until then.
     #[test]
-    #[ignore = "needs P31 output::display_line"]
     fn capital_y_copies_the_display_resume_line() {
         let mut m = with_session(model(), SESSION_ID);
         assert_eq!(
