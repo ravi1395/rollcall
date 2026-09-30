@@ -1,5 +1,7 @@
 # HANDOFF — 2026-09-30 impl/v0 (~/Projects/rollcall)
 
+> CONSUMED 2026-09-30 21:19 by session 2 ingest; archived as `.handoffs/20260930-211905-HANDOFF.md`. Still the latest state until replaced.
+
 Goal (author's `/goal`): run is done when the final Opus skeptic gate reports every spec §12.1 criterion 1–18 MET. Run mechanics, model roles, gotchas: `docs/superpowers/plans/tasks/v0/ORIENTATION.md`; worker brief rules: `WORKER-RULES.md`; risks: `RISKS.md`; counts: `COUNTS.md` (same dir).
 
 ## Done (verified, merged on impl/v0, pushed except the last 2 docs commits)
