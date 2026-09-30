@@ -693,9 +693,13 @@ mod tests {
         write(&p, &b);
         let st = state_at(&p, b.len() as u64);
         assert!(file_exists_same(&st));
+        // Create the replacement while the original still exists, so its inode differs;
+        // a remove-then-create can reuse the freed inode (ext4), which only fingerprints catch.
+        let q = dir.path().join("replacement.jsonl");
+        write(&q, &b);
         fs::remove_file(&p).unwrap();
         assert!(!file_exists_same(&st), "vanished");
-        write(&p, &b);
+        fs::rename(&q, &p).unwrap();
         assert!(!file_exists_same(&st), "new inode at the same path");
     }
 }
