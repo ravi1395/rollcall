@@ -24,6 +24,7 @@ SPECIALS = {
     "untrusted_path", "drivers", "submodule_lfs", "worktree_escape", "commondir_escape",
     "symlinked_files", "worktree_config_symlink", "big_object", "hang_probe",
     "hang_probe_worktree_config", "enclosing_root", "tree_bomb", "tree_bomb_long", "excludes_file",
+    "index_bomb", "index_deep_ok", "nested_probe", "exec_type", "big_tracked", "pattern_blob_bomb", "rename_bomb",  # P07b
 }
 REPO_KEYS = {
     "id", "root", "path", "kind", "special", "in_clean", "target", "covers", "parent", "commits",
@@ -65,6 +66,9 @@ GIT_BULLETS = [
     "hostile: drivers", "hostile: submodule", "hostile: worktree-escape", "hostile: commondir-escape",
     "hostile: symlinked-files", "hostile: big-object", "hostile: tree-bomb", "hostile: tree-bomb-long",
     "hostile: hang-probe", "hostile: excludes-file",
+    # revision 12 (P07b)
+    "hostile: index-bombs", "hostile: index-deep-ok", "hostile: nested-probe", "hostile: exec-type",
+    "hostile: big-tracked", "hostile: pattern-blob-bomb", "hostile: rename-bomb",
     # extra: fixtures the spec requires but 10.2 does not list as bullets
     "extra: bad gitdir", "extra: untrusted git dir", "extra: fifo-git", "extra: walk budget",
 ]

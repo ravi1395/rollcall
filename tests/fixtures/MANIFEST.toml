@@ -21,6 +21,8 @@
 # special enum: fifo_git symlink_fanout symlink_out_of_root unreadable_dir corrupted bad_gitdir untrusted_path drivers
 #   submodule_lfs worktree_escape commondir_escape symlinked_files worktree_config_symlink big_object hang_probe
 #   hang_probe_worktree_config enclosing_root tree_bomb tree_bomb_long excludes_file   (excludes_file added by P07, spec rev 11)
+#   index_bomb index_deep_ok nested_probe exec_type big_tracked pattern_blob_bomb rename_bomb   (added by P07b, spec rev 12;
+#   no new keys: their parameters ride in `target` and `config`, grammar under "Revision 12 hostile specials" below)
 #
 # ---- Conventions the schema left open (fixed by P07; P27b builds to these) ----
 # Build order per repo: init (initial branch = first commit's branch), commits, branches, worktrees, state and edit, then
@@ -78,6 +80,39 @@
 #   tree_bomb_long hang_probe hang_probe_worktree_config fifo_git excludes_file} (spec 10.1 exclusion list; budget produces
 #   `partial`).
 # The sandboxed HOME is the `home` root. P08 added the shell-hostile repo `f-shell` to root F and updated [expect_counts].
+
+# ---- Revision 12 hostile specials (P07b; P27b builds to these; all in root H, in_clean = false by root) ----
+# Every repo below is built like any special repo (init, `commits`, `config`, then `target` as the last step, no git command after),
+# except that index_bomb / index_deep_ok / pattern_blob_bomb / rename_bomb also write objects or the index directly (see each).
+# Sparse file = created with set_len, no data blocks. "4 GiB" = 4,294,967,296 bytes; "1 GiB" = 1,073,741,824; "MiB" = 1,048,576.
+# index_bomb: `target` names the variant. The builder overwrites <git dir>/index byte by byte: header DIRC, version 2, one entry
+#   (README.md, its committed blob id, mode 100644, stat fields zero), then the extension(s) below, then the SHA-1 trailer of
+#   everything before it (valid checksum). Sizes are the extension payload length.
+#     tree_chain_1025      a TREE extension whose nodes nest 1,025 levels deep (one child per level).
+#     untr_chain_1025      an UNTR extension whose directory blocks nest 1,025 levels deep.
+#     reuc_2mib            a REUC extension of 2 MiB.
+#     tree_wide_64mib      a TREE extension of 64 MiB, depth 3 (wide and shallow).
+#     untr_wide_8mib       an UNTR extension of 8 MiB: one-byte untracked names spread over at least four directory blocks.
+#     link_fifo            a `link` extension naming sharedindex.<hash>; that file is a FIFO.
+#     link_symlink_sparse  a `link` extension naming sharedindex.<hash>; that file is a symlink to a sparse 4 GiB file.
+#     link_chain           a `link` extension naming sharedindex.<hash>; that file is a valid index that itself carries a `link`.
+#   <hash> is 40 x "a" (rollcall validates the name, it does not compare hashes).
+# index_deep_ok (positive control): `target` = "v2" or "v4": index version 2 or 4 (v4 prefix-compressed names), one README.md entry,
+#   then a TREE and an UNTR extension, each nested exactly 1,024 levels deep, valid checksum.
+# nested_probe: no `target`. The builder adds three untracked directories to the work tree: a/.git/HEAD a FIFO; b/.git/HEAD a symlink
+#   to a sparse 4 GiB file; c/.git a file containing "gitdir: ../d" with d/HEAD (d = <work tree>/d) a FIFO.
+# exec_type: commits put run.sh with content starting "#!" (created 100755); `config` core.autocrlf = "true"; `target` =
+#   "run.sh:symlink" (run.sh replaced by a symlink to a sparse 4 GiB file) or "run.sh:fifo" (replaced by a FIFO).
+# big_tracked: `config` core.autocrlf = "true"; commits put .gitattributes "* ident\n" and data.txt (100644); `target` =
+#   "data.txt:sparse:1GiB" (data.txt replaced by a 1 GiB sparse regular file).
+# pattern_blob_bomb: the commit holds README.md only. Before the last step the builder writes loose blobs and index entries
+#   (git update-index --add --cacheinfo; blob body = "#\n" repeated to the size in bytes; 300 KiB = 307200, 200 KiB = 204800).
+#   `target` = "sub/.gitattributes:307200" (one 300 KiB blob named in the index at sub/.gitattributes; the work tree has no sub/), or
+#   "sub1..sub8/.gitignore:204800:skip-worktree" (eight 200 KiB blobs, one per directory sub1 ... sub8, each entry SKIP_WORKTREE,
+#   files and directories absent from the work tree).
+# rename_bomb: `target` = "big-a.txt>big-b.txt:62914560:line1". Two 60 MiB (62,914,560-byte) blobs of one-byte lines ("x\n"
+#   repeated): big-a.txt is committed after `commits`; then `git mv big-a.txt big-b.txt` and line 1 of big-b.txt is changed to "y"
+#   (same length) and staged.
 
 # ---- Session-fixture conventions (fixed by P08; P28 builds to these, P10 / P33 / P35 / P39 judge against them) ----
 # Rows. [[claude]]: id (the session id rollcall must report), project_dir (directory name under $CLAUDE_PROJECTS; opaque, rollcall
@@ -1025,6 +1060,248 @@ kind = "special"
 special = "fifo_git"
 in_clean = false
 covers = ["extra: fifo-git"]
+
+# ---- revision 12 (P07b); parameters in the header section "Revision 12 hostile specials" ----
+
+[[repo]]
+id = "h-index-bomb-tree-chain-1025"
+root = "H"
+path = "index-bomb-tree-chain-1025"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "tree_chain_1025"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-tree-chain-1025\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-untr-chain-1025"
+root = "H"
+path = "index-bomb-untr-chain-1025"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "untr_chain_1025"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-untr-chain-1025\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-reuc-2mib"
+root = "H"
+path = "index-bomb-reuc-2mib"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "reuc_2mib"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-reuc-2mib\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-tree-wide-64mib"
+root = "H"
+path = "index-bomb-tree-wide-64mib"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "tree_wide_64mib"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-tree-wide-64mib\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-untr-wide-8mib"
+root = "H"
+path = "index-bomb-untr-wide-8mib"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "untr_wide_8mib"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-untr-wide-8mib\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-link-fifo"
+root = "H"
+path = "index-bomb-link-fifo"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "link_fifo"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-link-fifo\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-link-symlink-sparse"
+root = "H"
+path = "index-bomb-link-symlink-sparse"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "link_symlink_sparse"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-link-symlink-sparse\n" } },
+]
+
+[[repo]]
+id = "h-index-bomb-link-chain"
+root = "H"
+path = "index-bomb-link-chain"
+kind = "special"
+special = "index_bomb"
+in_clean = false
+target = "link_chain"
+covers = ["hostile: index-bombs"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-bomb-link-chain\n" } },
+]
+
+[[repo]]
+id = "h-index-deep-ok-v2"
+root = "H"
+path = "index-deep-ok-v2"
+kind = "special"
+special = "index_deep_ok"
+in_clean = false
+target = "v2"
+covers = ["hostile: index-deep-ok"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-deep-ok-v2\n" } },
+]
+
+[[repo]]
+id = "h-index-deep-ok-v4"
+root = "H"
+path = "index-deep-ok-v4"
+kind = "special"
+special = "index_deep_ok"
+in_clean = false
+target = "v4"
+covers = ["hostile: index-deep-ok"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# index-deep-ok-v4\n" } },
+]
+
+[[repo]]
+id = "h-nested-probe"
+root = "H"
+path = "nested-probe"
+kind = "special"
+special = "nested_probe"
+in_clean = false
+covers = ["hostile: nested-probe"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# nested-probe\n" } },
+]
+
+[[repo]]
+id = "h-exec-type-symlink"
+root = "H"
+path = "exec-type-symlink"
+kind = "special"
+special = "exec_type"
+in_clean = false
+target = "run.sh:symlink"
+covers = ["hostile: exec-type"]
+head = "main"
+config = { "core.autocrlf" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "run.sh" = "#!/bin/sh\necho hi\n" } },
+]
+
+[[repo]]
+id = "h-exec-type-fifo"
+root = "H"
+path = "exec-type-fifo"
+kind = "special"
+special = "exec_type"
+in_clean = false
+target = "run.sh:fifo"
+covers = ["hostile: exec-type"]
+head = "main"
+config = { "core.autocrlf" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "run.sh" = "#!/bin/sh\necho hi\n" } },
+]
+
+[[repo]]
+id = "h-big-tracked"
+root = "H"
+path = "big-tracked"
+kind = "special"
+special = "big_tracked"
+in_clean = false
+target = "data.txt:sparse:1GiB"
+covers = ["hostile: big-tracked"]
+head = "main"
+config = { "core.autocrlf" = "true" }
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { ".gitattributes" = "* ident\n", "data.txt" = "small\n" } },
+]
+
+[[repo]]
+id = "h-pattern-blob-bomb-attributes"
+root = "H"
+path = "pattern-blob-bomb-attributes"
+kind = "special"
+special = "pattern_blob_bomb"
+in_clean = false
+target = "sub/.gitattributes:307200"
+covers = ["hostile: pattern-blob-bomb"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# pattern-blob-bomb-attributes\n" } },
+]
+
+[[repo]]
+id = "h-pattern-blob-bomb-ignore"
+root = "H"
+path = "pattern-blob-bomb-ignore"
+kind = "special"
+special = "pattern_blob_bomb"
+in_clean = false
+target = "sub1..sub8/.gitignore:204800:skip-worktree"
+covers = ["hostile: pattern-blob-bomb"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# pattern-blob-bomb-ignore\n" } },
+]
+
+[[repo]]
+id = "h-rename-bomb"
+root = "H"
+path = "rename-bomb"
+kind = "special"
+special = "rename_bomb"
+in_clean = false
+target = "big-a.txt>big-b.txt:62914560:line1"
+covers = ["hostile: rename-bomb"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# rename-bomb\n" } },
+]
 
 # ============================== root home (refused-root suggestions; 7 repos at depth 1-3 + one under a skip dir) ==============================
 
