@@ -113,6 +113,10 @@ pub enum Command {
         #[command(subcommand)]
         action: CacheAction,
     },
+    /// Internal: one repo's state for the scan's worker process (§4.4). Reads JSON on stdin,
+    /// writes JSON on stdout; not a user command.
+    #[command(name = "__worker", hide = true)]
+    Worker,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -163,6 +167,8 @@ fn dispatch(cli: Cli, env: EnvPaths, stdout_is_tty: bool) -> ExitCode {
 
 fn run_command(command: &Command, env: EnvPaths) -> ExitCode {
     match command {
+        // Before any config or context load: the worker reads nothing but its stdin.
+        Command::Worker => scan::worker_main(),
         Command::Status { root, json } => run_status(root, *json, env),
         Command::Scan { root } => with_ctx(&root.flags, env, |ctx| {
             let started = Instant::now();
@@ -372,6 +378,14 @@ mod tests {
         }
         assert!(parse(&["init", "tcsh"]).is_err());
         assert!(parse(&["init"]).is_err());
+    }
+
+    #[test]
+    fn the_worker_subcommand_parses_but_is_hidden_from_help() {
+        assert_eq!(parse(&["__worker"]).unwrap().command, Some(Command::Worker));
+        let help = parse(&["--help"]).expect_err("displays").to_string();
+        assert!(help.contains("status"), "{help}");
+        assert!(!help.contains("__worker"), "{help}");
     }
 
     #[test]
