@@ -1,6 +1,8 @@
-# Plan: rollcall v0 — revision 6  (47 phases in 9 lanes, branch: `impl/v0` in the main checkout; lane worktrees from agent isolation)
+# Plan: rollcall v0 — revision 7  (50 phases in 9 lanes, branch: `impl/v0` in the main checkout; lane worktrees from agent isolation)
 
-**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 12). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+**Spec:** `docs/superpowers/specs/2026-09-29-rollcall-design.md` (revision 13). The spec is the contract; this plan cites sections (`§n`) instead of restating them. Where plan and spec disagree, the spec wins and the plan is the defect.
+
+**Revision 7** (2026-09-30, implementation run) follows spec revision 13 (P15b audit U-10 .. U-15; the author chose a killable per-repo worker process for U-13): new phases P18c (gitoxide path-key overrides, `objects/pack` pre-open, `refresh_never`), P07c (manifest + checker for the revision 13 fixtures) and P27c (their builders); P15c, P20 (tree-bytes counter), P30 (worker process, memory monitor, hidden subcommand) and P35 gain revision 13 items. Orchestrator R1 edits: `Serialize` / `Deserialize` on core `GitOptions`, `DiscoveredRepo`, `LinkedWorktree` (the worker-process protocol), and the hidden subcommand in `cli.rs` (written by P30). P07c is the second sanctioned `scripts/check-manifest.py` edit after P07.
 
 **Revision 6** (2026-09-30, implementation run) follows spec revision 12 (P15a audit U-4 .. U-9, in-process guards chosen by the author): new phases P07b (manifest + checker for the revision 12 hostile fixtures) and P18b (pre-open and open additions, since P18/P19 are merged); P15c, P20, P21, P27b and P35 gain revision 12 items. R1 still holds: every revision 12 change lands in files those phases already own; P07b is the one sanctioned edit of `scripts/check-manifest.py` after P07.
 
@@ -138,12 +140,12 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 | Lane | Phases (serial inside) | Starts after |
 |---|---|---|
 | A — scaffold | 01 → 03 → 04; 02 in parallel with 03 | — |
-| B1 — oracles | 05 → 06; 07 → 08 → 07b; 09 after 07; 10 after 08 and 09 | A |
+| B1 — oracles | 05 → 06; 07 → 08 → 07b → 07c; 09 after 07; 10 after 08 and 09 | A |
 | B2 — core functions | 11 → 12 → 13 | A |
-| C1 — git | 14 → 15a → 15b → 15c (audit docs) ∥ 16 → 17; 18 after 15c and 17 → 19 → 18b → 20 → 21 | A |
+| C1 — git | 14 → 15a → 15b → 15c (audit docs) ∥ 16 → 17; 18 after 15c and 17 → 19 → 18b → 20 → 18c → 21 | A |
 | C2 — sessions | 22 → 23 → 24 → 25 | A + P11 |
 | C3 — store | 26 | A |
-| C4 — generator | 27a → 27b → 28 | A + B1 (incl. 07b) |
+| C4 — generator | 27a → 27b → 28 → 27c | A + B1 (incl. 07b; 27c after 07c) |
 | D — cli (one crate, serial) | 29 → 30 → … → 39 | B2, C1–C4 merged |
 | E — release | 40 → 42 (both edit `ci.yml`); 41 orchestrator-owned | D |
 
@@ -231,6 +233,14 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] `expect F_repos` / `expect F_worktrees` unchanged (all new repos are under `H`).
 **Expected test outputs:** `python3 scripts/check-manifest.py git` → `ok: <n> repos, all bullets covered`; `python3 scripts/check-manifest.py sessions` → `ok`.
 
+## Phase 07c — Manifest, part 4: revision 13 hostile fixtures *(after P07b)*
+**Files:** `tests/fixtures/MANIFEST.toml` (edit), `scripts/check-manifest.py` (edit: bullet list and `special` enum only).
+**Changes:** add `"hostile: gitoxide-keys"`, `"hostile: pack-bombs"`, `"hostile: objects-pack-flood"`, `"hostile: tree-deep-big"` to the checker first (checker red), then `[[repo]]` entries under root `H` per spec §10.2 revision 13 (four `gitoxide-keys` repos, three `pack-bombs`, one `objects-pack-flood`, one `tree-deep-big`), parameters in existing keys (`target`, `config`) with the grammar documented in the header, `in_clean = false`.
+**Acceptance criteria:**
+- [ ] With only the checker edit applied, `python3 scripts/check-manifest.py git` exits non-zero naming the four new bullets; with the entries, it prints `ok`.
+- [ ] `expect F_repos` / `expect F_worktrees` unchanged.
+**Expected test outputs:** `python3 scripts/check-manifest.py git` → `ok: <n> repos, all bullets covered`.
+
 ## Phase 09 — Oracles: discovery, status *(after P07)*
 **Files:** `tests/expected/discovery.json`, `tests/expected/status.json`.
 **Changes:** hand-derived from the manifest and spec, never by running rollcall. `discovery.json` has exactly the array shape of the §12.1 #1 jq projection; `status.json` is an array of `{ path, branch, detached, upstream, ahead, behind, unpushed, dirty_count, untracked_count, stale_reason, attention, error }`. Paths as `$F/…`, `$EXT/…`; errors as their §4.1 prefix; optional per-row `_why` (the harness strips `_`-keys).
@@ -304,7 +314,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 15c — gix audit, part 2c: spawn sites and API confirmation *(after P15b)*
 **Files:** `docs/audits/gix-0.88-read-sites.md` (edit).
-**Changes:** revision 6: also confirms at 0.88 `CompareBlobs` (custom impl allowed by `index_worktree_status`), dirwalk `recurse_repositories` / `classify_untracked_bare_repositories`, `Options::thread_limit`, `core.bigFileThreshold` as a config override. Every process-spawn site (`gix-command`, `gix-filter` drivers, credential helpers) with why it is unreachable after §4.4 stripping; memory-growth paths without an interrupt (e.g. `index_from_tree`, spec rev 8's HEAD tree bound). Confirms at 0.88: `open::Options::isolated`, `config_snapshot_mut`, `remove_section_by_id`, `sections_and_ids`, `tree_index_status`, `index_worktree_status(…, submodule, …, should_interrupt, …)`, `SubmoduleStatus` returning `Ok(None)`, `with_hidden`, `use_commit_graph`, `core.commitGraph`, `gitoxide.objects.allocLimit`.
+**Changes:** revision 6: also confirms at 0.88 `CompareBlobs` (custom impl allowed by `index_worktree_status`), dirwalk `recurse_repositories` / `classify_untracked_bare_repositories`, `Options::thread_limit`, `core.bigFileThreshold` as a config override. Every process-spawn site (`gix-command`, `gix-filter` drivers, credential helpers) with why it is unreachable after §4.4 stripping; memory-growth paths without an interrupt (e.g. `index_from_tree`, spec rev 8's HEAD tree bound). Confirms at 0.88: `open::Options::isolated`, `config_snapshot_mut`, `remove_section_by_id`, `sections_and_ids`, `tree_index_status`, `index_worktree_status(…, submodule, …, should_interrupt, …)`, `SubmoduleStatus` returning `Ok(None)`, `with_hidden`, `use_commit_graph`, `core.commitGraph`, `gitoxide.objects.allocLimit`. Revision 7 (spec revision 13): confirms that Api-source overrides of `gitoxide.core.shallowFile`, `gitoxide.core.indexFile` and `gitoxide.objects.replaceRefBase` beat repo-local values at the point gix consumes each (incl. keys read during open), that `refresh_never()` still loads the store on first lookup, and that `find_header` returns a tree's size without loading its body; marks U-10 .. U-15 covered by revision 13 (U-13 by the worker process) and restates the UNCOVERED count.
 **Acceptance criteria:** as P14; every spawn site is "unreachable because …" or UNCOVERED.
 **Expected test outputs:** n/a (document).
 
@@ -367,7 +377,17 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 - [ ] 10,001 commits (`git fast-import`) → `ahead = 10000` and walked-commit counter ≤ 10,001.
 - [ ] Squash-merged branch → `merged = false`.
 - [ ] Revision 12: untracked `sub/.git/HEAD` FIFO → `untracked_count` counts `sub` once, returns before the watchdog (no git oracle: real git blocks on that FIFO); an untracked nested repo with a regular `HEAD`, and a submodule's worktree files, are counted as `git status --porcelain=v2 -uall` counts them; 100755 entry over a symlink and over a FIFO → `git error: unsafe tracked file` (watchdog); a 300 MiB sparse tracked file (a unit fixture; §10.2 `big-tracked` is 1 GiB and RSS-gated) under `core.autocrlf=true` + `* ident` → `dirty_count = 1` with a `#[cfg(test)]` read counter in rollcall's `CompareBlobs` at 0 (RSS is gated in P35); a 300 KiB subdirectory `.gitattributes` blob, and eight 200 KiB skip-worktree `.gitignore` blobs → `git error: pattern files too large`; two 60 MiB one-byte-line blobs, staged `git mv` + edit → `dirty_count = 2` in < 10 s.
+- [ ] Revision 7 (spec revision 13, U-14): the HEAD tree bound's fourth counter — a chain of nested trees totalling over 128 MiB of tree bytes, with entries, path bytes and depth under their caps → `git error: HEAD tree too large`, the bytes counter the one that tripped.
 **Expected test outputs:** `cargo test -p rollcall-git --locked -- state::` → ≥ 24 passed.
+
+## Phase 18c — Open, revision 13 *(after P20)*
+**Files:** `crates/rollcall-git/src/open.rs`, `crates/rollcall-git/src/trust.rs`.
+**Changes:** spec §4.4 revision 13: `objects/pack` of the object directory and of every alternate hop as a counted pre-open directory (regular files only, > 10,000 entries refused); config overrides `gitoxide.core.shallowFile`, `gitoxide.core.indexFile` (absolute path of the opened git dir's `index`), `gitoxide.objects.replaceRefBase=refs/replace/`; `repo.objects.refresh_never()` right after open.
+**Acceptance criteria:**
+- [ ] `objects/pack` with 10,000 regular files → ok; 10,001 → `untrusted git dir`; a symlink or FIFO entry → untrusted (FIFO under watchdog); the same in an alternate's `objects/pack`.
+- [ ] With repo-local `gitoxide.core.shallowFile=/dev/zero`, `gitoxide.core.indexFile=<git dir>/evil` and `gitoxide.objects.replaceRefBase=objects/pack/` (+ `core.useReplaceRefs=false`), the opened repo's `shallow_file()`, `index_path()` and replace-ref base resolve to the git dir's `shallow`, the git dir's `index` and `refs/replace/`; for a linked worktree, `index_path()` is its admin dir's `index`.
+- [ ] After open, an object written to the repo after open is not found (refresh never), and an object present at open is.
+**Expected test outputs:** `cargo test -p rollcall-git --locked -- open:: trust::` → ≥ 8 more passed than before this phase.
 
 ## Phase 21 — `discover` / `repo_state` entry points and deadline
 **Files:** `crates/rollcall-git/src/lib.rs` (bodies only).
@@ -472,6 +492,16 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ---
 
+## Phase 27c — Git fixture builder, revision 13 *(after P28 and P07c)*
+**Files:** `crates/rollcall-cli/tests/it/build_git.rs`; mech: `selftest.rs` addition.
+**Changes:** builders for the P07c specials: packs and `.idx` files written byte by byte (python3 `hashlib`/`zlib`, no new crate), sparse and flood files, the `tree-deep-big` chain.
+**Acceptance criteria:**
+- [ ] `selftest::build_all_git` still passes and covers every new special (the exhaustive `Special` match).
+- [ ] Real `git` confirms the ordinary objects in `pack-bombs` (ii) (`git cat-file -t` on HEAD and its tree, under watchdog); `git verify-pack` on `pack-bombs` (i) fails or is not run (documented).
+**Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- selftest::` → all passed, count ≥ the P28 count.
+
+---
+
 ## Lane D — `rollcall-cli` (serial; after B2 and C1–C4 are merged)
 
 ## Phase 29 — Config and context
@@ -484,13 +514,14 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 30 — Scan orchestration
 **Files:** `crates/rollcall-cli/src/scan.rs`.
-**Changes:** refusal → lock → `discover` → `repo_state` (≤ `available_parallelism` in flight) → sources → canonicalise cwds → `match_sessions` per root → `commit_scan`; `scanned_at = ctx.now` at scan start; `NoScan` / lock held → cache with `stale`; `repo_timeouts` / `repo_timeouts_abandoned` from `pending`; fills each source's `matched` / `unmatched`; stores the `--submodules` flag (`ScanResult.submodules`, read back via `scanned_submodules`); `WaitAtMost` per § Interfaces; exit codes (§3.1).
+**Changes:** refusal → lock → `discover` → `repo_state` (≤ `available_parallelism` in flight) → sources → canonicalise cwds → `match_sessions` per root → `commit_scan`; `scanned_at = ctx.now` at scan start; `NoScan` / lock held → cache with `stale`; `repo_timeouts` / `repo_timeouts_abandoned` from `pending`; fills each source's `matched` / `unmatched`; stores the `--submodules` flag (`ScanResult.submodules`, read back via `scanned_submodules`); `WaitAtMost` per § Interfaces; exit codes (§3.1). Revision 7 (spec revision 13, §4.4 "Per-repo worker process"): each `repo_state` runs in a child `current_exe() <hidden subcommand>` (the subcommand, hidden from `--help`, is added to `cli.rs` by this phase: it reads `{repo, opts}` JSON on stdin, calls `rollcall_git::repo_state`, writes `{state, abandoned}` JSON to stdout and exits without loading config); the parent kills at budget + 1 s (`timed out`), runs one `/bin/ps -o pid=,rss= -p …` monitor every 100 ms killing children over 384 MiB (`git error: memory limit`), maps a missing / malformed / over-16-MiB result to `git error: worker failed`. `#[cfg(test)]` builds call `repo_state` in-process (a lib unit test's `current_exe()` is the test harness); the child path is proven by P32 / P35 against the real binary.
 **Acceptance criteria (asserted on `ScanOutcome` / `Index`):**
 - [ ] Lock held elsewhere → `stale = true`, index unchanged; no cache → `scanned_at` none and exit 1.
 - [ ] Any error row or `partial` → exit 1; clean → 0; refused → 3.
 - [ ] Unreadable Codex DB → Claude and git results still committed; `DoctorDoc.notes` carries the reason.
 - [ ] Two scans at the same `ROLLCALL_NOW` commit identical rows.
 - [ ] `NoScan` with a different `--submodules` flag than the stored scan → `stale = true`.
+- [ ] Revision 7: the hidden subcommand round-trips a `DiscoveredRepo` + `GitOptions` for a tempdir repo to the same `RepoState` as the in-process call (test drives the subcommand's pure `fn` on in-memory stdin/stdout); the result parser maps empty, truncated and 16 MiB + 1 byte outputs to `git error: worker failed`; the `ps` output parser handles both procps and BSD formats and ignores exited pids.
 - [ ] `WaitAtMost(50 ms)` with a scan made slow by the P21 sleep seam (via the `test-hooks` dev-dependency feature) → returns stale within 50 ms + slack; the detached scan later commits.
 **Expected test outputs:** `cargo test -p rollcall-cli --lib --locked -- scan::` → ≥ 6 passed.
 
@@ -529,7 +560,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 
 ## Phase 35 — Gates: hostile, privacy, store (§12.1 #8, #10, #12)
 **Files:** `crates/rollcall-cli/tests/it/hostile.rs`, `crates/rollcall-cli/tests/it/privacy.rs`; mech: `store.rs`.
-**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos, `tree-bomb` and `tree-bomb-long`, and every revision 12 assertion (`index-bombs`, `index-deep-ok`, `nested-probe`, `exec-type`, `big-tracked`, `pattern-blob-bomb`, `rename-bomb`). #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
+**Acceptance criteria:** #8 per spec revision 7 — positive controls run first on their own `fresh(H)` builds and fail the test if markers don't appear; `rollcall scan` on a pristine `H` under watchdog: < 10 s, peak RSS < 512 MB, no `marker-*`, the §10.2 error prefixes incl. the `config.worktree` repos, `tree-bomb` and `tree-bomb-long`, and every revision 12 assertion (`index-bombs`, `index-deep-ok`, `nested-probe`, `exec-type`, `big-tracked`, `pattern-blob-bomb`, `rename-bomb`) and revision 13 assertion (`gitoxide-keys`, `pack-bombs`, `objects-pack-flood`, `tree-deep-big`; `pack-bombs` (i)'s `git error: memory limit` is the positive control that the memory monitor fired, (ii)'s `timed out` that the worker process ends a flat-memory loop). #10 (non-MCP parts; MCP is P34), incl. cache modes under `umask 022` via `sh -c`, and cache files searched for distinctive substrings of each of ≥ 16 prompts. #12: idempotence, lock → `stale: true`, rebuild; crash-safety satisfied by the P26 unit test (cited).
 **Expected test outputs:** `cargo test -p rollcall-cli --test it --locked -- hostile:: privacy:: store::` → ≥ 20 passed.
 
 ## Phase 36 — TUI rendering (§12.1 #15; #13's TUI part)
@@ -600,7 +631,7 @@ Per-session fields (§12.1 #4, #5) are observed by calling `Claude` / `Codex` `s
 | 5 | Codex source | 08, 10, 24, 25, 31 → **33** |
 | 6 | Matching | 08, 10, 13, 30 → **33** |
 | 7 | Incremental & pointers | 08, 22 → **33** |
-| 8 | Hostile repos | 07, 14, 15a–c, 18, 19, 20 → **35** |
+| 8 | Hostile repos | 07, 07b, 07c, 14, 15a–c, 18, 18b, 18c, 19, 20, 27b, 27c, 30 → **35** |
 | 9 | Guards & first run | 07, 16, 17 → **32** |
 | 10 | Privacy | 08, 11, 26, 31 → **35** + **34** (MCP defaults) |
 | 11 | Sanitising & shell safety | 08, 11, 31, 36, 37, 38 → **39** (sanitising also in 31, 36) |
