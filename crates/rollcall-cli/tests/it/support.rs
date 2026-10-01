@@ -800,6 +800,23 @@ fn build_root(which: Which, w: &mut World, m: &Manifest) {
     crate::build_sessions::build(which, w, m);
 }
 
+/// Takes the scan lock once a previous `rollcall` run's has been released. flock belongs to the open file
+/// description, so a child another test thread forked while that fd was open keeps the lock until it execs.
+pub fn lock_when_free(cache_dir: &Path, root: &Path) -> rollcall_store::ScanLock {
+    let deadline = Instant::now() + RUN_DEADLINE;
+    loop {
+        if let Some(lock) = rollcall_store::try_scan_lock(cache_dir, root).expect("lock file opens")
+        {
+            return lock;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the scan lock was never released"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 /// A private world for a test that mutates its fixtures or needs its own cache.
 pub fn fresh(which: Which) -> World {
     let mut w = World::empty(which);

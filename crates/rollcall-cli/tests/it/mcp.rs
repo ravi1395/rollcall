@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 use crate::build_sessions::{CodexMode, build_corpora, build_mcp_200};
 use crate::support::{
-    Corpus, Run, Sandbox, Which, World, expected, fresh, git_path, run_rollcall, spawn_watchdog,
-    validate,
+    Corpus, Run, Sandbox, Which, World, expected, fresh, git_path, lock_when_free, run_rollcall,
+    spawn_watchdog, validate,
 };
 
 const ROLLCALL: &str = env!("CARGO_BIN_EXE_rollcall");
@@ -870,9 +870,7 @@ fn a_held_scan_lock_with_a_cache_answers_stale_within_the_budget() {
     let seed = spawn_watchdog(b.sb.rollcall(&["scan", p(&b.root)], &[]), RUN_DEADLINE).unwrap();
     assert_eq!(Run::from(seed).code, 0);
 
-    let lock = rollcall_store::try_scan_lock(&b.cache_dir(), &b.root)
-        .expect("lock file opens")
-        .expect("nobody holds the lock yet");
+    let lock = lock_when_free(&b.cache_dir(), &b.root);
     let started = Instant::now();
     let held = serve(
         &b.sb,
@@ -894,6 +892,7 @@ fn a_held_scan_lock_with_a_cache_answers_stale_within_the_budget() {
 
     // Control: released, the same call scans and is fresh.
     drop(lock);
+    drop(lock_when_free(&b.cache_dir(), &b.root));
     let free = serve(
         &b.sb,
         &["--root", p(&b.root)],
@@ -901,4 +900,29 @@ fn a_held_scan_lock_with_a_cache_answers_stale_within_the_budget() {
         &[tool(1, "where_was_i", json!({}))],
     );
     assert_eq!(doc(&free.replies[0])["stale"], false);
+}
+
+/// §10.2 MCP: both tools over the full F, schema-valid and within the cap. F has its own world (cache).
+#[test]
+fn both_tools_on_full_f_are_valid_and_within_the_cap() {
+    let w = fresh(Which::F);
+    let served = serve(
+        &w.sb,
+        &["--root", p(&w.root)],
+        &[],
+        &[
+            tool(1, "where_was_i", json!({})),
+            tool(2, "list_stale", json!({})),
+        ],
+    );
+    assert_eq!(served.run.code, 0, "stderr: {}", served.run.stderr);
+    for line in &served.lines {
+        assert!(line.len() < CAP, "{} bytes", line.len());
+    }
+    let wwi = doc(&served.replies[0]);
+    valid("where_was_i", &wwi);
+    assert!(!wwi["repos"].as_array().unwrap().is_empty(), "{wwi}");
+    let stale = doc(&served.replies[1]);
+    valid("list_stale", &stale);
+    assert!(!stale["items"].as_array().unwrap().is_empty(), "{stale}");
 }

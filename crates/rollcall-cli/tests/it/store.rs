@@ -4,7 +4,7 @@
 //!
 //! Each test reads the shared read-only `F_clean` through a cache of its own (`HOME` and `XDG_CACHE_HOME`
 //! point at a scratch directory), so no other test's scan shares its database or locks.
-use super::support::{RUN_DEADLINE, Run, World, f_clean, run_rollcall_with};
+use super::support::{RUN_DEADLINE, Run, World, f_clean, lock_when_free, run_rollcall_with};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -71,9 +71,7 @@ fn a_held_scan_lock_answers_from_the_cache_as_stale() {
     assert_eq!(fresh["stale"], false);
 
     // The harness is the other scanner; rollcall keys the lock by the realpath of the root.
-    let lock = rollcall_store::try_scan_lock(&cache.dir, &w.root)
-        .expect("take the lock")
-        .expect("nobody holds it yet");
+    let lock = lock_when_free(&cache.dir, &w.root);
     let (_, held) = cache.status(&[]);
     assert_eq!(held["stale"], true, "{held}");
     assert_eq!(
@@ -83,6 +81,7 @@ fn a_held_scan_lock_answers_from_the_cache_as_stale() {
     );
 
     drop(lock);
+    drop(lock_when_free(&cache.dir, &w.root));
     let (_, released) = cache.status(&[]);
     assert_eq!(released["stale"], false);
 }
