@@ -82,8 +82,9 @@ fn open_index(ctx: &Ctx) -> SqliteIndex {
     SqliteIndex::open(&ctx.cache_dir).unwrap_or_else(|e| {
         // `ScanOutcome` carries an index, so there is no way to answer without one.
         eprintln!(
-            "rollcall: cannot open the cache {}: {e}",
-            ctx.cache_dir.display()
+            "rollcall: cannot open the cache {}: {}",
+            sanitise(&ctx.cache_dir.to_string_lossy()),
+            sanitise(&e.to_string())
         );
         std::process::exit(i32::from(EXIT_INCOMPLETE))
     })
@@ -173,7 +174,10 @@ fn take_lock(ctx: &Ctx, root: &Path) -> Option<ScanLock> {
     match rollcall_store::try_scan_lock(&ctx.cache_dir, root) {
         Ok(lock) => lock,
         Err(e) => {
-            eprintln!("rollcall: cannot take the scan lock: {e}");
+            eprintln!(
+                "rollcall: cannot take the scan lock: {}",
+                sanitise(&e.to_string())
+            );
             None
         }
     }
@@ -185,7 +189,11 @@ fn scan_here(ctx: &Ctx, root: &Path, mut index: SqliteIndex, lock: ScanLock) -> 
     match result {
         Ok(exit) => outcome(index, false, exit),
         Err(e) => {
-            eprintln!("rollcall: scan of {} failed: {e}", root.display());
+            eprintln!(
+                "rollcall: scan of {} failed: {}",
+                sanitise(&root.to_string_lossy()),
+                sanitise(&e)
+            );
             cached_with(index, root, EXIT_INCOMPLETE)
         }
     }
@@ -593,7 +601,7 @@ pub fn worker_main() -> ExitCode {
     match run_worker(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("rollcall: worker: {e}");
+            eprintln!("rollcall: worker: {}", sanitise(&e));
             ExitCode::FAILURE
         }
     }
