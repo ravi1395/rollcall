@@ -217,11 +217,18 @@ impl Walker<'_> {
     }
 
     fn claim_entry(&self) -> bool {
-        self.entries
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < self.budget_entries).then_some(n + 1)
-            })
-            .is_ok()
+        // `fetch_update` spelled out: deprecated from Rust 1.99, and its `try_update` rename is newer than the MSRV.
+        let mut n = self.entries.load(Ordering::SeqCst);
+        while n < self.budget_entries {
+            match self
+                .entries
+                .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return true,
+                Err(actual) => n = actual,
+            }
+        }
+        false
     }
 
     fn stop_at(&self, dir: &Path) {
