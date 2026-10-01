@@ -24,3 +24,4 @@ Actual measured counts after each lane/phase merge on `impl/v0`. Baseline row me
 | E P40, P41, P42 (+ rustc 1.99 clippy fix) | 1117eef | CI run 36923122916: all 13 jobs green (Linux release hostile 15/15; perf cold 1.03 s / warm 0.37 s medians; dist ×4; install; demo) | clean (1.99) | clean |
 | breaker round (P-gate): 4 fixes merged | 9913030 | 762 / 0 / 4 (local, `--no-fail-fast`) | clean | clean |
 | skeptic round 1 fix: RSS cap 256 MiB (spec rev 14) | 1aec2cf | 762 / 0 / 4 (local, `--no-fail-fast`) | clean | clean |
+| ambiguities resolved (R/Y gone cwd; rollout re-read test) | 26e345c | 765 / 0 / 4 (local, `--no-fail-fast`) | clean | clean |
