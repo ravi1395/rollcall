@@ -9,10 +9,10 @@ The v0 run is complete: the final Opus skeptic gate (round 2, at `db6581d`) repo
 - Breaker pass (`crates/rollcall-cli/tests/breaker_v0.rs`): 4 spec violations fixed (refusal/stderr sanitising, MCP wait overflow, Codex title kind mismatch, Claude duplicate session id) + test-side scan-lock flake fix — committed, pushed (`ca6c895` and later).
 - Skeptic round 1 failed #8 (hostile scan peak RSS over 512 MB); author chose spec rev 14: worker RSS cap 256 MiB (`1aec2cf`). Round 2 PASS: 41/41 skeptic local runs under 512 MB (max 495,927,296 bytes), CI printed 301.0 MiB (ubuntu) / 280.1 MiB (macos-14).
 - Breaker ambiguities resolved by the author (spec rev 14 clarifications, `26e345c`): `R` with `ROLLCALL_RESUME_FILE` and `Y` refuse a session whose cwd is gone (`cee9038`); Codex rollout incremental read equals full re-read (already true; differential test `8b124e8`).
-- Local gate at `26e345c`: `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` → exit 0, 765 passed / 0 failed / 4 ignored. Committed `1d00e60` (COUNTS) — **not pushed** as of this write; CI for the R/Y change has not run (last CI: run 36937694907 on `dcad67c`, success).
+- Local gate at `26e345c`: `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` → exit 0, 765 passed / 0 failed / 4 ignored. Pushed: `origin/impl/v0` = `5f3b435`; CI run 36938392591 on `5f3b435`: 13/13 jobs success, hostile scan printed peak RSS 283.0 MiB and 357.2 MiB on the two runners. This handoff edit is one later local commit, not pushed.
 
 ## In progress
-- Nothing mid-edit. Exact next step: push `impl/v0` (needs the author's approval per their standing rule: every `git push` asks) and confirm CI green on the new head.
+- Nothing mid-edit. Exact next step: work the loose ends below (start with #2/#3, the test-only ones); every `git push` needs the author's approval.
 - state: `git status --short` at write time:
   ```
    M HANDOFF.md
@@ -38,7 +38,7 @@ The v0 run is complete: the final Opus skeptic gate (round 2, at `db6581d`) repo
 - CI's stable toolchain floats (Rust 1.99 deprecated `fetch_update`); MSRV is 1.89, so newer std APIs fail locally under clippy's MSRV lint.
 
 ## Loose ends (not started)
-1. **Push and CI** for commits after `dcad67c` (R/Y fix, Codex test, spec clarifications, records). Ask the author before pushing.
+1. **Push** the local commit that records this handoff's CI result (ask the author first).
 2. **Scan-lock `.expect` in integration tests**: `crates/rollcall-cli/tests/it/store.rs` and `it/mcp.rs` take the lock with `try_scan_lock(..).expect(..)` — same fork/fd-inheritance race fixed for unit tests in `37dcfc5`; switch to a bounded wait.
 3. **MCP gate world**: `it/mcp.rs` builds the MCP world from `F_clean`; spec §10.2 says `--root $F`. Add a full-F MCP test (the round 1 skeptic's uncommitted probe found all replies schema-valid and ≤ 16 KiB).
 4. **Stale 320 MiB in probe tooling**: `scripts/probe-gix-p15b/README.md` and `sample.py` (rev 13 probe) still report "over the 320 MiB cap"; update to 256 or mark as a rev 13 historical probe.
