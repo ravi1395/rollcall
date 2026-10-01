@@ -184,6 +184,24 @@ fn forbidden_workdir(workdir: &Path, opts: &GitOptions) -> bool {
             .any(|skip| workdir.starts_with(real(skip)))
 }
 
+/// §10.2 positive control (2): `workdir` opened with gix's default (non-hardened) options and an
+/// index-worktree status run over it, so a test can show that [`open_hardened`]'s config
+/// stripping, not gix's defaults, is what keeps filter drivers from running. Returns the number
+/// of status entries.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn status_with_gix_defaults(workdir: &Path) -> Result<usize, String> {
+    let repo = gix::open(workdir).map_err(|e| e.to_string())?;
+    let entries = repo
+        .status(gix::progress::Discard)
+        .map_err(|e| e.to_string())?
+        .into_index_worktree_iter(Vec::<BString>::new())
+        .map_err(|e| e.to_string())?;
+    entries
+        .map(|entry| entry.map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|entries| entries.len())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

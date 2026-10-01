@@ -124,6 +124,33 @@ fn control_real_git_runs_the_submodule_lfs_filter() {
     );
 }
 
+/// Control (2): gix opened with its default options runs the `drivers` filter, so rollcall's config
+/// stripping, not gix's defaults, is what keeps the scan from running it.
+#[test]
+fn control_gix_defaults_run_the_drivers_filter() {
+    let w = fresh(Which::H);
+    arm(&w);
+    let marker_path = w.root.join("marker-filter-x");
+    assert!(
+        !marker_path.exists(),
+        "marker-filter-x exists before the control ran"
+    );
+    let drivers = w.root.join("drivers");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(rollcall_git::trust::status_with_gix_defaults(&drivers));
+    });
+    // The stand-in filter may fail gix's read of its output: only the marker matters.
+    let result = rx
+        .recv_timeout(RUN_DEADLINE)
+        .expect("gix default status finished before the deadline");
+    assert!(
+        marker_path.exists(),
+        "gix defaults in drivers did not create marker-filter-x: the control proves nothing\nresult: {result:?}\nmarkers: {:?}",
+        markers(&w)
+    );
+}
+
 // ------------------------------------------------------------------- the scan
 
 struct Scan {
