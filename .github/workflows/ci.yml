@@ -70,7 +70,7 @@ jobs:
       # tests run on the release binary below.
       - run: cargo test --workspace --locked -- --skip hostile::scan_h
       - name: Hostile scan (release binary)
-        run: cargo test --release -p rollcall-cli --test it --locked -- hostile::scan_h
+        run: cargo test --release -p rollcall-cli --test it --locked -- hostile::scan_h --nocapture
       - name: No pending snapshots
         run: test -z "$(find . -name '*.snap.new')"
 
