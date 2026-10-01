@@ -1,5 +1,7 @@
 # HANDOFF — 2026-10-01 impl/v0 (~/Projects/rollcall), end of session 3 (usage limit)
 
+**Status: CONSUMED** by session 5 (2026-10-01 17:19); archived as `.handoffs/20261001-171904-HANDOFF.md`. Not active state.
+
 Goal (author's `/goal`): done when the final **Opus** skeptic gate reports spec §12.1 #1–#18 MET. Spec **rev 13**, plan **rev 7**. Run mechanics: `docs/superpowers/plans/tasks/v0/{ORIENTATION,WORKER-RULES,RISKS,COUNTS}.md`. Model roles unchanged (Sonnet `plan-surgeon-surgeon` implementers with `model: "sonnet"`; Opus breaker; Opus final skeptic). Push policy: plan Q1 (push after each lane merge) — followed all session.
 
 ## Done (verified, committed, pushed; origin/impl/v0 = `ac470a0`)
