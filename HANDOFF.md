@@ -1,28 +1,55 @@
-# HANDOFF — 2026-10-01 impl/v0 (~/Projects/rollcall), end of session 3 (usage limit)
+# HANDOFF — 2026-10-01 impl/v0 (~/Projects/rollcall), end of session 5
 
-**Status: CONSUMED** by session 5 (2026-10-01 17:19); archived as `.handoffs/20261001-171904-HANDOFF.md`. Not active state.
+**Status: ACTIVE.** Previous handoffs are in `.handoffs/`.
 
-Goal (author's `/goal`): done when the final **Opus** skeptic gate reports spec §12.1 #1–#18 MET. Spec **rev 13**, plan **rev 7**. Run mechanics: `docs/superpowers/plans/tasks/v0/{ORIENTATION,WORKER-RULES,RISKS,COUNTS}.md`. Model roles unchanged (Sonnet `plan-surgeon-surgeon` implementers with `model: "sonnet"`; Opus breaker; Opus final skeptic). Push policy: plan Q1 (push after each lane merge) — followed all session.
+The v0 run is complete: the final Opus skeptic gate (round 2, at `db6581d`) reported spec §12.1 #1–#18 all MET (`GATE: PASS`). Spec is now **revision 14**. What remains is loose ends, release prerequisites, and merging to `main`. Run mechanics and history: `docs/superpowers/plans/tasks/v0/{ORIENTATION,WORKER-RULES,RISKS,COUNTS}.md`.
 
-## Done (verified, committed, pushed; origin/impl/v0 = `ac470a0`)
-- Merged this session: P07b, P07c, P09, P10, P15b, P15c, P18b, P18c, P20, P21, P27a, P27b, P27c, P28, P29, P30, P31, P36, P37, P38. Last full gate at `ac470a0`: fmt/clippy clean, **641 passed / 0 failed / 4 ignored** (gate14.log).
-- Spec rev 13 (P15b U-10..U-15; author chose a killable per-repo worker process for U-13): design gate (Fable) PASS on round 3; rounds recorded in `docs/superpowers/specs/2026-09-29-rollcall-redteam.md`. Probes: `scripts/probe-gix-p15b/`, `scripts/probe-gix-p15c/`.
-- gix audit: UNCOVERED 0 (P14, P15a, P15b, P15c).
+## Done (verified)
+- Lane D lanes P32–P35, P39 merged; Lane E P40 (perf CI job), P41 (cargo-dist, `dist-workspace.toml`, SHA-pinned `release.yml`), P42 (README, `demo.tape`, `demo.gif`, CI `demo` job) — committed, pushed. Evidence: CI run 36933875396 on `9abb2a1`, 13/13 jobs success.
+- Breaker pass (`crates/rollcall-cli/tests/breaker_v0.rs`): 4 spec violations fixed (refusal/stderr sanitising, MCP wait overflow, Codex title kind mismatch, Claude duplicate session id) + test-side scan-lock flake fix — committed, pushed (`ca6c895` and later).
+- Skeptic round 1 failed #8 (hostile scan peak RSS over 512 MB); author chose spec rev 14: worker RSS cap 256 MiB (`1aec2cf`). Round 2 PASS: 41/41 skeptic local runs under 512 MB (max 495,927,296 bytes), CI printed 301.0 MiB (ubuntu) / 280.1 MiB (macos-14).
+- Breaker ambiguities resolved by the author (spec rev 14 clarifications, `26e345c`): `R` with `ROLLCALL_RESUME_FILE` and `Y` refuse a session whose cwd is gone (`cee9038`); Codex rollout incremental read equals full re-read (already true; differential test `8b124e8`).
+- Local gate at `26e345c`: `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` → exit 0, 765 passed / 0 failed / 4 ignored. Committed `1d00e60` (COUNTS) — **not pushed** as of this write; CI for the R/Y change has not run (last CI: run 36937694907 on `dcad67c`, success).
 
-## In progress (agents launched at ~00:10, NOT integrated; check their worktrees under `.claude/worktrees/`)
-- **P32** — FAILED, parked on branch `worktree-agent-a23c39f96a255487d` (WIP commit). 8/13 pass; 5 fail on ONE product bug: `crates/rollcall-git/src/classify.rs` `worktree_dir` reads only the first line of `worktrees/<n>/gitdir`, so the fixture worktree `$F/shell-wt\nnewline` becomes `$F` → `untrusted worktree path`. Fix: read the whole file, strip one trailing `\n`, take `.parent()`; add a unit test with an embedded newline. Then re-run `cargo test -p rollcall-cli --test it --locked -- discovery:: no_agent::` in that worktree and merge.
-- **P39** — FAILED, parked on branch `worktree-agent-a680a5fe485fa7340` (WIP commit): 27/29 pass (bash, zsh, fish ran); the 2 `shell::newline::*` failures are the same `worktree_dir` bug. Re-run `cargo test -p rollcall-cli --test it --locked -- shell::` after the fix, then merge.
-- **P34** — PASSED (20 `mcp::` it tests + 4 unit; mutation probes caught), parked unmerged on `worktree-agent-ac586341ad00e21c8` (WIP commit). Merge + full gate. Note: mcp.rs mirrors output.rs private `render_with`/`log_sources` (make them pub(crate), drop the mirror); no MCP email-redaction test.
-- **P35** — 28 tests green (`scan H`: release 5.50 s / 393 MiB peak; `pack-bombs` (i) `git error: memory limit` = monitor fired; (ii) `timed out`; (iii) memory limit (debug) / decompress error (release)), parked on `worktree-agent-acf185d6e56cda602`. BLOCKED on one item: §10.2 positive control (2) (gix default options on H `drivers`) needs an R1 decision — (a) gix dev-dep on rollcall-cli, or (b) a `#[cfg(any(test, feature = "test-hooks"))] pub fn` in rollcall-git trust.rs. Recommend (b).
-- **P33** (sessions.rs): agent STALLED (stream watchdog, no receipt). Worktree `.claude/worktrees/agent-aaeb3bfd8fe8b68af` may hold partial `tests/it/sessions.rs` edits — inspect, then re-dispatch P33 fresh (same brief) or finish it. when the session ended; results unknown. Each worktree holds uncommitted edits; inspect `git -C <wt> status`, re-run its test command, merge if green.
+## In progress
+- Nothing mid-edit. Exact next step: push `impl/v0` (needs the author's approval per their standing rule: every `git push` asks) and confirm CI green on the new head.
+- state: `git status --short` at write time:
+  ```
+   M HANDOFF.md
+  ?? .handoffs/20261001-235936-HANDOFF.md
+  ```
+  (this file and its archive; committed together with this handoff).
 
-## Next
-1. Fix `worktree_dir` (above), finish/merge P32–P35, P39; full gate + COUNTS + push after each.
-2. Lane E: P40 perf (CI job), P41 release pipeline (orchestrator-owned, `dist`), P42 README + demo. #16–#18 need CI runs on origin.
-3. Opus breaker on the integrated change (§12.1 as spec), then Opus skeptic; `gate-record-audit` before each round; loop until #1–#18 MET.
+## Decisions + why
+- Worker RSS kill cap 320 → 256 MiB (spec rev 14) — author's choice; no in-spec lever worked because `/bin/ps` takes 22–34 ms sampling a child growing at GiB/s (worker probe). Rejected: raising the 512 MB bound, Linux `/proc` sampling, 192 MiB.
+- Hostile `scan_h*` tests run on the release binary in CI (`ci.yml` `test` job, `--nocapture` prints RSS) — the bounds are release figures.
+- `repository` added to `crates/rollcall-cli/Cargo.toml` (dist requires it) — orchestrator edit beyond R1's `[profile.dist]` allowance; Cargo.lock unchanged.
+- Tap `ravi1395/homebrew-tap`, formula `rollcall-cli` — assumed names, not confirmed by the author.
+
+## Test state
+`cargo test --workspace --locked --no-fail-fast` at `26e345c` → 765 passed / 0 failed / 4 ignored (gate20). Release hostile set: `cargo test --release -p rollcall-cli --test it --locked -- hostile::scan_h --nocapture` → 15 passed.
 
 ## Gotchas
-- Worktrees from agent isolation start at stale `19bfdee`; workers ff to impl/v0 themselves. HANDOFF.md hook rewrites: restore before committing; skip-worktree was unset for this write.
-- `block-dangerous-git.sh` blocks `branch -D`: use `-d` after merging.
-- macOS ignores `XDG_CACHE_HOME`: every manual rollcall run needs a scratch `HOME` (WORKER-RULES).
-- P36 §8.1 deviations and P31 `render_session` no-email-scrub are logged in RISKS for the final gate.
+- A hook rewrites `HANDOFF.md` repeatedly during a session (seen many times this session). Restore with `git checkout HANDOFF.md` before every commit; stage explicit paths only. Finding and fixing that hook is a loose end below.
+- `block-dangerous-git.sh` blocks `git branch -D` and any command whose text has `--force` after `push` (even inside quotes): use `branch -d`, write such strings to a file.
+- macOS ignores `XDG_CACHE_HOME`: every manual rollcall run needs a scratch `HOME`.
+- Hostile `scan_h*` tests in **debug** can time out under machine load (seen locally while other cargo jobs ran); CI skips them in debug. Run them with `--release` locally.
+- Agent-isolation worktrees start at stale `19bfdee`; workers must `git merge --ff-only impl/v0` first.
+- CI's stable toolchain floats (Rust 1.99 deprecated `fetch_update`); MSRV is 1.89, so newer std APIs fail locally under clippy's MSRV lint.
+
+## Loose ends (not started)
+1. **Push and CI** for commits after `dcad67c` (R/Y fix, Codex test, spec clarifications, records). Ask the author before pushing.
+2. **Scan-lock `.expect` in integration tests**: `crates/rollcall-cli/tests/it/store.rs` and `it/mcp.rs` take the lock with `try_scan_lock(..).expect(..)` — same fork/fd-inheritance race fixed for unit tests in `37dcfc5`; switch to a bounded wait.
+3. **MCP gate world**: `it/mcp.rs` builds the MCP world from `F_clean`; spec §10.2 says `--root $F`. Add a full-F MCP test (the round 1 skeptic's uncommitted probe found all replies schema-valid and ≤ 16 KiB).
+4. **Stale 320 MiB in probe tooling**: `scripts/probe-gix-p15b/README.md` and `sample.py` (rev 13 probe) still report "over the 320 MiB cap"; update to 256 or mark as a rev 13 historical probe.
+5. **#8 margin is thin**: worst local peak 495,927,296 bytes (≈ 3% under 512 MB) on the author's Mac; slower/loaded hardware or two simultaneous pack bombs untested. Options if it bites: Linux `/proc/<pid>/statm` sampling (no spawn), cap lower again (author's call).
+6. **Release prerequisites (never run)**: create the `ravi1395/homebrew-tap` repo, add the `HOMEBREW_TAP_TOKEN` secret, then a first tag runs `release.yml` (attestations + Homebrew publish untested). crates.io trusted publishing is a manual checklist item. README install lines point at that tap/release, which don't exist yet.
+7. **README absolute claim**: "Reading a repo never runs its hooks, clean/smudge filters, or diff and merge drivers" rests on the hostile fixture set; consider wording it as tested behaviour.
+8. **The HANDOFF.md-rewriting hook**: find it (`~/.claude/settings.json` hooks / plugins) and stop it writing into repos, or point it elsewhere.
+9. **Stray dirs** `.claude/worktrees/agent-a46bd3d90c7d35a28`, `agent-ab242545324fe5b8d`, `agent-acfce1bcf56d4b92b`: not registered git worktrees (another session's); inspect and remove if empty.
+10. **Outside-project leftover**: `/private/tmp/scan.rs.orig` (a worker's pristine copy of scan.rs) — deleting it needs the author's approval (outside the project).
+11. **Author's global auto-mode settings change** (only `git push` and deletes outside the project need approval): auto mode refused to let Claude edit `~/.claude/settings.json`. The author must apply it by hand; the jq filter was in session 5's scratchpad (`automode.jq`), which may be gone — re-derive: `permissions.ask` = git push only, `autoMode.classifyAllShell = true`, `autoMode.soft_deny` = {git push; deletes outside the project folder}, back up first. `block-dangerous-git.sh` would still block `branch -D` / `reset --hard`.
+12. **§12.2 author smoke** (non-gating): not run. Then open the PR `impl/v0` → `main` (or merge) — author's call.
+
+## Suggested skills
+- `/handoff ingest` at start; `verify-ledger` before any release-ready claim; `ci-divergence-triage` if CI and local disagree; `gate-record-audit` before committing record text; `repo-debt-report` before merging to `main`.
