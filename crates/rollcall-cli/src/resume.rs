@@ -57,6 +57,12 @@ pub fn resume(
 
 /// Every refusal that can happen before the process changes directory or hands off.
 fn plan(target: &ResumeTarget, env: &EnvPaths) -> Result<Plan, String> {
+    if !target.cwd.is_dir() {
+        return Err(format!(
+            "session directory no longer exists: {}",
+            target.cwd.display()
+        ));
+    }
     if let Some(path) = &env.resume_file {
         return Ok(Plan::File(path.clone()));
     }
@@ -64,12 +70,6 @@ fn plan(target: &ResumeTarget, env: &EnvPaths) -> Result<Plan, String> {
         SourceKind::Claude => ("claude", "--resume"),
         SourceKind::Codex => ("codex", "resume"),
     };
-    if !target.cwd.is_dir() {
-        return Err(format!(
-            "session directory no longer exists: {}",
-            target.cwd.display()
-        ));
-    }
     let bin = env
         .path
         .as_deref()
@@ -308,6 +308,29 @@ mod tests {
         assert!(got.is_ok());
         let written = std::fs::read(&path).unwrap();
         assert!(written.windows(7).any(|w| w == b"\0codex\0"), "{written:?}");
+    }
+
+    #[test]
+    fn a_gone_cwd_is_refused_before_the_resume_file_is_touched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = resume_file(&tmp, 0o600, b"keep me");
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let gone = tmp.path().join("gone");
+        let err = resume(
+            &target(&gone, SourceKind::Claude),
+            &env_with_file(&path),
+            &|| Ok(me(tmp.path())),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            format!("session directory no longer exists: {}", gone.display())
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
     }
 
     #[test]

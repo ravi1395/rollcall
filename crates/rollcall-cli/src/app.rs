@@ -189,10 +189,18 @@ pub fn handle_key(model: &mut Model, env: &EnvPaths, key: KeyEvent) -> Action {
         KeyCode::Char('c') => selected_worktree(model)
             .map(|w| Action::Copy(format!("cd -- {}", shell_quote(Path::new(&w.path)))))
             .unwrap_or(Action::None),
-        KeyCode::Char('Y') => selected_worktree(model)
-            .and_then(resume_target)
-            .map(|t| Action::Copy(output::display_line(&t)))
-            .unwrap_or(Action::None),
+        KeyCode::Char('Y') => match selected_worktree(model).and_then(resume_target) {
+            // Same refusal as `resume::plan`, and the §7 `resume: null` case.
+            Some(target) if !target.cwd.is_dir() => {
+                model.status_message = Some(format!(
+                    "session directory no longer exists: {}",
+                    target.cwd.display()
+                ));
+                Action::None
+            }
+            Some(target) => Action::Copy(output::display_line(&target)),
+            None => Action::None,
+        },
         KeyCode::Char('R') => selected_worktree(model)
             .and_then(resume_target)
             .map(Action::Resume)
@@ -708,10 +716,26 @@ mod tests {
 
     #[test]
     fn capital_y_copies_the_display_resume_line() {
-        let mut m = with_session(model(), SESSION_ID);
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let mut m = model();
+        m.doc.repos[0].worktrees[0].last_session = Some(session(cwd, SESSION_ID));
         assert_eq!(
             ch(&mut m, 'Y'),
-            Action::Copy(format!("cd -- '/r/CRM' && claude --resume {SESSION_ID}"))
+            Action::Copy(format!(
+                "cd -- {} && claude --resume {SESSION_ID}",
+                shell_quote(dir.path())
+            ))
+        );
+    }
+
+    #[test]
+    fn capital_y_copies_nothing_when_the_session_directory_is_gone() {
+        let mut m = with_session(model(), SESSION_ID);
+        assert_eq!(ch(&mut m, 'Y'), Action::None);
+        assert_eq!(
+            m.status_message.as_deref(),
+            Some("session directory no longer exists: /r/CRM")
         );
     }
 
