@@ -9,14 +9,13 @@ v0 passed its §12.1 gate in session 5 (spec rev 14). Session 6 closed the code-
 - Evidence: full gate at `1877ca6` → exit 0, 766 passed / 0 failed / 4 ignored (baseline at `5347a38` measured this session: 765 / 0 / 4). Opus skeptic (`skeptical-reviewer`, model opus) → GATE: PASS, AC1–AC5 MET, with its own mutation probes (cap `< 10` → red "3216 bytes"; lock on wrong root → held assert red; deadline branch should_panic ok). Breaker skipped: tests + docs only, no product code.
 
 ## In progress
-- Nothing mid-edit. `1877ca6` and this handoff commit are local, not pushed.
+- Nothing mid-edit. Pushed: `origin/impl/v0` = `fb8790b`; CI run 36943101006 on `fb8790b`: all 14 jobs success (both `test` jobs ran the three changed tests `... ok`; hostile scan H peak RSS 267.8 MiB and 296.2 MiB). The commit recording this line is local, not pushed.
 
 ## Not started (author decisions)
-1. **Push** `impl/v0` (local commits since `5f3b435`) and check CI on Linux — the fork/flock race is likelier there; skeptic did not run CI.
-2. **#8 RSS margin thin** (worst local peak 495,927,296 bytes vs 512 MB): act only if it bites (Linux `/proc` sampling or a lower cap).
-3. **HANDOFF-rewriting hook**: `~/.claude/hooks/write-handoff.sh` (global settings, SessionEnd + PostToolUse on `git push`) overwrites this file; disable or scope it per repo.
-4. **Homebrew tap** `ravi1395/homebrew-tap`, formula `rollcall-cli`: still assumed names.
-5. Merge `impl/v0` → `main`.
+1. **#8 RSS margin thin** (worst local peak 495,927,296 bytes vs 512 MB): act only if it bites (Linux `/proc` sampling or a lower cap).
+2. **HANDOFF-rewriting hook**: `~/.claude/hooks/write-handoff.sh` (global settings, SessionEnd + PostToolUse on `git push`) overwrites this file; disable or scope it per repo.
+3. **Homebrew tap** `ravi1395/homebrew-tap`, formula `rollcall-cli`: still assumed names.
+4. Merge `impl/v0` → `main`.
 
 ## Optional (skeptic, non-blocking)
 - `lock_when_free` narrows, but does not close, the fork race before the released-control call (microsecond window).
