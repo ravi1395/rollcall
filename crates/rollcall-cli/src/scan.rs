@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rollcall_core::text::sanitise;
 use rollcall_core::{
     DiscoveredRepo, DoctorDoc, GitOptions, Index, MatchResult, RepoKind, RepoRow, RepoState,
     ReposByKind, SCHEMA_VERSION, ScanResult, SessionLocation, SourceKind, SourceScan, Uuid,
@@ -91,10 +92,10 @@ fn open_index(ctx: &Ctx) -> SqliteIndex {
 fn eprint_refusal(root: &Path, suggestions: &[PathBuf]) {
     eprintln!(
         "rollcall: refusing to scan {}: it is / or your home directory (pass --yes to scan it anyway)",
-        root.display()
+        sanitise(&root.to_string_lossy())
     );
     for dir in suggestions {
-        eprintln!("  rollcall {}", dir.display());
+        eprintln!("  rollcall {}", sanitise(&dir.to_string_lossy()));
     }
 }
 
@@ -199,7 +200,8 @@ fn cached_with(index: SqliteIndex, root: &Path, floor: u8) -> ScanOutcome {
 /// `WaitAtMost`: the scan runs on its own thread; past `wait` the answer is the cache and the
 /// thread finishes and commits on its own.
 fn scan_within(ctx: &Ctx, root: PathBuf, index: SqliteIndex, wait: Duration) -> ScanOutcome {
-    let give_up = Instant::now() + wait;
+    let now = Instant::now();
+    let give_up = now.checked_add(wait).unwrap_or(now + FAR_FUTURE);
     let lock = loop {
         if let Some(lock) = take_lock(ctx, &root) {
             break lock;
