@@ -21,6 +21,7 @@ use rollcall_core::{
 use serde_json::Value;
 
 use crate::PARSER_VERSION;
+use crate::codex_rollout::keep_latest_per_id;
 use crate::jsonl::{
     Line, LineReader, ReadFrom, head_fp, open_log, plan_read, resolve_log_ref, tail_fp,
 };
@@ -430,10 +431,18 @@ pub fn scan(projects_dir: &Path, prior: &SourceState) -> SourceScan {
         .count();
     store_index(projects_dir, ctx.seen);
     let mut out = ctx.out;
+    // Sessions are keyed by (source, id): several files claiming one id leave the latest.
+    let (sessions, duplicates) = keep_latest_per_id(out.sessions);
+    out.sessions = sessions;
     out.diag.vanished = vanished as u32;
     out.diag.sessions = out.sessions.len() as u32;
     if !logs.is_empty() {
         out.diag.mode = SourceMode::Jsonl;
+    }
+    if duplicates > 0 {
+        out.notes.push(format!(
+            "claude: {duplicates} session file(s) duplicate a session id already seen and were skipped"
+        ));
     }
     if ctx.incomplete > 0 {
         out.notes.push(format!(
@@ -660,6 +669,19 @@ mod tests {
             prompt_of(tree, s),
             s.message_count,
         )
+    }
+
+    #[test]
+    fn two_files_with_one_session_id_yield_the_later_session() {
+        let tree = Tree::new();
+        tree.put("a.jsonl", &[user(S1, 1, json!("early file"))]);
+        tree.put("b.jsonl", &[user(S1, 9, json!("late file"))]);
+        let first = tree.scan_fresh();
+        assert_eq!(only(&first).ended_at, ts(9));
+
+        let second = tree.scan(&state(&first));
+        assert_eq!(only(&second).ended_at, ts(9));
+        assert_eq!(second.diag.sessions, 1);
     }
 
     #[test]

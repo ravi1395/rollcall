@@ -927,7 +927,7 @@ fn rollout_session(f: &Facts, skipped: &mut SkippedCounts) -> Option<Session> {
 
 /// Sessions are keyed by id: of several files claiming one id, the one that ended last wins
 /// (the earliest path on a tie). Returns the survivors in order and how many were dropped.
-fn keep_latest_per_id(sessions: Vec<Session>) -> (Vec<Session>, usize) {
+pub(crate) fn keep_latest_per_id(sessions: Vec<Session>) -> (Vec<Session>, usize) {
     let mut best: HashMap<&Uuid, usize> = HashMap::new();
     for (i, s) in sessions.iter().enumerate() {
         let slot = best.entry(&s.id).or_insert(i);
