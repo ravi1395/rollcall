@@ -843,7 +843,10 @@ mod tests {
         let linked = linked_worktrees(&main.join(".git"), &mut notes);
         assert_eq!(linked.len(), 1, "{linked:?}");
         assert_eq!(linked[0].path, wt);
-        assert!(!linked[0].missing && linked[0].error.is_none(), "{linked:?}");
+        assert!(
+            !linked[0].missing && linked[0].error.is_none(),
+            "{linked:?}"
+        );
     }
 
     #[test]

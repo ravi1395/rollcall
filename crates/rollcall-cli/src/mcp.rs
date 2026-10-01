@@ -6,18 +6,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use rollcall_core::text::render_text;
 use rollcall_core::{
-    Index, ListStaleDoc, Repo, SCHEMA_VERSION, Session, SessionOut, StaleItem, TitleKind,
-    WhereWasIDoc,
+    Index, ListStaleDoc, Repo, SCHEMA_VERSION, Session, SessionOut, StaleItem, WhereWasIDoc,
 };
-use rollcall_sessions::{Claude, Codex, SessionSource};
+use rollcall_sessions::SessionSource;
 use rollcall_store::SqliteIndex;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::config::Ctx;
-use crate::output::{ResumeTarget, TextPolicy, build_status, display_line};
+use crate::output::{self, TextPolicy, build_status};
 use crate::scan::{self, ScanMode};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -268,52 +266,22 @@ impl Server<'_> {
             .collect();
         sessions.sort_by(|a, b| (b.ended_at, b.id.as_str()).cmp(&(a.ended_at, a.id.as_str())));
         sessions.truncate(limit);
-        let sources = log_sources(self.ctx);
+        let sources = output::log_sources(self.ctx);
         sessions.iter().map(|s| self.render(s, &sources)).collect()
     }
 
     /// `output::render_session` with `redact_emails` applied, which the pinned signature cannot take.
-    // ponytail: mirrors output.rs's private `render_with`; call that once it is `pub(crate)`.
     fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 2]) -> SessionOut {
         let source = sources
             .iter()
             .find(|s| s.kind() == session.source)
             .expect("one source per SourceKind");
-        let policy = self.policy;
-        let emails = self.ctx.config.redact_emails;
-        let show = |r: &rollcall_core::TextRef| source.resolve(r).map(|t| render_text(&t, emails));
-        let title = session
-            .title
-            .as_ref()
-            .filter(|(_, kind)| !policy.redact && (policy.prompts || *kind != TitleKind::Prompt))
-            .and_then(|(r, kind)| show(r).map(|text| (text, *kind)));
-        let last_prompt = session
-            .last_prompt
-            .as_ref()
-            .filter(|_| policy.prompts && !policy.redact)
-            .and_then(show);
-        let (title, title_kind) = match title {
-            Some((text, kind)) => (Some(text), Some(kind)),
-            None => (None, None),
-        };
-        let target = ResumeTarget {
-            source: session.source,
-            id: session.id.clone(),
-            cwd: session.cwd.clone(),
-        };
-        SessionOut {
-            source: session.source,
-            id: session.id.as_str().to_owned(),
-            branch: session.branch.clone(),
-            cwd: session.cwd.to_string_lossy().into_owned(),
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-            title,
-            title_kind,
-            last_prompt,
-            message_count: session.message_count,
-            resume: session.cwd.exists().then(|| display_line(&target)),
-        }
+        output::render_with(
+            session,
+            source.as_ref(),
+            self.policy,
+            self.ctx.config.redact_emails,
+        )
     }
 }
 
@@ -324,29 +292,6 @@ fn without_external(mut repos: Vec<Repo>) -> Vec<Repo> {
         repo.worktrees.retain(|wt| !wt.external);
     }
     repos
-}
-
-/// The agent log sources, rooted as `scan.rs` and `output.rs` root them.
-fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 2] {
-    let home = ctx
-        .env
-        .home
-        .as_deref()
-        .expect("config::load rejects a missing HOME");
-    let claude = ctx
-        .env
-        .claude_config_dir
-        .clone()
-        .unwrap_or_else(|| home.join(".claude"));
-    let codex = ctx
-        .env
-        .codex_home
-        .clone()
-        .unwrap_or_else(|| home.join(".codex"));
-    [
-        Box::new(Claude::new(claude.join("projects"))),
-        Box::new(Codex::new(codex)),
-    ]
 }
 
 // ---- arguments ----

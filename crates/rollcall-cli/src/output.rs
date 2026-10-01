@@ -60,7 +60,7 @@ pub fn render_session(
     render_with(session, source, policy, false)
 }
 
-fn render_with(
+pub(crate) fn render_with(
     session: &Session,
     source: &dyn SessionSource,
     policy: TextPolicy,
@@ -216,7 +216,7 @@ fn canonical_lenient(path: &Path) -> PathBuf {
 }
 
 /// The agent log sources, rooted as `scan.rs` roots them.
-fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 2] {
+pub(crate) fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 2] {
     let home = ctx
         .env
         .home
