@@ -99,7 +99,7 @@ worktrees are left out of its answers.
   common secrets (API keys, tokens, JWTs, private keys, URL credentials) are replaced with `[redacted]`. Set
   `redact_emails = true` to scrub email addresses too, or `redact_prompts = true` to hide titles and prompts
   everywhere.
-- Reading a repo never runs its hooks, filters, diff or merge drivers, or anything its config names.
+- Reading a repo never runs its hooks, clean/smudge filters, or diff and merge drivers.
 
 ## Limitations
 

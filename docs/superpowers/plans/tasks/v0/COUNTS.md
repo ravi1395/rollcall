@@ -21,4 +21,4 @@ Actual measured counts after each lane/phase merge on `impl/v0`. Baseline row me
 | D P30 | cd1aef8 | 619 / 0 / 5 (cli lib 109 + 1 ignored) | clean | clean |
 | D P31 | 3f9ee8f | 641 / 0 / 4 (cli lib 131, 0 ignored) | clean | clean |
 | `worktree_dir` fix; D P32, P39, P34, P35, P33 | 63d5b7b | 755 / 0 / 4 (git 240) | clean | clean |
-| E P40, P41, P42 (+ rustc 1.99 clippy fix) | 1117eef | CI run 36923122916: all 13 jobs green (Linux release hostile 15/15; perf cold 1.05 s / warm 0.37 s medians; dist ×4; install; demo) | clean (1.99) | clean |
+| E P40, P41, P42 (+ rustc 1.99 clippy fix) | 1117eef | CI run 36923122916: all 13 jobs green (Linux release hostile 15/15; perf cold 1.03 s / warm 0.37 s medians; dist ×4; install; demo) | clean (1.99) | clean |
