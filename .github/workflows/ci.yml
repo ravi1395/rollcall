@@ -66,7 +66,11 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo test --workspace --locked
+      # The hostile scan's time and memory bounds are release figures (spec §4.4 rev 13, P35), so its
+      # tests run on the release binary below.
+      - run: cargo test --workspace --locked -- --skip hostile::scan_h
+      - name: Hostile scan (release binary)
+        run: cargo test --release -p rollcall-cli --test it --locked -- hostile::scan_h
       - name: No pending snapshots
         run: test -z "$(find . -name '*.snap.new')"
 
@@ -88,3 +92,83 @@ jobs:
         with:
           tool: cargo-audit
       - run: cargo audit
+
+  # §12.1 #17 (P40).
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch tip at pin time
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: hyperfine
+      - run: cargo build --release --locked -p rollcall-cli
+      - name: Materialize the perf corpus
+        run: |
+          w=$(mktemp -d)
+          echo "W=$w" >> "$GITHUB_ENV"
+          ROLLCALL_MATERIALIZE_DIR="$w" cargo test -p rollcall-cli --test it --locked -- --ignored --exact materialize::materialize_perf
+      - name: Cold scan and warm status
+        run: |
+          export PATH="$PWD/target/release:$PATH"
+          export C="$W/perf" HOME="$W/home" XDG_CACHE_HOME="$W/home/.cache"
+          export CLAUDE_CONFIG_DIR="$C/.agents/claude" CODEX_HOME="$C/.agents/codex"
+          mkdir -p "$HOME"
+          du -sh "$C"
+          # The corpus must actually be read, or the timings measure nothing.
+          rollcall scan "$C" 2>&1 | tee "$W/scan.txt"
+          grep -Fq ': 30 repos, 50 worktrees, 5000 sessions in ' "$W/scan.txt"
+          cd "$W"
+          hyperfine --prepare 'rollcall cache clear' -r 5 --export-json cold.json 'rollcall scan $C'
+          hyperfine -w 2 -r 10 --export-json warm.json 'rollcall status --json $C >/dev/null'
+          echo "cold median: $(jq '.results[0].median' cold.json) s (limit 5)"
+          echo "warm median: $(jq '.results[0].median' warm.json) s (limit 1)"
+          jq -e '.results[0].median < 5' cold.json
+          jq -e '.results[0].median < 1' warm.json
+
+  # §12.1 #16 (P41): a release dry run on each native runner; release.yml itself runs only on tags and PRs.
+  dist:
+    name: dist (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, target: aarch64-apple-darwin }
+          - { runner: macos-15-intel, target: x86_64-apple-darwin }
+          - { runner: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch tip at pin time
+        with:
+          toolchain: stable
+      - name: Install dist
+        shell: bash
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-installer.sh | sh"
+      - run: dist plan
+      - run: dist build --artifacts=local --target ${{ matrix.target }}
+      - name: Installers and checksums
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          dist build --artifacts=global
+          ls target/distrib/rollcall-cli-installer.sh target/distrib/rollcall-cli.rb target/distrib/sha256.sum
+      - run: ls target/distrib/rollcall-cli-${{ matrix.target }}.tar.xz target/distrib/rollcall-cli-${{ matrix.target }}.tar.xz.sha256
+
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch tip at pin time
+        with:
+          toolchain: stable
+      - run: d=$(mktemp -d) && cargo install --path crates/rollcall-cli --locked --root "$d" && "$d/bin/rollcall" --version
