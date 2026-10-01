@@ -535,7 +535,7 @@ fn match_all(
 // ---- per-repo worker process (spec §4.4) ----
 
 const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
-const RSS_LIMIT_KIB: u64 = 320 * 1024;
+const RSS_LIMIT_KIB: u64 = 256 * 1024;
 const MONITOR_TICK: Duration = Duration::from_millis(10);
 /// The parent's kill comes this long after the child's own deadline: a backstop.
 const KILL_GRACE: Duration = Duration::from_secs(1);
