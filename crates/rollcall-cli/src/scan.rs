@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rollcall_core::text::sanitise;
 use rollcall_core::{
     DiscoveredRepo, DoctorDoc, GitOptions, Index, MatchResult, RepoKind, RepoRow, RepoState,
     ReposByKind, SCHEMA_VERSION, ScanResult, SessionLocation, SourceKind, SourceScan, Uuid,
@@ -81,8 +82,9 @@ fn open_index(ctx: &Ctx) -> SqliteIndex {
     SqliteIndex::open(&ctx.cache_dir).unwrap_or_else(|e| {
         // `ScanOutcome` carries an index, so there is no way to answer without one.
         eprintln!(
-            "rollcall: cannot open the cache {}: {e}",
-            ctx.cache_dir.display()
+            "rollcall: cannot open the cache {}: {}",
+            sanitise(&ctx.cache_dir.to_string_lossy()),
+            sanitise(&e.to_string())
         );
         std::process::exit(i32::from(EXIT_INCOMPLETE))
     })
@@ -91,10 +93,10 @@ fn open_index(ctx: &Ctx) -> SqliteIndex {
 fn eprint_refusal(root: &Path, suggestions: &[PathBuf]) {
     eprintln!(
         "rollcall: refusing to scan {}: it is / or your home directory (pass --yes to scan it anyway)",
-        root.display()
+        sanitise(&root.to_string_lossy())
     );
     for dir in suggestions {
-        eprintln!("  rollcall {}", dir.display());
+        eprintln!("  rollcall {}", sanitise(&dir.to_string_lossy()));
     }
 }
 
@@ -172,7 +174,10 @@ fn take_lock(ctx: &Ctx, root: &Path) -> Option<ScanLock> {
     match rollcall_store::try_scan_lock(&ctx.cache_dir, root) {
         Ok(lock) => lock,
         Err(e) => {
-            eprintln!("rollcall: cannot take the scan lock: {e}");
+            eprintln!(
+                "rollcall: cannot take the scan lock: {}",
+                sanitise(&e.to_string())
+            );
             None
         }
     }
@@ -184,7 +189,11 @@ fn scan_here(ctx: &Ctx, root: &Path, mut index: SqliteIndex, lock: ScanLock) -> 
     match result {
         Ok(exit) => outcome(index, false, exit),
         Err(e) => {
-            eprintln!("rollcall: scan of {} failed: {e}", root.display());
+            eprintln!(
+                "rollcall: scan of {} failed: {}",
+                sanitise(&root.to_string_lossy()),
+                sanitise(&e)
+            );
             cached_with(index, root, EXIT_INCOMPLETE)
         }
     }
@@ -199,7 +208,8 @@ fn cached_with(index: SqliteIndex, root: &Path, floor: u8) -> ScanOutcome {
 /// `WaitAtMost`: the scan runs on its own thread; past `wait` the answer is the cache and the
 /// thread finishes and commits on its own.
 fn scan_within(ctx: &Ctx, root: PathBuf, index: SqliteIndex, wait: Duration) -> ScanOutcome {
-    let give_up = Instant::now() + wait;
+    let now = Instant::now();
+    let give_up = now.checked_add(wait).unwrap_or(now + FAR_FUTURE);
     let lock = loop {
         if let Some(lock) = take_lock(ctx, &root) {
             break lock;
@@ -591,7 +601,7 @@ pub fn worker_main() -> ExitCode {
     match run_worker(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("rollcall: worker: {e}");
+            eprintln!("rollcall: worker: {}", sanitise(&e));
             ExitCode::FAILURE
         }
     }
