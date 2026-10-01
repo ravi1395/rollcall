@@ -1728,6 +1728,60 @@ mod tests {
         assert_eq!(second.diag.records, 5, "whole file re-read");
     }
 
+    /// The §6.3 contract: scanning `before`, appending `after`, and rescanning yields the same
+    /// session as a fresh scan of the final file.
+    fn assert_incremental_equals_full(before: &[String], after: &[String]) {
+        let h = home();
+        let p = h.rollout(DAY_DIR, "rollout-a.jsonl");
+        write(&p, before);
+        let first = scan_home(&h);
+        append(&p, after);
+        let incremental = rescan(&h, &first);
+        let full = scan_home(&h);
+        let (i, f) = (&incremental.sessions[0], &full.sessions[0]);
+        assert_eq!(i.message_count, f.message_count, "message_count");
+        let resolved = |r: &Option<TextRef>| r.as_ref().and_then(|r| resolve(&h.path, r));
+        assert_eq!(
+            resolved(&i.last_prompt),
+            resolved(&f.last_prompt),
+            "last_prompt"
+        );
+        assert_eq!(resolved(&title_ref(i)), resolved(&title_ref(f)), "title");
+    }
+
+    #[test]
+    fn incremental_scan_equals_full_scan_when_the_counting_basis_changes() {
+        let responses = [
+            meta(ID_A, "/w", None),
+            user_response(T1, &["old style one"]),
+            user_response(T2, &["old style two"]),
+        ];
+        // The first user_message arrives with a twin, alone, filtered (tag), and empty.
+        assert_incremental_equals_full(
+            &responses,
+            &[
+                user_event(T3, "new style"),
+                user_response(T3, &["new style"]),
+            ],
+        );
+        assert_incremental_equals_full(&responses, &[user_event(T3, "new style")]);
+        assert_incremental_equals_full(&responses, &[user_event(T3, "<tag>x</tag>")]);
+        assert_incremental_equals_full(&responses, &[user_event(T3, "  ")]);
+        // No prompt counted before the first user_message.
+        assert_incremental_equals_full(
+            &[meta(ID_A, "/w", None), assistant(T1)],
+            &[user_event(T2, "first"), user_response(T2, &["first"])],
+        );
+        // The other direction: events first, response items appended.
+        assert_incremental_equals_full(
+            &[meta(ID_A, "/w", None), user_event(T1, "one")],
+            &[
+                user_response(T2, &["twin of nothing"]),
+                user_event(T3, "two"),
+            ],
+        );
+    }
+
     #[test]
     fn response_items_appended_to_a_user_message_file_are_ignored() {
         let h = home();
