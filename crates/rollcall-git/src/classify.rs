@@ -326,14 +326,11 @@ fn linked_worktree(admin_dir: PathBuf) -> LinkedWorktree {
 }
 
 /// The worktree directory named by `<admin_dir>/gitdir` (which holds the path of its `.git` file).
+/// The whole file is the path minus git's one trailing newline: a path may itself hold newlines.
 fn worktree_dir(admin_dir: &Path) -> Result<PathBuf, String> {
     let bytes =
         read_small_file(&admin_dir.join("gitdir"), GIT_FILE_CAP).map_err(|e| e.to_string())?;
-    let line = bytes
-        .split(|&b| b == b'\n')
-        .next()
-        .unwrap_or_default()
-        .trim_ascii();
+    let line = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
     if line.is_empty() {
         return Err("empty gitdir file".to_string());
     }
@@ -833,6 +830,20 @@ mod tests {
         assert!(!a.missing && a.error.is_none());
         assert!(b.missing);
         assert_eq!(a.admin_dir, main.join(".git/worktrees/wt-a"));
+    }
+
+    #[test]
+    fn linked_worktrees_keeps_a_newline_in_the_worktree_path() {
+        let (_t, dir) = tempdir_real();
+        let main = dir.join("main");
+        init_repo(&main);
+        let wt = dir.join("wt\nnl");
+        add_worktree(&main, &wt, "nl");
+        let mut notes = Vec::new();
+        let linked = linked_worktrees(&main.join(".git"), &mut notes);
+        assert_eq!(linked.len(), 1, "{linked:?}");
+        assert_eq!(linked[0].path, wt);
+        assert!(!linked[0].missing && linked[0].error.is_none(), "{linked:?}");
     }
 
     #[test]
