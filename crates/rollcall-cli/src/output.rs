@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use rollcall_core::text::{render_text, sanitise, shell_quote};
 use rollcall_core::{
-    DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind, StaleReason,
-    StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
+    Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
+    StaleReason, StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
 };
+use rollcall_sessions::codex_db;
 use rollcall_sessions::{Claude, Codex, SessionSource};
 
 use crate::config::Ctx;
@@ -66,12 +67,24 @@ pub(crate) fn render_with(
     policy: TextPolicy,
     redact_emails: bool,
 ) -> rollcall_core::SessionOut {
-    let show = |r: &TextRef| source.resolve(r).map(|t| render_text(&t, redact_emails));
+    let scrub = |t: String| render_text(&t, redact_emails);
+    let show = |r: &TextRef| source.resolve(r).map(scrub);
     let title = session
         .title
         .as_ref()
         .filter(|(_, kind)| !policy.redact && (policy.prompts || *kind != TitleKind::Prompt))
-        .and_then(|(r, kind)| show(r).map(|text| (text, *kind)));
+        .and_then(|(r, kind)| match (session.source, &session.backing, r) {
+            // §6.2: a thread title whose kind changed since the scan (the DB row lost its title,
+            // so the text is now the prompt) is a mismatch → null.
+            (
+                SourceKind::Codex,
+                Backing::CodexThread { db_path, thread_id },
+                TextRef::CodexThread { .. },
+            ) => codex_db::resolve_thread_title(db_path, thread_id)
+                .filter(|(_, now)| now == kind)
+                .map(|(text, _)| (scrub(text), *kind)),
+            _ => show(r).map(|text| (text, *kind)),
+        });
     let last_prompt = session
         .last_prompt
         .as_ref()

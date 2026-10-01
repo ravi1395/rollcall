@@ -346,12 +346,8 @@ pub fn title_text(title: &str, first_user_message: Option<&str>) -> Option<(Stri
     Some((prompt, TitleKind::Prompt))
 }
 
-/// Re-reads the row by id. `Title` → `title_text`; `LastPrompt` → `None` (Codex last prompts are
-/// `LogLine` refs into rollouts, never thread refs).
-pub fn resolve_thread(db_path: &Path, thread_id: &Uuid, field: TextField) -> Option<String> {
-    if field != TextField::Title {
-        return None;
-    }
+/// Re-reads the row by id and recomputes the title text and its kind.
+pub fn resolve_thread_title(db_path: &Path, thread_id: &Uuid) -> Option<(String, TitleKind)> {
     let conn = open_read_only(db_path).ok()?;
     let (title, first_user_message) = conn
         .query_row(
@@ -360,7 +356,16 @@ pub fn resolve_thread(db_path: &Path, thread_id: &Uuid, field: TextField) -> Opt
             |row| Ok((cell::<String>(row, 0), cell::<String>(row, 1))),
         )
         .ok()?;
-    title_text(&title.unwrap_or_default(), first_user_message.as_deref()).map(|(text, _)| text)
+    title_text(&title.unwrap_or_default(), first_user_message.as_deref())
+}
+
+/// `Title` → `resolve_thread_title`; `LastPrompt` → `None` (Codex last prompts are `LogLine`
+/// refs into rollouts, never thread refs).
+pub fn resolve_thread(db_path: &Path, thread_id: &Uuid, field: TextField) -> Option<String> {
+    if field != TextField::Title {
+        return None;
+    }
+    resolve_thread_title(db_path, thread_id).map(|(text, _)| text)
 }
 
 #[cfg(test)]
@@ -645,6 +650,29 @@ mod tests {
         let cluster = "e\u{301}"; // two chars, one grapheme
         assert_eq!(title_kind(&cluster.repeat(200), None), TitleKind::Thread);
         assert_eq!(title_kind(&cluster.repeat(201), None), TitleKind::Prompt);
+    }
+
+    #[test]
+    fn resolve_thread_title_recomputes_the_kind_from_the_row() {
+        let h = home();
+        let conn = create_db(&h.path, 1);
+        insert(
+            &conn,
+            UUID_A,
+            "Release planning",
+            Some("fix the flaky test"),
+        );
+        let id = Uuid::parse(UUID_A).unwrap();
+        let db = db_path(&h.path, 1);
+        assert_eq!(
+            resolve_thread_title(&db, &id),
+            Some(("Release planning".to_owned(), TitleKind::Thread))
+        );
+        conn.execute("UPDATE threads SET title = ''", []).unwrap();
+        assert_eq!(
+            resolve_thread_title(&db, &id),
+            Some(("fix the flaky test".to_owned(), TitleKind::Prompt))
+        );
     }
 
     #[test]
