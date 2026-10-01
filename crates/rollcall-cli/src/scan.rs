@@ -949,6 +949,32 @@ mod tests {
         rx.recv_timeout(WATCHDOG).expect("watchdog expired")
     }
 
+    /// A scan that waits for the scan lock instead of answering from the cache. `flock` belongs
+    /// to the open file description, and a child that another test thread forks while the lock
+    /// is open keeps that description until it execs: a lock the previous scan dropped can still
+    /// look held for a moment, which would make a follow-up `Fresh` scan answer stale.
+    fn fresh(w: &World, root: &Path) -> ScanOutcome {
+        within({
+            let (ctx, root) = (w.ctx.clone(), root.to_path_buf());
+            move || scan(&ctx, &root, ScanMode::WaitAtMost(WATCHDOG / 2))
+        })
+    }
+
+    /// Takes the scan lock once the previous scan's has been released (see [`fresh`]).
+    fn lock_when_free(w: &World) -> ScanLock {
+        let deadline = Instant::now() + WATCHDOG / 2;
+        loop {
+            if let Some(lock) = rollcall_store::try_scan_lock(&w.ctx.cache_dir, &w.root).unwrap() {
+                return lock;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the scan lock was never released"
+            );
+            std::thread::sleep(LOCK_POLL);
+        }
+    }
+
     struct World {
         _dir: TempDir,
         home: PathBuf,
@@ -1033,9 +1059,7 @@ mod tests {
         assert_eq!(before.len(), 1);
 
         w.ctx.now = "2026-09-30T00:00:00Z".parse().unwrap();
-        let _held = rollcall_store::try_scan_lock(&w.ctx.cache_dir, &w.root)
-            .unwrap()
-            .expect("lock is free");
+        let _held = lock_when_free(&w);
         let outcome = within({
             let (ctx, root) = (w.ctx.clone(), w.root.clone());
             move || scan(&ctx, &root, ScanMode::Fresh)
@@ -1142,20 +1166,14 @@ mod tests {
         assert_eq!(refused.index.scanned_at(&w.home), None);
 
         w.ctx.config.yes = true;
-        let yes = within({
-            let (ctx, home) = (w.ctx.clone(), w.home.clone());
-            move || scan(&ctx, &home, ScanMode::Fresh)
-        });
+        let yes = fresh(&w, &w.home);
         assert!(!yes.stale);
         assert_eq!(yes.index.repos_for_root(&w.home).len(), 1);
 
         // Config `roots` count as confirmed (§4.3), compared by canonical path.
         w.ctx.config.yes = false;
         w.ctx.config.roots = vec![w.home.join("work/..")];
-        let listed = within({
-            let (ctx, home) = (w.ctx.clone(), w.home.clone());
-            move || scan(&ctx, &home, ScanMode::Fresh)
-        });
+        let listed = fresh(&w, &w.home);
         assert!(!listed.stale);
     }
 
@@ -1203,10 +1221,7 @@ mod tests {
         assert_eq!(outcome.index.sessions_for(&w.root, &repo).len(), 1);
 
         write_claude_session(&w, &w.home.join("elsewhere"));
-        let outcome = within({
-            let (ctx, root) = (w.ctx.clone(), w.root.clone());
-            move || scan(&ctx, &root, ScanMode::Fresh)
-        });
+        let outcome = fresh(&w, &w.root);
         assert!(outcome.index.sessions_for(&w.root, &repo).is_empty());
         let claude = &outcome.index.last_diagnostics(&w.root).unwrap().sources[0];
         assert_eq!((claude.matched, claude.unmatched.outside_root), (0, 1));
@@ -1220,10 +1235,7 @@ mod tests {
         git(&repo, &["branch", "other"]);
         write_claude_session(&w, &repo);
         let run = || {
-            let outcome = within({
-                let (ctx, root) = (w.ctx.clone(), w.root.clone());
-                move || scan(&ctx, &root, ScanMode::Fresh)
-            });
+            let outcome = fresh(&w, &w.root);
             let idx = outcome.index;
             let mut doctor = idx.last_diagnostics(&w.root).unwrap();
             // `records` counts what this scan read; the second one reads nothing new.
