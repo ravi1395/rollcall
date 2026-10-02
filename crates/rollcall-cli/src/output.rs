@@ -365,7 +365,7 @@ fn align(rows: &[[String; 3]]) -> String {
             if cell.is_empty() {
                 continue;
             }
-            line.truncate(line.trim_end_matches(' ').len());
+            line.truncate(line.trim_end().len());
             let end = width(&line);
             line.push_str(&" ".repeat(stop.max(end + 2) - end));
             line.push_str(cell);
@@ -433,7 +433,7 @@ fn repo_cells(repo: &Repo, now: Timestamp) -> [String; 3] {
             .map_or("—".to_owned(), |t| age(now, t))
     };
     let name = match sanitise(&repo.name) {
-        name if name.is_empty() => sanitise(&repo.path),
+        name if name.trim().is_empty() => sanitise(&repo.path),
         name => name,
     };
     [name, badges.join(" "), activity]
@@ -447,7 +447,10 @@ fn worktree_label(w: &Worktree) -> String {
         }
         _ => w.path.clone(),
     };
-    sanitise(&label)
+    match sanitise(&label) {
+        label if label.trim().is_empty() => sanitise(&w.path),
+        label => label,
+    }
 }
 
 fn state_badges(w: &Worktree) -> Vec<String> {
@@ -1963,5 +1966,76 @@ mod tests {
         let s = &wt["last_session"];
         assert_eq!(s["title"], "hello there now", "{s}");
         assert_eq!(s["last_prompt"], "hello there now", "{s}");
+    }
+
+    // ---- blank names fall back to the path; every Unicode space is trimmed before a stop (§8.2) ----
+
+    /// One real `hostile` repo (one worktree) as a status doc, for rewriting its name and branch.
+    fn blank_doc() -> (World, StatusDoc) {
+        let w = world();
+        let outcome = commit(&w, vec![repo_row(&w, "main")], empty_doctor(&w));
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), 1);
+        (w, doc)
+    }
+
+    #[test]
+    fn a_repo_name_that_sanitises_to_whitespace_shows_the_sanitised_path() {
+        let (w, mut doc) = blank_doc();
+        for name in [" ", "\t", "\n", "\u{2028}", "\u{200b}"] {
+            doc.repos[0].name = name.to_owned();
+            let want = sanitise(&doc.repos[0].path);
+            assert!(want.starts_with('/'), "{want:?}");
+            let cells = repo_cells(&doc.repos[0], w.ctx.now);
+            assert_eq!(cells[0], want, "{name:?}");
+            let text = plain_status(&doc, w.ctx.now);
+            let first = text.lines().next().unwrap();
+            assert!(first.starts_with(&want), "{name:?}: {text:?}");
+            assert!(
+                !first.starts_with(char::is_whitespace),
+                "{name:?}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_worktree_branch_that_sanitises_to_whitespace_shows_the_indented_sanitised_path() {
+        let (w, mut doc) = blank_doc();
+        let want = format!("  {}", sanitise(&doc.repos[0].worktrees[0].path));
+        for branch in [" ", "\u{2029}", "\t", "\u{200b}", ""] {
+            doc.repos[0].worktrees[0].branch = Some(branch.to_owned());
+            let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now);
+            assert_eq!(cells[0], want, "{branch:?}");
+            let text = plain_status(&doc, w.ctx.now);
+            assert!(
+                text.lines().nth(1).unwrap().starts_with(&want),
+                "{branch:?}: {text:?}"
+            );
+        }
+        // Not blank once sanitised: U+2028 becomes a space but `feat` keeps the label.
+        doc.repos[0].worktrees[0].branch = Some("\u{2028}feat".to_owned());
+        let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now);
+        assert_eq!(cells[0], "   feat");
+        let text = plain_status(&doc, w.ctx.now);
+        assert!(
+            text.lines().nth(1).unwrap().starts_with("   feat  "),
+            "{text:?}"
+        );
+    }
+
+    /// E ignores trailing Unicode whitespace of any kind, so the next cell sits two past the
+    /// text, not two past a no-break or ideographic space.
+    #[test]
+    fn align_trims_trailing_unicode_whitespace_before_measuring_where_a_line_ends() {
+        let x41 = "x".repeat(41);
+        for space in ["\u{a0}", "\u{3000}"] {
+            // col1 is over the cap (w >= 42), so stop2 = 3 and only E + 2 matters.
+            let col1 = format!("{x41}{space}");
+            let text = align(&cells(&[[&col1, "b", "c"], ["a", "bb", "c"]]));
+            assert_eq!(text, format!("{x41}  b  c\na  bb  c\n"), "{space:?}");
+            // An empty col2 does not move col3 off E + 2 either.
+            let text = align(&cells(&[[&col1, "", "q"], ["a", "bb", "c"]]));
+            assert_eq!(text, format!("{x41}  q\na  bb  c\n"), "{space:?}");
+        }
     }
 }
