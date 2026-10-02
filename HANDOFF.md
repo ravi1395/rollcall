@@ -15,6 +15,32 @@ v0 passed its §12.1 gate in session 5 (spec rev 14). Session 6 closed the code-
 1. **#8 RSS margin thin** (worst local peak 495,927,296 bytes vs 512 MB): act only if it bites (Linux `/proc` sampling or a lower cap).
 2. **Homebrew tap** `ravi1395/homebrew-tap`: assumed name, unconfirmed (formula `rollcall-cli` confirmed by the author 2026-10-02).
 
+## Approved, not started (author said yes 2026-10-02, session 7)
+3. **Align plain `status` columns like `ls`** — closes a spec gap: §8.2 says "columns as in the TUI", but `plain_status` joins cells with two spaces, so columns drift with name length (`crates/rollcall-cli/src/output.rs` `repo_line` / `worktree_line`).
+   - Each row → 3 cells. Repo: `name` | attention badges | last activity. Worktree: `"  " + label` | state badges | last session (agent age "title").
+   - Two passes in `plain_status`: build all cells, pad cols 1–2 to the widest entry in this output, trim trailing spaces. Cap col 1 at ~40 cols; a longer cell (e.g. `/private/tmp/...` ext worktree paths) overflows on its own row instead of widening every row.
+   - Width via `ratatui::text::Span::width()` (unicode-width, already a dep) — no `Cargo.toml` edit (R1). Only `output.rs` changes.
+   - Tests first (R3): a red test that every row's third column starts at the same display column, plus the cap. The existing `plain_status_is_one_line_per_repo_then_one_indented_line_per_worktree` must stay green unchanged.
+   - Target shape:
+     ```
+     agentrec                          ●16 ↑1 6 stale no-upstream  4d
+       codex/integrate-agentrec        ●3                          claude 4d "Skills improviser"
+     CRM                               ●264 2 stale no-upstream    4d
+       main                            ✓ clean                     claude 4d "Remaining work after merge"
+     ```
+
+## Candidates (from a real `rollcall status ~/Projects` run, session 7; not approved — each needs its own design)
+- **Junk in `.git/refs`:** a Finder `.DS_Store` (> 4096 bytes) made sutra `untrusted git dir` and hid the whole repo. Tolerate/ignore non-ref names like `.DS_Store`. Touches §4.4 security, so it needs a spec revision.
+- **One repo error → exit 1:** the `.DS_Store` case makes the whole `status` look failed. Consider exit 0 with a warning, or a distinct code.
+- **Risk summary line first:** e.g. "at risk: CRM ●264 no-upstream; agentrec ●16".
+- **Not-mine repos:** upstream clones (uv ●1148, gitoxide ●1928) swamp the list. Config `ignore`, or rank down repos with no commits by the user's email.
+- **Title length:** truncate to terminal width on a tty (agentic-os-lab's Codex automation title wraps several lines).
+- **HTML entities:** gemma-cli's Codex title prints `&lt;command-name&gt;`; decode before display.
+- **Colour in plain `status` on a tty:** reuse the TUI palette.
+- **Filters:** `--dirty`, `--stale`, `--top N`.
+- **Missing worktrees:** hint `git worktree prune` (stay read-only).
+- **Prompt-derived titles in `status`:** by design (§8.1), but MCP hides them by default; maybe `status` should match.
+
 ## Optional (skeptic, non-blocking)
 - `lock_when_free` narrows, but does not close, the fork race before the released-control call (microsecond window).
 - Full-F MCP reply has 0 `recent_sessions` (F carries no session corpus); session rendering is covered by the F_clean `data_world` tests.
