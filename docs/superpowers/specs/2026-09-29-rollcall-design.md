@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
+**Status:** Revision 15 (plain `status` column layout in §8.2 and an empty-name fallback; U+2028 and U+2029 become a space when sanitising, §9; approved by the author 2026-10-02) — Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
@@ -483,7 +483,7 @@ DoctorDoc {
 
 ### 8.2 `status`
 
-Plain: one line per repo (`name  attention badges  last activity`), then one indented line per worktree (`branch  state  last session`), columns as in the TUI. `--json` → `StatusDoc`.
+Plain: one line per repo (`name  attention badges  last activity`), then one indented line per worktree (`branch  state  last session`), columns as in the TUI. Revision 15: each line is three cells (repo: sanitised name, attention badges, last activity; worktree: two-space indent plus label, state badges, last session or nothing). Column *k*'s width is the widest cell of that column in this output that is at most 40 display columns wide (unicode width); the badge column starts 2 columns after the name column's width, the last column 2 columns after the badge column's width. Each non-empty cell starts at its column's start or 2 columns after the end of the text before it on that line, whichever is later, so a cell wider than 40 columns shifts only the rest of its own line, and that line rejoins the columns when there is room. Lines carry no trailing spaces. A repo whose name sanitises to empty shows its sanitised path instead. `--json` → `StatusDoc`.
 
 ### 8.3 MCP (`rollcall mcp`)
 
@@ -501,7 +501,7 @@ Plain: one line per repo (`name  attention badges  last activity`), then one ind
 ## 9. Privacy and security
 
 - **Local.** No network access (enforced by dependency bans, §11). Writes only to the cache and config directories and, when set, `ROLLCALL_RESUME_FILE`.
-- **Sanitising:** `title` and `last_prompt` are sanitised in **every** output (TUI, plain, JSON, MCP). Paths, branch names, error strings and `doctor` notes are sanitised in TUI and plain output (JSON keeps them exact, relying on JSON escaping). Sanitising removes ESC-introduced sequences, all other C0 controls, DEL, C1 controls, and the Unicode format/invisible characters U+00AD, U+061C, U+180E, U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, U+FFF9–U+FFFB; newline and tab become a space.
+- **Sanitising:** `title` and `last_prompt` are sanitised in **every** output (TUI, plain, JSON, MCP). Paths, branch names, error strings and `doctor` notes are sanitised in TUI and plain output (JSON keeps them exact, relying on JSON escaping). Sanitising removes ESC-introduced sequences, all other C0 controls, DEL, C1 controls, and the Unicode format/invisible characters U+00AD, U+061C, U+180E, U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, U+FFF9–U+FFFB; newline, tab, U+2028 and U+2029 become a space (U+2028/U+2029: revision 15).
 - **Secret scrubbing** (title and last_prompt; applied after sanitising, before truncation). Matches become `[redacted]`:
   - `sk-[A-Za-z0-9_-]{16,}` · `(sk|rk)_(live|test)_[A-Za-z0-9]{10,}` · `AKIA[0-9A-Z]{16}` · `AIza[0-9A-Za-z_-]{35}`
   - `gh[pousr]_[A-Za-z0-9]{36,}` · `github_pat_[A-Za-z0-9_]{20,}` · `npm_[A-Za-z0-9]{30,}` · `xox[abprs]-[A-Za-z0-9-]{10,}`
