@@ -1466,4 +1466,167 @@ mod tests {
             }
         }
     }
+
+    // ---- breaker: column alignment (§8.2) ----
+
+    fn breaker_width(s: &str) -> usize {
+        Span::raw(s).width()
+    }
+
+    /// Checks AC1/AC2/AC4 of `align` output against its rows, measuring each cell's start as
+    /// the display width of the rendered line before it.
+    fn breaker_check(rows: &[[String; 3]], text: &str) {
+        let lines: Vec<&str> = text.split_terminator('\n').collect();
+        assert_eq!(lines.len(), rows.len(), "{text:?}");
+        let (mut col2, mut col3) = (Vec::new(), Vec::new());
+        for (row, line) in rows.iter().zip(&lines) {
+            assert_eq!(*line, line.trim_end(), "trailing space: {line:?}");
+            let [c1, c2, c3] = row;
+            assert!(line.starts_with(c1.trim_end()), "{line:?} / {row:?}");
+            let (w1, w2) = (breaker_width(c1), breaker_width(c2));
+            let mut gap_after = c1.len();
+            if !c2.is_empty() {
+                let at = c1.len() + line[c1.len()..].len() - line[c1.len()..].trim_start().len();
+                assert!(line[at..].starts_with(c2.as_str()), "{line:?} / {row:?}");
+                assert!(at - c1.len() >= 2, "col1->col2 gap < 2: {line:?}");
+                if w1 <= COL_CAP {
+                    col2.push((breaker_width(&line[..at]), line.to_owned()));
+                } else {
+                    assert_eq!(&line[c1.len()..at], "  ", "AC2 col1 overflow: {line:?}");
+                }
+                gap_after = at + c2.len();
+            }
+            if !c3.is_empty() {
+                assert!(line.ends_with(c3.as_str()), "{line:?} / {row:?}");
+                let at = line.len() - c3.len();
+                let gap = &line[gap_after..at];
+                assert!(
+                    gap.len() >= 2 && gap.trim().is_empty(),
+                    "gap {gap:?}: {line:?}"
+                );
+                if w1 <= COL_CAP && w2 <= COL_CAP {
+                    col3.push((breaker_width(&line[..at]), line.to_owned()));
+                } else if w2 > COL_CAP {
+                    assert_eq!(gap, "  ", "AC2 col2 overflow: {line:?}");
+                }
+            }
+        }
+        for col in [col2, col3] {
+            if let Some((first, _)) = col.first() {
+                assert!(col.iter().all(|(w, _)| w == first), "misaligned: {col:#?}");
+            }
+        }
+    }
+
+    #[test]
+    fn breaker_align_holds_ac1_ac2_ac4_over_an_adversarial_table() {
+        let x = |n: usize| "x".repeat(n);
+        let han = |n: usize| "漢".repeat(n);
+        let table: Vec<[String; 3]> = vec![
+            [x(39), "b".into(), "c".into()],
+            [x(40), "bb".into(), "c".into()],
+            [x(41), "b".into(), "c".into()],
+            [format!("  {}", x(38)), "✓ clean".into(), String::new()],
+            [
+                format!("  {}", x(39)),
+                "✓ clean".into(),
+                "claude 1d \"t\"".into(),
+            ],
+            [han(20), "●1 ↑2".into(), "3h".into()],
+            [han(21), "●1".into(), "3h".into()],
+            [format!("{}x", han(19)), "merged·stale".into(), "—".into()],
+            [format!("{}x", han(20)), "b".into(), "c".into()],
+            ["e\u{301}".into(), x(40), "c".into()],
+            ["a".into(), x(41), "c".into()],
+            ["a".into(), han(21), "c".into()],
+            [x(50), x(50), "c".into()],
+            [
+                "😀👍🏽".into(),
+                "❤\u{fe0f}".into(),
+                "1\u{fe0f}\u{20e3}".into(),
+            ],
+            ["🇯🇵 flag".into(), "\u{644}\u{627}".into(), "c".into()],
+            ["a\u{a0}".into(), "b".into(), "c".into()],
+            ["a\u{3000}".into(), String::new(), "quiet 3d".into()],
+            ["\u{301}lead".into(), "b".into(), "c".into()],
+            [String::new(), String::new(), "c".into()],
+            ["only".into(), String::new(), String::new()],
+            [x(41), String::new(), "quiet 1d".into()],
+            ["  wt".into(), "b".into(), String::new()],
+        ];
+        let text = align(&table);
+        breaker_check(&table, &text);
+        // every row over the cap: widths fall to 0, cells still two spaces apart
+        let over = vec![
+            [x(41), x(41), "c".into()],
+            [han(21), "b".into(), "c".into()],
+        ];
+        let text = align(&over);
+        breaker_check(&over, &text);
+        assert_eq!(align(&[]), "");
+    }
+
+    /// A doc of hostile/odd rows planted through the index, rendered by the real `status`.
+    #[test]
+    fn breaker_plain_status_aligns_hostile_rows_end_to_end() {
+        let w = world();
+        let mut rows = Vec::new();
+        let named = |name: &str, branch: &str| {
+            let mut r = repo_row(&w, branch);
+            r.name = name.to_owned();
+            r.path = w.root.join(format!("r{}", name.len()));
+            r.state.worktrees[0].path = r.path.clone();
+            r
+        };
+        rows.push(named("ok", "main"));
+        rows.push(named("tab\there\u{200b}", &"b".repeat(38)));
+        rows.push(named(&"n".repeat(40), &"b".repeat(39)));
+        rows.push(named(&"漢".repeat(21), "feature/漢字"));
+        let mut err = named("errored", "main");
+        err.state.error = Some(format!("gix: {}", "e".repeat(60)));
+        err.state.worktrees[0].error = Some("worktree\nbroken\twide".to_owned());
+        rows.push(err);
+        let mut det = named("detached-one", "x");
+        det.state.worktrees[0].branch = None;
+        det.state.worktrees[0].detached = true;
+        det.state.worktrees[0].head = Some("0123456789abcdef0123456789abcdef01234567".into());
+        let mut ext = det.state.worktrees[0].clone();
+        ext.detached = false;
+        ext.head = None;
+        ext.is_main = false;
+        ext.path = PathBuf::from(format!("/elsewhere/{}/wt", "deep".repeat(12)));
+        let mut missing = ext.clone();
+        missing.path = w.root.join("gone");
+        missing.branch = Some("gone-branch".into());
+        missing.missing = true;
+        det.state.worktrees.extend([ext, missing]);
+        det.state.worktrees[0].dirty_count = 3;
+        rows.push(det);
+        let n = rows.len();
+        let outcome = commit(&w, rows, empty_doctor(&w));
+
+        let text = run_status(&w, &outcome, false);
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), n, "{text}");
+        let mut cells = Vec::new();
+        let mut is_repo = Vec::new();
+        for repo in &doc.repos {
+            cells.push(repo_cells(repo, w.ctx.now));
+            is_repo.push(true);
+            cells.extend(repo.worktrees.iter().map(|t| worktree_cells(t, w.ctx.now)));
+            is_repo.extend(repo.worktrees.iter().map(|_| false));
+        }
+        assert_eq!(text, align(&cells));
+        breaker_check(&cells, &text);
+        // AC4: one unindented line per repo, then one indented line per worktree.
+        for (line, repo) in text.lines().zip(is_repo) {
+            let indented = line.starts_with("  ") && !line[2..].starts_with(' ');
+            let shaped = if repo {
+                !line.starts_with(' ')
+            } else {
+                indented
+            };
+            assert!(shaped, "{line:?}\n{text}");
+        }
+    }
 }

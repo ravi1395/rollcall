@@ -59,3 +59,84 @@ fn piped_rollcall_equals_status() {
     assert_eq!(piped.stdout, status.stdout);
     assert_eq!(piped.code, status.code);
 }
+
+/// §8.2 through the real binary: one unindented line per repo, one indented line per worktree,
+/// no trailing whitespace, and worktree badges (col2) / sessions (col3) start on shared columns.
+#[test]
+fn breaker_plain_status_binary_lines_and_columns() {
+    use ratatui::text::Span;
+    use rollcall_core::text::sanitise;
+    let p = own_f();
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    let lines: Vec<&str> = plain.split_terminator('\n').collect();
+    let repos = doc["repos"].as_array().expect("repos");
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+    assert!(total > 3, "fixture too small to check alignment: {plain}");
+
+    let width = |s: &str| Span::raw(s).width();
+    let (mut col2, mut col3) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    for repo in repos {
+        let line = lines[i];
+        i += 1;
+        assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+        let name = sanitise(repo["name"].as_str().expect("name"));
+        assert!(
+            !line.starts_with(' ') && line.starts_with(name.as_str()),
+            "{line:?}"
+        );
+        // Repo col3 is "quiet Nd", an age or "—": the last cell, after the last two-space gap.
+        let s3 = match line.find("  quiet ") {
+            Some(q) => q + 2,
+            None => line.rfind("  ").expect("repo col3") + 2,
+        };
+        let c2 = line[name.len()..s3].trim();
+        if width(&name) <= 40 && width(c2) <= 40 {
+            col3.push((width(&line[..s3]), line));
+        }
+        for wt in repo["worktrees"].as_array().expect("worktrees") {
+            let line = lines[i];
+            i += 1;
+            assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+            let label = match (
+                wt["branch"].as_str(),
+                wt["detached"].as_bool(),
+                wt["head"].as_str(),
+            ) {
+                (Some(b), ..) => b.to_owned(),
+                (None, Some(true), Some(h)) => format!("(detached {})", &h[..7]),
+                _ => wt["path"].as_str().expect("path").to_owned(),
+            };
+            let c1 = format!("  {}", sanitise(&label));
+            assert!(
+                line.starts_with(c1.as_str()) && !line[2..].starts_with(' '),
+                "{line:?}"
+            );
+            let rest = &line[c1.len()..];
+            let at = c1.len() + rest.len() - rest.trim_start().len();
+            assert!(at - c1.len() >= 2, "{line:?}");
+            if width(&c1) <= 40 {
+                col2.push((width(&line[..at]), line));
+            }
+            if let Some(src) = wt["last_session"]["source"].as_str() {
+                let s3 = line[at..].find(&format!("  {src} ")).expect("session cell") + at + 2;
+                let c2 = line[at..s3].trim_end();
+                if width(&c1) <= 40 && width(c2) <= 40 {
+                    col3.push((width(&line[..s3]), line));
+                }
+            }
+        }
+    }
+    assert!(col2.len() > 1 && col3.len() > 1, "{plain}");
+    for col in [col2, col3] {
+        if let Some((first, _)) = col.first() {
+            assert!(col.iter().all(|(w, _)| w == first), "misaligned: {col:#?}");
+        }
+    }
+}
