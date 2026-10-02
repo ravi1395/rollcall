@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 15 (plain `status` column layout in §8.2 and an empty-name fallback; U+2028 and U+2029 become a space when sanitising, §9; approved by the author 2026-10-02) — Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
+**Status:** Revision 15 (plain `status` column layout in §8.2 and a path fallback for empty or blank names; U+2028 and U+2029 become a space when sanitising, §9; approved by the author 2026-10-02) — Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
