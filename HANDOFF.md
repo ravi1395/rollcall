@@ -13,9 +13,7 @@ v0 passed its §12.1 gate in session 5 (spec rev 14). Session 6 closed the code-
 
 ## Not started (author decisions)
 1. **#8 RSS margin thin** (worst local peak 495,927,296 bytes vs 512 MB): act only if it bites (Linux `/proc` sampling or a lower cap).
-2. **HANDOFF-rewriting hook**: `~/.claude/hooks/write-handoff.sh` (global settings, SessionEnd + PostToolUse on `git push`) overwrites this file; disable or scope it per repo.
-3. **Homebrew tap** `ravi1395/homebrew-tap`, formula `rollcall-cli`: still assumed names.
-4. Merge `impl/v0` → `main`.
+2. **Homebrew tap** `ravi1395/homebrew-tap`: assumed name, unconfirmed (formula `rollcall-cli` confirmed by the author 2026-10-02).
 
 ## Optional (skeptic, non-blocking)
 - `lock_when_free` narrows, but does not close, the fork race before the released-control call (microsecond window).
@@ -23,4 +21,5 @@ v0 passed its §12.1 gate in session 5 (spec rev 14). Session 6 closed the code-
 - `scripts/probe-gix-p15b/sample.py` still prints `first>320MiB` (README labels it rev-13).
 
 ## Gotchas
-- Same as session 5 archive: restore `HANDOFF.md` (`git checkout HANDOFF.md`) before commits; stage explicit paths; scratch `HOME` for manual runs; hostile `scan_h*` with `--release` locally.
+- The global `~/.claude/hooks/write-handoff.sh` now skips repos with `git config handoff.auto false`; this clone has it set (local git config, not committed). A fresh clone needs it set again.
+- Same as session 5 archive: stage explicit paths; scratch `HOME` for manual runs; hostile `scan_h*` with `--release` locally.
