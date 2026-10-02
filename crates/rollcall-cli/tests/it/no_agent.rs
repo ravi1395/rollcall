@@ -293,3 +293,148 @@ fn breaker2_binary_empty_name_fallback_and_separators() {
         .unwrap_or_else(|| panic!("no line for \"z w\": {plain}"));
     assert!(lines[at + 1].starts_with("  b c  "), "{plain}");
 }
+
+/// `git init -b <branch>` plus one empty commit in `root/<name>`.
+fn breaker3_init_repo(p: &Private, name: &str, branch: &str) {
+    let dir = p.w.root.join(name);
+    std::fs::create_dir(&dir).expect("repo dir");
+    for args in [
+        vec!["init", "-q", "-b", branch],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let mut cmd = p.w.sb.command(git_path());
+        cmd.current_dir(&dir)
+            .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+            .args(&args);
+        let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+        assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+    }
+}
+
+/// §8.2 rev 15 through the real binary (DC1-DC3): repo directories and branches that sanitise to
+/// whitespace show the sanitised path (repo unindented, worktree after the two-space indent); a
+/// branch with visible text keeps it; a name ending in Unicode whitespace has its last cell at
+/// max(S3, E + 2) with E excluding that whitespace; `--json` keeps every name and branch exact.
+#[test]
+fn breaker3_binary_blank_names_and_branches_fall_back_and_trailing_spaces_are_not_counted() {
+    use ratatui::text::Span;
+    use rollcall_core::text::sanitise;
+    let width = |s: &str| Span::raw(s).width();
+    let p = Private::new(Which::FClean);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let blank_names = [
+        " ",
+        "\t",
+        "\n",
+        "\u{a0}",
+        "\u{3000}",
+        " \u{200b} ",
+        "\u{1680}\u{2028}",
+        "\u{205f}\u{202f}",
+    ];
+    let blank_branches = ["\u{a0}", "\u{3000}", "\u{2028}\u{2029}", "\u{2000}\u{200b}"];
+    let x41 = "x".repeat(41);
+    let trailing = [format!("{x41}\u{3000}"), "ab\u{3000}\u{a0}".to_owned()];
+    for name in blank_names {
+        breaker3_init_repo(&p, name, "main");
+    }
+    for (i, branch) in blank_branches.iter().enumerate() {
+        breaker3_init_repo(&p, &format!("blankbranch{i}"), branch);
+    }
+    breaker3_init_repo(&p, "featbranch", "\u{2028}feat");
+    for name in &trailing {
+        breaker3_init_repo(&p, name, "main");
+    }
+
+    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    let repos = doc["repos"].as_array().expect("repos");
+    let lines: Vec<&str> = plain.split_terminator('\n').collect();
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+
+    // S3 from an untouched in-cap repo line: where its last cell ("quiet …" or an age) starts.
+    let last_cell = |line: &str| match line.find("  quiet ") {
+        Some(q) => q + 2,
+        None => line.rfind("  ").expect("last cell") + 2,
+    };
+    let mut s3 = None;
+    let (mut seen_blank, mut seen_branch, mut seen_trailing) = (0, 0, 0);
+    let mut i = 0;
+    for repo in repos {
+        let (line, wts) = (lines[i], &lines[i + 1..]);
+        i += 1 + repo["worktrees"].as_array().expect("worktrees").len();
+        assert_eq!(line, line.trim_end(), "trailing whitespace: {line:?}");
+        let name = repo["name"].as_str().expect("name");
+        let path = repo["path"].as_str().expect("path");
+        let branch = repo["worktrees"][0]["branch"].as_str();
+        if blank_names.contains(&name) {
+            seen_blank += 1;
+            assert!(path.ends_with(&format!("/{name}")), "--json path {path:?}");
+            let shown = sanitise(path);
+            assert!(shown.starts_with('/'), "{shown:?}");
+            assert!(
+                line.starts_with(shown.trim_end()),
+                "{name:?}: {line:?}\n{plain}"
+            );
+            assert!(!line.starts_with(char::is_whitespace), "{line:?}");
+            let at = last_cell(line);
+            assert_eq!(
+                at,
+                shown.trim_end().len() + 2,
+                "{name:?}: last cell not at E + 2 of the over-cap path: {line:?}"
+            );
+            assert_eq!(branch, Some("main"), "{repo}");
+            assert!(wts[0].starts_with("  main  "), "{wts:?}");
+        } else if let Some(b) = branch.filter(|b| blank_branches.contains(b)) {
+            seen_branch += 1;
+            let want = format!("  {}", sanitise(path));
+            assert!(
+                wts[0].starts_with(want.trim_end()) && !wts[0][2..].starts_with(' '),
+                "{b:?}: {:?}\n{plain}",
+                wts[0]
+            );
+            assert!(line.starts_with("blankbranch"), "{line:?}");
+        } else if name == "featbranch" {
+            assert_eq!(branch, Some("\u{2028}feat"), "{repo}");
+            assert!(wts[0].starts_with("   feat  "), "{:?}", wts[0]);
+        } else if trailing.iter().any(|t| t == name) {
+            seen_trailing += 1;
+            let text = name.trim_end();
+            assert!(line.starts_with(&format!("{text}  ")), "{line:?}");
+            let at = width(&line[..last_cell(line)]);
+            let s3 = s3.expect("an in-cap repo sorted before the trailing-space repos");
+            assert_eq!(
+                at,
+                usize::max(s3, width(text) + 2),
+                "{name:?}: {line:?}\n{plain}"
+            );
+        } else if width(&sanitise(name)) <= 40 && !line.starts_with('/') {
+            let at = width(&line[..last_cell(line)]);
+            assert_eq!(
+                *s3.get_or_insert(at),
+                at,
+                "in-cap rows misaligned:\n{plain}"
+            );
+        }
+    }
+    assert_eq!(
+        (seen_blank, seen_branch, seen_trailing),
+        (blank_names.len(), blank_branches.len(), trailing.len()),
+        "{plain}"
+    );
+}
