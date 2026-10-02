@@ -432,9 +432,10 @@ fn repo_cells(repo: &Repo, now: Timestamp) -> [String; 3] {
         repo.last_activity_at
             .map_or("—".to_owned(), |t| age(now, t))
     };
-    let name = match sanitise(&repo.name) {
-        name if name.trim().is_empty() => sanitise(&repo.path),
-        name => name,
+    // A repo line never starts with whitespace, so it can't pass for a worktree line.
+    let name = match sanitise(&repo.name).trim_start() {
+        "" => sanitise(&repo.path),
+        name => name.to_owned(),
     };
     [name, badges.join(" "), activity]
 }
@@ -1995,6 +1996,17 @@ mod tests {
                 !first.starts_with(char::is_whitespace),
                 "{name:?}: {text:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_repo_name_with_leading_whitespace_starts_its_line_with_the_name() {
+        let (w, mut doc) = blank_doc();
+        for name in ["\tfoo", " foo", "\u{2028}foo", "\n \u{200b}foo"] {
+            doc.repos[0].name = name.to_owned();
+            assert_eq!(repo_cells(&doc.repos[0], w.ctx.now)[0], "foo", "{name:?}");
+            let text = plain_status(&doc, w.ctx.now);
+            assert!(text.starts_with("foo  "), "{name:?}: {text:?}");
         }
     }
 
