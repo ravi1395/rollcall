@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-02 impl/v0 (~/Projects/rollcall), end of session 6
 
-**Status: ACTIVE.** Previous handoffs are in `.handoffs/` (session 5's consumed copy: `20261002-003523-HANDOFF.md`).
+**Status: CONSUMED** by session 7 (2026-10-02 22:49); archived as `.handoffs/20261002-224920-HANDOFF.md`. Not active state. Previous handoffs are in `.handoffs/` (session 5's consumed copy: `20261002-003523-HANDOFF.md`).
 
 v0 passed its §12.1 gate in session 5 (spec rev 14). Session 6 closed the code-actionable loose ends; what remains needs the author.
 
