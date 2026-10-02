@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use ratatui::text::Span;
 use rollcall_core::text::{render_text, sanitise, shell_quote};
 use rollcall_core::{
     Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
@@ -328,17 +329,43 @@ pub fn status(
     finish(out, &text, outcome.exit)
 }
 
-/// §8.2: a line per repo, then an indented line per worktree. Every text that came from a repo
-/// or a log is sanitised; JSON keeps it exact.
+/// §8.2: a line per repo, then an indented line per worktree, columns aligned like `ls`. Every
+/// text that came from a repo or a log is sanitised; JSON keeps it exact.
 fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
-    let mut text = String::new();
+    let mut rows = Vec::new();
     for repo in &doc.repos {
-        text.push_str(&repo_line(repo, now));
-        text.push('\n');
-        for worktree in &repo.worktrees {
-            text.push_str(&worktree_line(worktree, now));
-            text.push('\n');
+        rows.push(repo_cells(repo, now));
+        rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now)));
+    }
+    align(&rows)
+}
+
+/// Widest a column may grow from one cell; wider cells overflow on their own row.
+const COL_CAP: usize = 40;
+
+/// Render `[name, badges, last]` rows with the first two columns padded to the widest cell
+/// (display columns, capped).
+fn align(rows: &[[String; 3]]) -> String {
+    let width = |cell: &str| Span::raw(cell).width();
+    let widest = |col: usize| {
+        let fits = rows
+            .iter()
+            .map(|r| width(&r[col]))
+            .filter(|&w| w <= COL_CAP);
+        fits.max().unwrap_or(0)
+    };
+    let widths = [widest(0), widest(1)];
+    let mut text = String::new();
+    for row in rows {
+        let mut line = String::new();
+        for (cell, w) in row.iter().zip(widths) {
+            line.push_str(cell);
+            line.push_str(&" ".repeat(w.saturating_sub(width(cell))));
+            line.push_str("  ");
         }
+        line.push_str(&row[2]);
+        text.push_str(line.trim_end());
+        text.push('\n');
     }
     text
 }
@@ -369,7 +396,8 @@ fn no_upstream(w: &Worktree) -> bool {
     w.upstream.is_none() && w.unpushed.is_some()
 }
 
-fn repo_line(repo: &Repo, now: Timestamp) -> String {
+/// `[name, badges, last activity]` of a repo row.
+fn repo_cells(repo: &Repo, now: Timestamp) -> [String; 3] {
     let wts = &repo.worktrees;
     let mut badges = Vec::new();
     if let Some(error) = &repo.error {
@@ -392,15 +420,13 @@ fn repo_line(repo: &Repo, now: Timestamp) -> String {
     if wts.iter().any(no_upstream) {
         badges.push("no-upstream".to_owned());
     }
-    if repo.attention == 0 {
-        badges.push(rank::quiet(repo.last_activity_at, now));
+    let activity = if repo.attention == 0 {
+        rank::quiet(repo.last_activity_at, now)
     } else {
-        let activity = repo
-            .last_activity_at
-            .map_or("—".to_owned(), |t| age(now, t));
-        badges.push(activity);
-    }
-    format!("{}  {}", sanitise(&repo.name), badges.join(" "))
+        repo.last_activity_at
+            .map_or("—".to_owned(), |t| age(now, t))
+    };
+    [sanitise(&repo.name), badges.join(" "), activity]
 }
 
 fn worktree_label(w: &Worktree) -> String {
@@ -459,15 +485,15 @@ fn session_text(s: &rollcall_core::SessionOut, now: Timestamp) -> String {
     format!("{} {}{quoted}", agent_name(s.source), age(now, s.ended_at))
 }
 
-fn worktree_line(w: &Worktree, now: Timestamp) -> String {
-    let mut parts = vec![worktree_label(w)];
-    parts.extend(state_badges(w));
-    let mut line = format!("  {}", parts.join("  "));
-    if let Some(s) = &w.last_session {
-        line.push_str("  ");
-        line.push_str(&session_text(s, now));
-    }
-    line
+/// `[indented branch, state badges, last session]` of a worktree row.
+fn worktree_cells(w: &Worktree, now: Timestamp) -> [String; 3] {
+    [
+        format!("  {}", worktree_label(w)),
+        state_badges(w).join(" "),
+        w.last_session
+            .as_ref()
+            .map_or(String::new(), |s| session_text(s, now)),
+    ]
 }
 
 pub fn doctor(
@@ -920,6 +946,110 @@ mod tests {
             "{text}"
         );
         assert!(lines[3].contains("\"hello there\""), "{text}");
+    }
+
+    fn cells(rows: &[[&str; 3]]) -> Vec<[String; 3]> {
+        rows.iter().map(|r| r.map(str::to_owned)).collect()
+    }
+
+    fn no_trailing_space(text: &str) {
+        for line in text.lines() {
+            assert_eq!(line, line.trim_end(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn align_pads_columns_one_and_two_to_the_widest_cell() {
+        let text = align(&cells(&[["alpha", "a b", "1m"], ["be", "●1", "2h"]]));
+        assert_eq!(text, "alpha  a b  1m\nbe     ●1   2h\n");
+    }
+
+    #[test]
+    fn align_keeps_col3_aligned_over_empty_cells_without_trailing_space() {
+        let text = align(&cells(&[
+            ["a", "", "3m"],
+            ["bb", "xx", "1m"],
+            ["bb", "xx", ""],
+            ["c", "", ""],
+        ]));
+        assert_eq!(text, "a       3m\nbb  xx  1m\nbb  xx\nc\n");
+        no_trailing_space(&text);
+    }
+
+    #[test]
+    fn align_lets_an_over_cap_cell_overflow_without_widening_the_column() {
+        let long1 = "x".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            [&long1, "b", "c"],
+            ["a", "b", "c"],
+            ["bb", "b", "c"],
+        ]));
+        assert_eq!(text, format!("{long1}  b  c\na   b  c\nbb  b  c\n"));
+
+        let long2 = "y".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            ["a", &long2, "c"],
+            ["bb", "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        assert_eq!(text, format!("a   {long2}  c\nbb  b   c\na   bb  c\n"));
+    }
+
+    #[test]
+    fn align_counts_a_cell_of_exactly_the_cap_toward_the_width() {
+        let edge = "x".repeat(COL_CAP);
+        let text = align(&cells(&[[&edge, "b", "c"], ["a", "b", "c"]]));
+        assert_eq!(
+            text,
+            format!("{edge}  b  c\na{}  b  c\n", " ".repeat(COL_CAP - 1))
+        );
+    }
+
+    #[test]
+    fn align_measures_display_columns_not_chars_or_bytes() {
+        let text = align(&cells(&[["漢字", "b", "c"], ["ab", "b", "c"]]));
+        assert_eq!(text, "漢字  b  c\nab    b  c\n");
+        // at the cap boundary: 20 CJK chars = 40 columns fit, 21 = 42 overflow.
+        let fits = "漢".repeat(COL_CAP / 2);
+        let over = "漢".repeat(COL_CAP / 2 + 1);
+        let text = align(&cells(&[
+            [&fits, "b", "c"],
+            [&over, "b", "c"],
+            ["a", "b", "c"],
+        ]));
+        assert_eq!(
+            text,
+            format!(
+                "{fits}  b  c\n{over}  b  c\na{}  b  c\n",
+                " ".repeat(COL_CAP - 1)
+            )
+        );
+    }
+
+    #[test]
+    fn plain_status_columns_line_up_across_repos_and_worktrees() {
+        let w = world();
+        init_repo(&w.root.join("b"));
+        init_repo(&w.root.join("longer-name"));
+        std::fs::write(w.root.join("b/new"), "u").unwrap();
+        write_claude_session(&w, &w.root.join("longer-name"), "hello there");
+        let outcome = scan_root(&w, ScanMode::Fresh);
+
+        let text = run_status(&w, &outcome, false);
+        no_trailing_space(&text);
+        let lines: Vec<Vec<char>> = text.lines().map(|l| l.chars().collect()).collect();
+        assert_eq!(lines.len(), 4, "{text}");
+        // col1 = "longer-name" (11), col2 = "✓ clean" (7): col2 starts at column 13, col3 at 22.
+        let at = |line: usize, col: usize| lines[line].get(col).copied().unwrap_or(' ');
+        for i in [0, 1, 3] {
+            assert_eq!([at(i, 11), at(i, 12)], [' ', ' '], "{text}");
+            assert_ne!(at(i, 13), ' ', "{text}");
+        }
+        for i in [0, 2, 3] {
+            assert_eq!([at(i, 20), at(i, 21)], [' ', ' '], "{text}");
+            assert_ne!(at(i, 22), ' ', "{text}");
+        }
+        eprintln!("{text}");
     }
 
     #[test]
