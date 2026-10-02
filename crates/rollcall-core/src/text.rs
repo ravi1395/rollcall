@@ -62,13 +62,13 @@ fn is_invisible(c: char) -> bool {
 }
 
 /// §9 sanitising: drops escape sequences, C0/DEL/C1 controls and invisible format characters;
-/// newline and tab become a space.
+/// newline, tab, U+2028 and U+2029 become a space.
 pub fn sanitise(text: &str) -> String {
     ESCAPE_SEQUENCE
         .replace_all(text, "")
         .chars()
         .filter_map(|c| match c {
-            '\n' | '\t' => Some(' '),
+            '\n' | '\t' | '\u{2028}' | '\u{2029}' => Some(' '),
             c if c.is_control() || is_invisible(c) => None,
             c => Some(c),
         })
@@ -331,6 +331,26 @@ mod tests {
     #[test]
     fn sanitise_turns_newline_and_tab_into_spaces() {
         assert_eq!(sanitise("a\nb\tc"), "a b c");
+    }
+
+    #[test]
+    fn sanitise_turns_line_and_paragraph_separators_into_spaces() {
+        for sep in ['\u{2028}', '\u{2029}'] {
+            assert_eq!(sanitise(&format!("a{sep}b")), "a b", "U+{:04X}", sep as u32);
+            assert_eq!(
+                sanitise(&format!("{sep}ab{sep}")),
+                " ab ",
+                "U+{:04X}",
+                sep as u32
+            );
+            assert_eq!(
+                sanitise(&format!("a{sep}{sep}b")),
+                "a  b",
+                "U+{:04X}",
+                sep as u32
+            );
+        }
+        assert_eq!(sanitise("a\u{2028}b\u{2029}c"), "a b c");
     }
 
     #[test]
