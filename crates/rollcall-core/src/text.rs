@@ -702,4 +702,33 @@ mod tests {
         let path = Path::new(OsStr::from_bytes(b"/tmp/a\xffb"));
         assert_eq!(shell_quote(path), "'/tmp/a\u{FFFD}b'");
     }
+
+    #[test]
+    fn breaker2_sanitise_maps_each_separator_to_one_space_next_to_other_classes() {
+        for sep in ['\u{2028}', '\u{2029}'] {
+            let tag = format!("U+{:04X}", sep as u32);
+            for (input, want) in [
+                (format!("{sep}"), " "),
+                (format!("{sep}{sep}{sep}"), "   "),
+                (format!("a\n{sep}\tb"), "a   b"),
+                (format!("a\u{200b}{sep}\u{200b}b"), "a b"),
+                (format!("a\u{7f}{sep}\u{9b}b"), "a b"),
+                (format!("a\u{202e}{sep}\u{feff}b"), "a b"),
+                (format!("a\x1b[2J{sep}\x1b[0mb"), "a b"),
+                (format!("a\x1b]0;t\x07{sep}b"), "a b"),
+                (format!("{sep}\u{2028}\u{2029}{sep}"), "    "),
+                (format!("x{sep}y{sep}"), "x y "),
+            ] {
+                let out = sanitise(&input);
+                assert_eq!(out, want, "{tag}: {input:?}");
+                assert!(!out.contains(['\u{2028}', '\u{2029}']), "{tag}: {out:?}");
+            }
+        }
+        // Characters next to the separators that are not on the §9 list stay as they are.
+        assert_eq!(
+            sanitise("\u{2027}\u{2028}\u{202a}\u{2029}\u{2030}"),
+            "\u{2027}  \u{2030}"
+        );
+        assert_eq!(sanitise("\u{85}\u{2028}"), " ");
+    }
 }

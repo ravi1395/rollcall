@@ -218,3 +218,78 @@ fn plain_status_binary_over_cap_repo_names_shift_only_their_own_line() {
     let before: Vec<&str> = before.lines().collect();
     assert_eq!(others, before, "an over-cap name moved other rows");
 }
+
+/// §8.2 AC6 and §9 U+2028/U+2029 through the real binary: a repo whose directory name sanitises
+/// to empty is shown by its sanitised path on an unindented line; a separator in a repo or branch
+/// name is a space in plain output and exact in `--json`.
+#[test]
+fn breaker2_binary_empty_name_fallback_and_separators() {
+    use rollcall_core::text::sanitise;
+    let p = Private::new(Which::FClean);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    for (name, branch) in [("\u{200b}", "main"), ("z\u{2028}w", "b\u{2029}c")] {
+        let dir = p.w.root.join(name);
+        std::fs::create_dir(&dir).expect("repo dir");
+        for args in [
+            vec!["init", "-q", "-b", branch],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let mut cmd = p.w.sb.command(git_path());
+            cmd.current_dir(&dir)
+                .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+                .args(&args);
+            let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+            assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+        }
+    }
+    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    assert!(
+        !plain.contains(['\u{2028}', '\u{2029}', '\u{200b}']),
+        "{plain:?}"
+    );
+    let repos = doc["repos"].as_array().expect("repos");
+    let lines: Vec<&str> = plain.lines().collect();
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+    let unindented = lines.iter().filter(|l| !l.starts_with(' ')).count();
+    assert_eq!(unindented, repos.len(), "{plain}");
+
+    let find = |name: &str| {
+        repos
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap_or_else(|| panic!("no repo named {name:?} in --json"))
+    };
+    let blank = find("\u{200b}");
+    let shown = sanitise(blank["path"].as_str().expect("path"));
+    assert!(shown.starts_with('/'), "{shown:?}");
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&format!("{shown}  ")))
+        .unwrap_or_else(|| panic!("no line for {shown:?}: {plain}"));
+    assert!(lines[at + 1].starts_with("  main"), "{plain}");
+
+    let sep = find("z\u{2028}w");
+    assert_eq!(sep["worktrees"][0]["branch"], "b\u{2029}c", "{sep}");
+    assert!(sep["path"].as_str().expect("path").ends_with("z\u{2028}w"));
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("z w  "))
+        .unwrap_or_else(|| panic!("no line for \"z w\": {plain}"));
+    assert!(lines[at + 1].starts_with("  b c  "), "{plain}");
+}

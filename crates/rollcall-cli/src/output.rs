@@ -1796,4 +1796,172 @@ mod tests {
             assert!(shaped, "{line:?}\n{text}");
         }
     }
+
+    // ---- breaker2: tab stops, empty-name fallback, U+2028/U+2029 (§8.2, §9 revision 15) ----
+
+    /// Trailing spaces count toward a cell's width and the cap but not toward where its text
+    /// ends; a blank-but-non-empty cell adds no visible text.
+    #[test]
+    fn breaker2_align_trailing_and_blank_cells_follow_the_stop_formula() {
+        let x = |n: usize| "x".repeat(n);
+        // w1 = 40 (39 x + a space), w2 = 2: S2 = 42, S3 = 46.
+        let text = align(&cells(&[
+            [&format!("{} ", x(39)), "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        let want = format!("{}   b   c\na{}bb  c\n", x(39), " ".repeat(41));
+        assert_eq!(text, want);
+        // 41 x + a space is over the cap (42): w1 = 1, w2 = 2, S2 = 3, S3 = 7. E = 41.
+        let text = align(&cells(&[
+            [&format!("{} ", x(41)), "", "q"],
+            [&format!("{} ", x(41)), "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        let want = format!("{0}  q\n{0}  b  c\na  bb  c\n", x(41));
+        assert_eq!(text, want);
+        // A col2 of only spaces: w2 = 3 (S3 = 9) but nothing visible before col3.
+        let text = align(&cells(&[
+            ["a", "   ", "c"],
+            ["bb", "x", "c"],
+            ["c", "   ", ""],
+        ]));
+        assert_eq!(text, "a        c\nbb  x    c\nc\n");
+        // A col2 with a trailing space: col3 still on its stop.
+        let text = align(&cells(&[["a", "b ", "c"], ["a", "bb", "c"]]));
+        assert_eq!(text, "a  b   c\na  bb  c\n");
+        no_trailing_space(&text);
+    }
+
+    /// AC6 for repos that also carry badges: an errored, nested and bare repo whose names
+    /// sanitise to empty, with hostile path segments, render their sanitised path as col1,
+    /// stay aligned, and `--json` keeps name and path exact.
+    #[test]
+    fn breaker2_empty_name_fallback_for_nested_bare_and_errored_repos() {
+        let w = world();
+        let mut rows = Vec::new();
+        for (i, (name, kind)) in [
+            ("", RepoKind::Nested),
+            ("\u{200b}\x1b[2J", RepoKind::Bare),
+            ("\u{7f}", RepoKind::Normal),
+            ("ok", RepoKind::Normal),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut r = repo_row(&w, "main");
+            r.name = name.to_owned();
+            r.kind = kind;
+            r.path = w.root.join(format!("p{i}\u{2028}\n\x1b[31m\u{202e}x"));
+            r.state.worktrees[0].path = r.path.clone();
+            if i == 2 {
+                r.state.error = Some("bad\u{2029}thing".into());
+            }
+            rows.push(r);
+        }
+        let outcome = commit(&w, rows, empty_doctor(&w));
+        let text = run_status(&w, &outcome, false);
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), 4, "{text}");
+        assert!(
+            !text.contains(['\u{2028}', '\u{2029}', '\x1b', '\u{202e}']),
+            "{text:?}"
+        );
+
+        let mut rows = Vec::new();
+        for repo in &doc.repos {
+            rows.push(repo_cells(repo, w.ctx.now));
+            rows.extend(repo.worktrees.iter().map(|t| worktree_cells(t, w.ctx.now)));
+        }
+        assert_eq!(text, align(&rows));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 8, "{text}");
+        let mut i = 0;
+        for repo in &doc.repos {
+            let line = lines[i];
+            let shown = if repo.name == "ok" {
+                "ok".to_owned()
+            } else {
+                sanitise(&repo.path)
+            };
+            assert!(
+                shown.starts_with("ok") || shown.starts_with('/'),
+                "{shown:?}"
+            );
+            assert!(
+                !line.starts_with(' ') && line.starts_with(&shown),
+                "{line:?}"
+            );
+            let badge = match (repo.kind, &repo.error) {
+                (_, Some(_)) => "error: bad thing",
+                (RepoKind::Nested, _) => "nested",
+                (RepoKind::Bare, _) => "bare",
+                _ => "",
+            };
+            assert!(line.contains(badge), "{line:?}");
+            // An over-cap path: the badge sits two past it.
+            if !badge.is_empty() {
+                assert_eq!(
+                    &line[shown.len()..shown.len() + 2 + badge.len()],
+                    format!("  {badge}")
+                );
+            }
+            assert!(lines[i + 1].starts_with("  main"), "{text}");
+            i += 2;
+        }
+
+        let json = status_json(&w, &outcome);
+        validate("status", &json);
+        let mut names: Vec<&str> = json["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["", "ok", "\u{7f}", "\u{200b}\x1b[2J"]);
+        for r in json["repos"].as_array().unwrap() {
+            assert!(
+                r["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("\u{2028}\n\x1b[31m\u{202e}x"),
+                "{r}"
+            );
+        }
+        let errors: Vec<&Value> = json["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| &r["error"])
+            .filter(|e| !e.is_null())
+            .collect();
+        assert_eq!(errors, [&Value::from("bad\u{2029}thing")]);
+    }
+
+    /// U+2028 through the real git and Claude-log parsers: plain output never carries it (branch
+    /// and title become a space); JSON keeps the branch exact and sanitises the title and prompt.
+    #[test]
+    fn breaker2_separators_flow_through_plain_and_json_from_a_real_scan() {
+        let w = world();
+        let repo = w.root.join("sep");
+        init_repo(&repo);
+        git(&repo, &["checkout", "-q", "-b", "feat\u{2028}x\u{2029}y"]);
+        write_claude_session(&w, &repo, "hello\u{2028}there\u{2029}now");
+        let outcome = scan_root(&w, ScanMode::Fresh);
+
+        let text = run_status(&w, &outcome, false);
+        assert!(!text.contains(['\u{2028}', '\u{2029}']), "{text:?}");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].starts_with("sep  "), "{text}");
+        assert!(lines[1].starts_with("  feat x y  "), "{text}");
+        assert!(lines[1].ends_with("\"hello there now\""), "{text}");
+
+        let json = status_json(&w, &outcome);
+        let wt = &json["repos"][0]["worktrees"][0];
+        assert_eq!(wt["branch"], "feat\u{2028}x\u{2029}y");
+        let s = &wt["last_session"];
+        assert_eq!(s["title"], "hello there now", "{s}");
+        assert_eq!(s["last_prompt"], "hello there now", "{s}");
+    }
 }
