@@ -343,8 +343,10 @@ fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
 /// Widest a column may grow from one cell; wider cells overflow on their own row.
 const COL_CAP: usize = 40;
 
-/// Render `[name, badges, last]` rows with the first two columns padded to the widest cell
-/// (display columns, capped).
+/// Render `[name, badges, last]` rows on tab stops: the badge column starts 2 past the widest
+/// in-cap name, the last column 2 past the widest in-cap badge cell after that (display columns).
+/// A non-empty cell starts at its stop or 2 past the text before it, whichever is later, so an
+/// over-cap cell shifts only its own line; an empty cell adds nothing.
 fn align(rows: &[[String; 3]]) -> String {
     let width = |cell: &str| Span::raw(cell).width();
     let widest = |col: usize| {
@@ -354,16 +356,20 @@ fn align(rows: &[[String; 3]]) -> String {
             .filter(|&w| w <= COL_CAP);
         fits.max().unwrap_or(0)
     };
-    let widths = [widest(0), widest(1)];
+    let stop2 = widest(0) + 2;
+    let stops = [stop2, stop2 + widest(1) + 2];
     let mut text = String::new();
     for row in rows {
-        let mut line = String::new();
-        for (cell, w) in row.iter().zip(widths) {
+        let mut line = row[0].clone();
+        for (cell, stop) in row[1..].iter().zip(stops) {
+            if cell.is_empty() {
+                continue;
+            }
+            line.truncate(line.trim_end_matches(' ').len());
+            let end = width(&line);
+            line.push_str(&" ".repeat(stop.max(end + 2) - end));
             line.push_str(cell);
-            line.push_str(&" ".repeat(w.saturating_sub(width(cell))));
-            line.push_str("  ");
         }
-        line.push_str(&row[2]);
         text.push_str(line.trim_end());
         text.push('\n');
     }
@@ -426,7 +432,11 @@ fn repo_cells(repo: &Repo, now: Timestamp) -> [String; 3] {
         repo.last_activity_at
             .map_or("—".to_owned(), |t| age(now, t))
     };
-    [sanitise(&repo.name), badges.join(" "), activity]
+    let name = match sanitise(&repo.name) {
+        name if name.is_empty() => sanitise(&repo.path),
+        name => name,
+    };
+    [name, badges.join(" "), activity]
 }
 
 fn worktree_label(w: &Worktree) -> String {
@@ -1027,6 +1037,119 @@ mod tests {
     }
 
     #[test]
+    fn align_places_col3_after_an_over_cap_col1_with_empty_col2_at_stop_or_end_plus_two() {
+        // w1 = 2, w2 = 2: stops at 4 and 8; the over-cap name ends at 45, so col3 is at 47.
+        let long = "x".repeat(COL_CAP + 5);
+        let text = align(&cells(&[
+            ["a", "bb", "c"],
+            ["bb", "x", "c"],
+            [&long, "", "q"],
+        ]));
+        assert_eq!(text, format!("a   bb  c\nbb  x   c\n{long}  q\n"));
+
+        // w1 = 1, w2 = 40: stops at 3 and 45; a 41-column name ends at 41, so col3 rejoins 45.
+        let short = "x".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            ["a", &"w".repeat(COL_CAP), "1"],
+            [&short, "", "q"],
+        ]));
+        let wide = "w".repeat(COL_CAP);
+        assert_eq!(text, format!("a  {wide}  1\n{short}    q\n"));
+    }
+
+    #[test]
+    fn align_rejoins_col3_when_an_over_cap_col1_leaves_room() {
+        // w1 = 40, w2 = 10: stops at 42 and 54. The 41-column name pushes col2 to 43 (end 44),
+        // and col3 is back on its stop at 54.
+        let edge = "x".repeat(COL_CAP);
+        let over = "y".repeat(COL_CAP + 1);
+        let text = align(&cells(&[[&edge, "0123456789", "1"], [&over, "b", "c"]]));
+        assert_eq!(
+            text,
+            format!("{edge}  0123456789  1\n{over}  b{}c\n", " ".repeat(10))
+        );
+    }
+
+    #[test]
+    fn align_trims_trailing_spaces_before_measuring_where_a_line_ends() {
+        // "x…x " is 42 columns wide, over the cap; its end without the space is 41, so col2 is
+        // at 43, not 45.
+        let over = format!("{} ", "x".repeat(COL_CAP + 1));
+        let text = align(&cells(&[
+            ["a", "bb", "c"],
+            ["bb", "x", "c"],
+            [&over, "b", "c"],
+        ]));
+        let name = over.trim_end();
+        assert_eq!(text, format!("a   bb  c\nbb  x   c\n{name}  b  c\n"));
+    }
+
+    #[test]
+    fn align_measures_an_over_cap_cell_in_display_columns_when_placing_the_next_one() {
+        // 21 × 漢 = 42 columns (over the cap), 21 chars, 63 bytes; col3 goes at 44, not at the
+        // stop (35) and not at a char- or byte-based end.
+        let over = "漢".repeat(COL_CAP / 2 + 1);
+        let text = align(&cells(&[["a", &"x".repeat(30), "1"], [&over, "", "q"]]));
+        assert_eq!(text, format!("a  {}  1\n{over}  q\n", "x".repeat(30)));
+    }
+
+    /// Display column where each non-empty col2/col3 cell of `line` starts, found by walking the
+    /// rendered text rather than by re-deriving the layout.
+    fn starts(row: &[String; 3], line: &str) -> [Option<usize>; 2] {
+        let mut rest = line.strip_prefix(row[0].trim_end()).expect("col1 first");
+        let mut at = breaker_width(row[0].trim_end());
+        let mut out = [None, None];
+        for (slot, cell) in out.iter_mut().zip(&row[1..]) {
+            if cell.is_empty() {
+                continue;
+            }
+            let gap = rest.len() - rest.trim_start_matches(' ').len();
+            rest = rest[gap..].strip_prefix(cell.as_str()).expect("cell next");
+            at += gap;
+            *slot = Some(at);
+            at += breaker_width(cell);
+        }
+        assert!(rest.is_empty(), "{line:?} has text past the last cell");
+        out
+    }
+
+    #[test]
+    fn align_starts_every_cell_at_its_stop_or_two_past_the_text_before_it() {
+        let x = |n: usize| "x".repeat(n);
+        let han = |n: usize| "漢".repeat(n);
+        let table: Vec<[String; 3]> = vec![
+            [x(5), "●1".into(), "3h".into()],
+            [x(40), x(10), "c".into()],
+            [x(41), String::new(), "q".into()],
+            [x(41), "b".into(), "c".into()],
+            [x(41), x(40), "c".into()],
+            [x(50), x(41), "c".into()],
+            [han(20), String::new(), "c".into()],
+            [han(21), "b".into(), String::new()],
+            [han(21), String::new(), "q".into()],
+            ["  wt".into(), "✓ clean".into(), "claude 1d".into()],
+            [String::new(), "b".into(), "c".into()],
+            ["only".into(), String::new(), String::new()],
+        ];
+        let text = align(&table);
+        let width = breaker_width;
+        // w1 = 40 (x(40), han(20)); w2 = 40 (x(40)).
+        let (s2, s3) = (42, 42 + 40 + 2);
+        for (row, line) in table.iter().zip(text.lines()) {
+            assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+            let [at2, at3] = starts(row, line);
+            let mut end = width(row[0].trim_end());
+            if let Some(at) = at2 {
+                assert_eq!(at, s2.max(end + 2), "col2: {line:?}");
+                end = at + width(&row[1]);
+            }
+            if let Some(at) = at3 {
+                assert_eq!(at, s3.max(end + 2), "col3: {line:?}");
+            }
+        }
+    }
+
+    #[test]
     fn plain_status_columns_line_up_across_repos_and_worktrees() {
         let w = world();
         init_repo(&w.root.join("b"));
@@ -1050,6 +1173,50 @@ mod tests {
             assert_ne!(at(i, 22), ' ', "{text}");
         }
         eprintln!("{text}");
+    }
+
+    #[test]
+    fn a_repo_whose_name_sanitises_to_empty_shows_its_sanitised_path() {
+        let w = world();
+        let mut rows = Vec::new();
+        for (name, dir) in [
+            ("", "blank"),
+            ("\u{200b}\u{7}", "invisible"),
+            ("ok", "named"),
+        ] {
+            let mut r = repo_row(&w, "main");
+            r.name = name.to_owned();
+            r.path = w.root.join(dir);
+            r.state.worktrees[0].path = r.path.clone();
+            rows.push(r);
+        }
+        let outcome = commit(&w, rows, empty_doctor(&w));
+        let text = run_status(&w, &outcome, false);
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 6, "{text}");
+        for repo in &doc.repos {
+            let shown = if repo.name == "ok" {
+                "ok".to_owned()
+            } else {
+                sanitise(&repo.path)
+            };
+            let line = lines
+                .iter()
+                .find(|l| !l.starts_with(' ') && l.starts_with(shown.as_str()))
+                .unwrap_or_else(|| panic!("no line for {shown:?}: {text}"));
+            assert!(
+                shown == "ok" || shown.starts_with('/') && shown.len() > 1,
+                "{shown:?}"
+            );
+            assert_eq!(repo_cells(repo, w.ctx.now)[0], shown, "{text}");
+            assert!(!line.starts_with(' '), "{line:?}");
+        }
+        assert!(
+            lines.iter().filter(|l| !l.starts_with(' ')).count() == 3,
+            "{text}"
+        );
     }
 
     #[test]

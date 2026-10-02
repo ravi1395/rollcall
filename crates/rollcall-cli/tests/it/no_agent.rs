@@ -1,6 +1,6 @@
 //! Gates P32 (spec 12.1 #13, non-TUI; 3.1 non-TTY): a run with no agent data, and `rollcall PATH` piped.
 use crate::discovery::{Private, json_of, own_f};
-use crate::support::{RUN_DEADLINE, Which};
+use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
 
 #[test]
@@ -139,4 +139,82 @@ fn breaker_plain_status_binary_lines_and_columns() {
             assert!(col.iter().all(|(w, _)| w == first), "misaligned: {col:#?}");
         }
     }
+}
+
+/// §8.2 through the real binary, in a world of its own: quiet repos whose names are over 40 display
+/// columns leave every other line byte-identical, and their `quiet Nd` cell starts at the badge
+/// column's stop or two past the end of the name, whichever is later.
+#[test]
+fn plain_status_binary_over_cap_repo_names_shift_only_their_own_line() {
+    use ratatui::text::Span;
+    let width = |s: &str| Span::raw(s).width();
+    let p = Private::new(Which::F);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let before = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    // The last column's stop, read off a row whose cells are all within the cap.
+    let normal = before
+        .lines()
+        .find(|l| l.starts_with("normal "))
+        .expect("normal");
+    let s3 = width(&normal[..normal.find("quiet").expect("quiet cell")]);
+
+    // 41 ASCII columns (rejoins the stop), 60 (past the stop), 21 x 2-column chars = 42 columns
+    // (21 chars, 63 bytes: only a display-width measure puts it over the cap).
+    let names = ["a".repeat(41), "b".repeat(60), "漢".repeat(21)];
+    assert!(
+        s3 > 41 + 2 && s3 < 60 + 2 && s3 > 42 + 2,
+        "stop {s3}: {before}"
+    );
+    for name in &names {
+        let dir = p.w.root.join(name);
+        std::fs::create_dir(&dir).expect("repo dir");
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let mut cmd = p.w.sb.command(git_path());
+            cmd.current_dir(&dir)
+                .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+                .args(&args);
+            let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+            assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+        }
+    }
+    let after = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+
+    let lines: Vec<&str> = after.lines().collect();
+    let (mut others, mut seen, mut i) = (Vec::new(), 0, 0);
+    while i < lines.len() {
+        let line = lines[i];
+        assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+        match names.iter().find(|n| line.starts_with(n.as_str())) {
+            Some(name) => {
+                seen += 1;
+                let cell = &line[name.len()..];
+                let at = width(name) + cell.len() - cell.trim_start().len();
+                assert!(cell.trim_start().starts_with("quiet "), "{line:?}");
+                assert_eq!(at, s3.max(width(name) + 2), "{line:?}");
+                assert!(lines[i + 1].starts_with("  main"), "{after}");
+                i += 2;
+            }
+            None => {
+                others.push(line);
+                i += 1;
+            }
+        }
+    }
+    assert_eq!(seen, names.len(), "{after}");
+    let before: Vec<&str> = before.lines().collect();
+    assert_eq!(others, before, "an over-cap name moved other rows");
 }
