@@ -58,6 +58,7 @@ fn piped_rollcall_equals_status() {
     );
     assert_eq!(piped.stdout, status.stdout);
     assert_eq!(piped.code, status.code);
+    assert_eq!(piped.code, 4, "F holds error rows: exit 4 (§3.1)");
 }
 
 /// §8.2 through the real binary: one unindented line per repo, one indented line per worktree,

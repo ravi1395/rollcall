@@ -20,6 +20,8 @@ const IMPOSSIBLE_REPO_BUDGET: &str = "repo_budget_secs = 0.000001\n";
 /// Below the budget root's ~100 dirents (manifest note), so the walk stops early.
 const SMALL_WALK_BUDGET: &str = "walk_budget_entries = 50\n";
 const EXIT_REFUSED_ROOT: i32 = 3;
+/// Spec 3.1: a completed scan with some error row.
+const EXIT_ERROR_ROWS: i32 = 4;
 
 /// A fixture world whose runs are serialised.
 pub(crate) struct Private {
@@ -156,8 +158,8 @@ fn discovery_matches_oracle() {
     let p = own_f();
     let (code, doc) = p.status(&[]);
     assert_eq!(
-        code, 1,
-        "F holds error rows, so the scan completes with exit 1"
+        code, EXIT_ERROR_ROWS,
+        "F holds error rows, so the scan completes with exit 4"
     );
     assert_discovery(&p.w, &doc, "status --json $F");
 }
@@ -178,7 +180,7 @@ fn symlink_fanout_finishes_under_10s_in_both_modes() {
             "{flags:?} took {:?}",
             start.elapsed()
         );
-        assert_eq!(code, 1, "{flags:?}");
+        assert_eq!(code, EXIT_ERROR_ROWS, "{flags:?}");
         // Rows reachable only through a symlink are not repos in either mode (manifest counting rule).
         assert_discovery(&p.w, &doc, &format!("status --json {flags:?} $F"));
     }
@@ -274,7 +276,7 @@ fn deadline_run_times_out_every_repo() {
     let root = p.w.root.to_str().expect("utf-8 root");
 
     let (code, doc) = json_of(p.run(&["status", "--json", root], &env, RUN_DEADLINE));
-    assert_eq!(code, 1);
+    assert_eq!(code, EXIT_ERROR_ROWS);
     assert!(
         !repos(&doc).is_empty(),
         "no repo rows, so nothing was checked"
@@ -293,6 +295,47 @@ fn deadline_run_times_out_every_repo() {
     let (_, doctor) = json_of(p.run(&["doctor", "--json", "--no-scan", root], &env, RUN_DEADLINE));
     let timeouts = doctor["repo_timeouts"].as_u64().expect("repo_timeouts");
     assert!(timeouts >= 1, "repo_timeouts = {timeouts}");
+}
+
+/// Spec 3.1, exit 4: `status` and `scan` on `F` (error rows), on `F_clean` (none), and the cache answers.
+#[test]
+fn error_rows_exit_4_and_a_clean_scan_exits_0() {
+    let p = own_f();
+    let root = p.w.root.to_str().expect("utf-8 root");
+
+    let scan = p.run(&["scan", root], &[], RUN_DEADLINE);
+    assert_eq!(scan.code, EXIT_ERROR_ROWS, "stderr: {}", scan.stderr);
+    let line = scan.stderr.trim_end();
+    assert_eq!(line.lines().count(), 1, "stderr: {}", scan.stderr);
+    assert!(line.starts_with("scanned "), "stderr: {line}");
+    let errors: u32 = line
+        .strip_suffix(" errors)")
+        .and_then(|head| head.rsplit_once('('))
+        .and_then(|(_, n)| n.parse().ok())
+        .unwrap_or_else(|| panic!("no `(<E> errors)` ending: {line}"));
+    assert!(errors >= 1, "{line}");
+
+    // A cache answer takes the same code from the stored rows.
+    let (code, _) = p.status(&["--no-scan"]);
+    assert_eq!(code, EXIT_ERROR_ROWS);
+
+    let clean = Private::new(Which::FClean);
+    let clean_root = clean.w.root.to_str().expect("utf-8 root");
+    let (code, _) = clean.status(&[]);
+    assert_eq!(code, 0);
+    let scan = clean.run(&["scan", clean_root], &[], RUN_DEADLINE);
+    assert_eq!(scan.code, 0, "stderr: {}", scan.stderr);
+}
+
+/// Spec 3.1: `doctor` keeps exiting 1 for error rows (the author named only `status` and `scan`).
+#[test]
+fn doctor_exits_1_for_error_rows() {
+    let p = own_f();
+    let root = p.w.root.to_str().expect("utf-8 root");
+    for args in [&["doctor", root][..], &["doctor", "--json", root][..]] {
+        let run = p.run(args, &[], RUN_DEADLINE);
+        assert_eq!(run.code, 1, "{args:?}; stderr: {}", run.stderr);
+    }
 }
 
 // ------------------------------------------------------------------ #3
@@ -373,6 +416,34 @@ fn walk_budget_makes_the_scan_partial() {
     // The same root under the default budget completes, so the flag above came from the budget.
     let (_, whole) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
     assert_eq!(whole["partial"], json!(false));
+}
+
+/// Spec 3.1: a partial walk wins over error rows (exit 1, not 4).
+#[test]
+fn a_partial_walk_with_an_error_row_exits_1() {
+    let p = own_f();
+    let scratch = p.w.scratch();
+    write_config(scratch.path(), "walk_budget_entries = 5\n");
+    let env = [("XDG_CONFIG_HOME", scratch.path().to_str().expect("utf-8"))];
+    // A chain, so the walk order is fixed: root (1 entry), `bad` (`.git` and `sub`: the error row,
+    // a repo whose gitdir does not exist, is found), then `sub` runs the budget out.
+    let root = p.w.base.join("budget-error");
+    let bad = root.join("bad");
+    std::fs::create_dir_all(bad.join("sub")).expect("create dirs");
+    std::fs::write(bad.join(".git"), "gitdir: ../does-not-exist\n").expect("write .git");
+    for i in 0..10 {
+        std::fs::write(bad.join(format!("sub/f{i}")), "x").expect("write filler");
+    }
+    let root = root.to_str().expect("utf-8 budget root");
+
+    let (code, doc) = json_of(p.run(&["status", "--json", root], &env, RUN_DEADLINE));
+    assert_eq!(doc["partial"], json!(true));
+    assert!(
+        repos(&doc).iter().any(|r| r["error"].is_string()),
+        "no error row: {}",
+        pretty(&doc)
+    );
+    assert_eq!(code, 1);
 }
 
 #[test]

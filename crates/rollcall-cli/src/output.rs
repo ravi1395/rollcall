@@ -527,7 +527,13 @@ pub fn doctor(
     } else {
         plain_doctor(&doc)
     };
-    finish(out, &text, outcome.exit)
+    // §3.1: error rows are exit 4 for `status` and `scan` only; `doctor` keeps 1.
+    let exit = if outcome.exit == ExitCode::from(scan::EXIT_ERROR_ROWS) {
+        ExitCode::FAILURE
+    } else {
+        outcome.exit
+    };
+    finish(out, &text, exit)
 }
 
 /// No scan ever completed for the root: the §7 shape with nothing in it.

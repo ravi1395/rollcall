@@ -39,9 +39,11 @@ pub struct ScanOutcome {
 }
 
 const EXIT_OK: u8 = 0;
-/// An error row, a partial walk, or no scan ever completed (§3.1).
+/// A partial walk, or no scan ever completed (§3.1).
 const EXIT_INCOMPLETE: u8 = 1;
 const EXIT_REFUSED: u8 = 3;
+/// The scan completed, the walk was not partial, and some row carries an error (§3.1).
+pub const EXIT_ERROR_ROWS: u8 = 4;
 
 /// How often a scan that waits for another scanner's lock looks again.
 const LOCK_POLL: Duration = Duration::from_millis(10);
@@ -146,7 +148,7 @@ fn cached(index: SqliteIndex, root: &Path) -> ScanOutcome {
     outcome(index, true, exit)
 }
 
-/// §3.1 from stored rows: no scan ever, a partial walk, or any error row is 1.
+/// §3.1 from stored rows: no scan ever or a partial walk is 1 (it wins), else any error row is 4.
 fn cached_exit(index: &SqliteIndex, root: &Path) -> u8 {
     if index.scanned_at(root).is_none() {
         return EXIT_INCOMPLETE;
@@ -154,8 +156,14 @@ fn cached_exit(index: &SqliteIndex, root: &Path) -> u8 {
     let partial = index
         .last_diagnostics(root)
         .is_some_and(|doctor| doctor.walk.budget_hit);
-    if partial || index.repos_for_root(root).iter().any(has_error) {
+    exit_for(partial, index.repos_for_root(root).iter().any(has_error))
+}
+
+fn exit_for(partial: bool, error_rows: bool) -> u8 {
+    if partial {
         EXIT_INCOMPLETE
+    } else if error_rows {
+        EXIT_ERROR_ROWS
     } else {
         EXIT_OK
     }
@@ -199,9 +207,14 @@ fn scan_here(ctx: &Ctx, root: &Path, mut index: SqliteIndex, lock: ScanLock) -> 
     }
 }
 
-/// Stale, and at least `floor` whatever the cache says.
+/// Stale; a nonzero `floor` is the code whatever the cache says (a scan that failed did not
+/// complete, so a stored scan's error rows, which alone answer 4, must not be reported).
 fn cached_with(index: SqliteIndex, root: &Path, floor: u8) -> ScanOutcome {
-    let exit = cached_exit(&index, root).max(floor);
+    let exit = if floor == EXIT_OK {
+        cached_exit(&index, root)
+    } else {
+        floor
+    };
     outcome(index, true, exit)
 }
 
@@ -235,7 +248,7 @@ fn scan_within(ctx: &Ctx, root: PathBuf, index: SqliteIndex, wait: Duration) -> 
 
 // ---- one scan ----
 
-/// The scan proper, under the lock: returns the exit code (0 or 1) once the result is committed.
+/// The scan proper, under the lock: returns the exit code (0, 1 or 4) once the result is committed.
 fn run_scan(ctx: &Ctx, root: &Path, index: &mut SqliteIndex) -> Result<u8, String> {
     let scanned_at = ctx.now;
     let discovery = rollcall_git::discover(root, &walk_options(ctx, root));
@@ -268,11 +281,7 @@ fn run_scan(ctx: &Ctx, root: &Path, index: &mut SqliteIndex) -> Result<u8, Strin
         sources: sources.iter().map(|s| s.diag.clone()).collect(),
         ..doctor_counts(root, scanned_at, &repos, discovery.walk)
     };
-    let exit = if discovery.partial || repos.iter().any(has_error) {
-        EXIT_INCOMPLETE
-    } else {
-        EXIT_OK
-    };
+    let exit = exit_for(discovery.partial, repos.iter().any(has_error));
     index
         .commit_scan(
             root,
@@ -1109,18 +1118,22 @@ mod tests {
         assert_eq!(rows[0].state.error, None);
     }
 
+    /// A repo whose `.git` file names a gitdir that does not exist: one `Repo.error` row.
+    fn bad_repo(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join(".git"), "gitdir: ../does-not-exist\n").unwrap();
+    }
+
     #[test]
-    fn an_error_row_exits_1() {
+    fn an_error_row_exits_4() {
         let w = world();
-        let bad = w.root.join("bad");
-        std::fs::create_dir_all(&bad).unwrap();
-        std::fs::write(bad.join(".git"), "gitdir: ../does-not-exist\n").unwrap();
+        bad_repo(&w.root.join("bad"));
         let outcome = within({
             let (ctx, root) = (w.ctx.clone(), w.root.clone());
             move || scan(&ctx, &root, ScanMode::Fresh)
         });
         assert!(!outcome.stale);
-        exit_is(&outcome, 1);
+        exit_is(&outcome, 4);
         let rows = outcome.index.repos_for_root(&w.root);
         assert!(
             rows[0]
@@ -1131,7 +1144,93 @@ mod tests {
                 .starts_with("bad gitdir: ")
         );
         // A cache answer recomputes the same code from the stored rows.
+        exit_is(&scan(&w.ctx, &w.root, ScanMode::NoScan), 4);
+        // And so does an answer given while another scanner holds the lock.
+        let _held = lock_when_free(&w);
+        let held = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        assert!(held.stale);
+        exit_is(&held, 4);
+    }
+
+    #[test]
+    fn a_worktree_error_row_alone_exits_4() {
+        let w = world();
+        let main = w.root.join("main");
+        init_repo(&main);
+        let linked = w.root.join("linked");
+        git(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+        // A linked worktree whose admin dir has no `commondir` is an untrusted worktree path.
+        let admin = std::fs::read_dir(main.join(".git/worktrees"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::remove_file(admin.join("commondir")).unwrap();
+        let outcome = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        let rows = outcome.index.repos_for_root(&w.root);
+        // Premise: the repo row is clean and only a worktree row carries an error.
+        assert!(rows.iter().all(|r| r.state.error.is_none()), "{rows:?}");
+        assert!(
+            rows.iter()
+                .flat_map(|r| &r.state.worktrees)
+                .any(|wt| wt.error.is_some()),
+            "{rows:?}"
+        );
+        exit_is(&outcome, 4);
+    }
+
+    #[test]
+    fn a_partial_walk_with_an_error_row_exits_1() {
+        let mut w = world();
+        // A chain, so the walk order is fixed: root (1 entry), `bad` (`.git` and `sub`: the error
+        // row is found), then `sub` runs the budget out.
+        let bad = w.root.join("bad");
+        bad_repo(&bad);
+        std::fs::create_dir_all(bad.join("sub")).unwrap();
+        for i in 0..10 {
+            std::fs::write(bad.join(format!("sub/f{i}")), "x").unwrap();
+        }
+        w.ctx.config.walk_budget_entries = 5;
+        let outcome = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        // Premise: the walk stopped early and the row that was found carries an error.
+        assert!(
+            outcome
+                .index
+                .last_diagnostics(&w.root)
+                .unwrap()
+                .walk
+                .budget_hit
+        );
+        assert!(outcome.index.repos_for_root(&w.root).iter().any(has_error));
+        exit_is(&outcome, 1);
         exit_is(&scan(&w.ctx, &w.root, ScanMode::NoScan), 1);
+    }
+
+    #[test]
+    fn a_failed_scan_that_falls_back_to_a_cache_with_error_rows_exits_1() {
+        let w = world();
+        bad_repo(&w.root.join("bad"));
+        let first = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        // Premise: the stored complete scan alone answers 4.
+        exit_is(&first, 4);
+        exit_is(&cached(open(&w), &w.root), 4);
+        // `scan_here` answers a failed scan with this call: the scan did not complete.
+        let fallback = cached_with(open(&w), &w.root, EXIT_INCOMPLETE);
+        assert!(fallback.stale);
+        exit_is(&fallback, 1);
     }
 
     #[test]

@@ -304,8 +304,8 @@ fn scan_h_stays_inside_its_time_and_memory_bounds() {
         s.stderr
     );
     assert!(s.rss < SCAN_RSS_LIMIT, "peak RSS {} bytes", s.rss);
-    // Error rows make the scan exit 1 (§3.1); anything else means it did not finish the way §8 needs.
-    assert_eq!(s.code, 1, "stderr: {}", s.stderr);
+    // Error rows make a completed scan exit 4 (§3.1); anything else means it did not finish the way §8 needs.
+    assert_eq!(s.code, 4, "stderr: {}", s.stderr);
 }
 
 #[test]

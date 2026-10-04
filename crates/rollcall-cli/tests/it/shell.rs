@@ -417,12 +417,25 @@ fn rc_passes_through(sh: Sh, args: &[&str]) -> crate::support::Run {
     assert_eq!(got.code, expected.code, "{}: {}", sh.name(), got.stderr);
     assert_eq!(got.stdout, expected.stdout, "{} rc {args:?}", sh.name());
     assert_no_marker(r, scratch.path());
+    // `rc` made its `mktemp` file under TMPDIR (the scratch dir) and removed it on every non-10 exit.
+    let left: Vec<_> = std::fs::read_dir(scratch.path())
+        .expect("read scratch")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.starts_with("tmp."))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "{}: resume temp files left: {left:?}",
+        sh.name()
+    );
     got
 }
 
 fn rc_status(sh: Sh) {
     let root = rig().w.root.to_str().unwrap().to_owned();
     let got = rc_passes_through(sh, &["status", &root]);
+    // `F` holds error rows: `rc` returns exit 4 unchanged (only 10 is its own).
+    assert_eq!(got.code, 4, "{}: {}", sh.name(), got.stderr);
     if require_tool(sh.name()).is_some() {
         // The hostile branch was rendered, not run.
         assert!(got.stdout.contains("$(true>marker-rc)"), "{}", got.stdout);
