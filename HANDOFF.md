@@ -40,7 +40,22 @@ Asked with today's behaviour and each option's effect; answers below are the aut
 7. **Homebrew tap → `ravi1395/homebrew-rollcall`** (users: `brew install ravi1395/rollcall/rollcall-cli`). Supersedes the assumed `ravi1395/homebrew-tap`, still named at `dist-workspace.toml:25` (`tap = …`) and `.github/workflows/release.yml:304` (cargo-dist output: change the toml, regenerate with `dist generate`, don't hand-edit the workflow). Release prerequisites still unrun: create the tap repo, add the `HOMEBREW_TAP_TOKEN` secret (author actions).
 8. **Merge → open PR, author merges.** After CI is green: open PR `impl/v0` → `main`, report the link, do not merge or enable auto-merge.
 
-**Suggested order for session 9:** fix CI test → push → green CI → open PR (item 8) → then spec rev 16 + plan for items 1, 2, 3, 5 (author reviews spec before code).
+## Author design answers 2026-10-04 (refine the decisions above; binding for spec rev 16)
+- **`ignore` (3):** path entries only, `~` expands, prefix match: a listed dir hides every repo at or under it in status, TUI and MCP. No glob crate, no `Cargo.toml` change.
+- **Exit 4 (2):** applies to `rollcall status` and `rollcall scan`. If the walk was also partial or no scan exists, exit 1 wins. TUI `q` stays 0; MCP unaffected.
+- **Risk summary (5):** repos with attention 2–3 (dirty/untracked or unpushed); errors excluded. Max 5 names then `+N more`; no line when none.
+- **tty (5):** default auto: colour and width truncation only when stdout is a terminal; `NO_COLOR` disables colour. Plus a new flag `--color auto|always|never`. *Assumption:* `--color` controls colour only; truncation still follows the tty test alone.
+- **Filters (5):** repo-level. `--dirty` / `--stale` pick repos where any worktree matches and show all of that repo's worktrees. `--top N` keeps the first N repos of the §3.3 sort, applied after filters. *Assumption:* `--dirty --stale` combine as OR; `--dirty` = dirty/untracked or unpushed > 0; `--stale` = any `stale_reason`.
+- **Prune hint (new, approved):** when any worktree is `missing`, one footer line in plain status, e.g. `hint: N missing worktrees — run 'git worktree prune' in <repo>`. rollcall never runs it; not in JSON.
+- **HTML entities (5), default not asked:** decode `&lt; &gt; &amp; &quot; &#39;` and numeric `&#N;`/`&#xH;` before sanitising, std only.
+- **Tap prerequisites (7):** later, not blocking. Next session changes `dist-workspace.toml` and regenerates `release.yml` only; no release run until the author says so.
+
+## Autonomy granted 2026-10-04
+- Without asking: fix the CI test, push to `impl/v0`, open the PR `impl/v0` → `main` (never merge it, never enable auto-merge).
+- Then write spec revision 16 covering items 1, 2, 3, 5, the prune hint and the tap rename, and **stop for author review**.
+- After the author approves the spec: run the full loop (plan → workers → breaker → skeptic, CLAUDE.md R1–R4) and push to `impl/v0` without per-step questions. Ask only on blockers, R1 hits, or ambiguous breaker findings.
+
+**Suggested order for session 9:** fix CI test → push → green CI → open PR → spec rev 16 (stop for review) → after approval, plan + implement.
 
 ## Test state
 - Local full gate not re-run this session (docs-only commit). Last known: session 6 at `1877ca6` → 766 passed / 0 failed / 4 ignored.
