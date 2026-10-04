@@ -29,6 +29,7 @@ I2-9: The §10.2 deadline run on `$F_clean` with `repo_budget_secs = 0.000001` m
 I2-10: `rc status $F` (the `rc` function from `rollcall init <shell>`) returns `4` in bash, zsh and fish, and leaves no resume temp file behind.
 I2-11: The TUI quits with `q` → exit `0` (existing PTY test passes unchanged); `rollcall mcp` behaviour is unchanged (existing MCP tests pass unchanged).
 I2-12 (assumption): `rollcall doctor $F` and `rollcall doctor $F --json` exit `1`.
+I2-13 (assumption): Unit test in `scan.rs`: with a stored complete scan holding an error row (which alone answers `4`), a fresh scan that returns `Err` and answers from the cache (`cached_with(.., EXIT_INCOMPLETE)`) exits `1`, not `4`.
 
 ## I1 Dot-named files under refs/ are exempt from the loose-ref size cap
 
@@ -90,7 +91,7 @@ Spec sections: §8.2 (risk summary line)
 Has logic: yes
 Files (hint): `crates/rollcall-cli/src/output.rs` (`plain_status`, `repo_cells`, `align`), `crates/rollcall-cli/tests/it/`
 
-I5c-1: Fixture with repos `r1` (attention 3: `↑2`, upstream set), `r2` (attention 2: one dirty file), `r3` (attention 4: a `Worktree.error`, e.g. `git error: unsafe tracked file` on main, plus a dirty linked worktree), `r4` (attention 0). The first line of plain `status` is exactly `at risk: r1 ↑2; r2 ●1` (assumption: entry = name cell, space, badge cell).
+I5c-1: Fixture with repos `r1` (attention 3: `↑2`, upstream set), `r2` (attention 2: one dirty file, no remote configured, so no `no-upstream` badge), `r3` (attention 4: a `Worktree.error`, e.g. `git error: unsafe tracked file` on main, plus a dirty linked worktree), `r4` (attention 0). The first line of plain `status` is exactly `at risk: r1 ↑2; r2 ●1` (assumption: entry = name cell, space, badge cell).
 I5c-2: A root whose repos all have attention 0, 1 or 4: no output line starts with `at risk:`.
 I5c-3: Seven repos with attention 2 or 3: the risk line names the first five in §3.3 order and ends with `; +2 more`.
 I5c-4: Removing the risk line from the I5c-1 output leaves exactly the lines plain `status` printed before revision 16 for that fixture (the risk line takes no part in column widths), checked against a hand-written expected file.
