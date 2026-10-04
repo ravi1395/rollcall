@@ -1,6 +1,7 @@
 # HANDOFF — 2026-10-04 impl/v0 (~/Projects/rollcall), end of session 8
 
 **Status: ACTIVE.** Previous handoff (session 6, consumed by session 7) archived as `.handoffs/20261003-015106-consumed-HANDOFF.md`.
+**Session 9 (2026-10-04) ingested this file**; byte copy archived as `.handoffs/20261004-225255-consumed-HANDOFF.md`. Kept active because the `rollcall-v1` workflow reads its decision sections. Session 9 check: `breaker3_binary_blank_names` → `1 passed`; CI run 37237577786 (`d303000`) still "job was not started … spending limit" on every job.
 
 v0 passed its §12.1 gate in session 5 (spec rev 14). Session 7 shipped the plain `status` column alignment (spec rev 15). Session 8 tightened §8.2 wording, recorded the author's decisions, built the `rollcall-v1` workflow and ran its `ci-fix` stage. **GitHub Actions cannot run** (account billing) — CI evidence for the fix is pending on the author.
 
