@@ -62,7 +62,7 @@ const SPEC_S = { type: 'object', properties: { files_changed: STRS, item_ids: ST
 const acText = item => item.criteria.map(c => `- ${c.id}: ${c.text}`).join('\n')
 const unmet = v => (v ? v.criteria.filter(c => c.verdict !== 'met') : [])
 
-const head = (ph, label) => agent(`${COMMON}\nRun git rev-parse HEAD and git status --short -- ':!.claude' (the pathspec excludes the untracked local .claude/ dir). Edit nothing. Return sha, clean (true iff that status output is empty) and the status text verbatim.`,
+const head = (ph, label) => agent(`${COMMON}\nRun git rev-parse HEAD and git status --short -- ':!.claude' ':!graphify-out' (the pathspecs exclude the untracked local .claude/ dir and graphify-out/, which graphify update regenerates). Edit nothing. Return sha, clean (true iff that status output is empty) and the status text verbatim.`,
   { ...CHEAP, phase: ph, label, schema: HEAD_S })
 
 const gate = (ph, label) => agent(`${COMMON}\nRun the full gate from the repo root and edit nothing:\n${GATE}\nReturn pass (true only if every command exited 0), test_summary (every "test result:" line verbatim, plus the total passed/failed/ignored you add up), and failures (names of failing tests or the first error lines of fmt/clippy).`,
@@ -70,7 +70,7 @@ const gate = (ph, label) => agent(`${COMMON}\nRun the full gate from the repo ro
 
 // The tree is verified clean (outside .claude/) at the start of every stage and item, and work is serial,
 // so every changed path belongs to this step: commit them all, by explicit path.
-const commit = (ph, label, message) => agent(`${COMMON}\nRun git status --short -- ':!.claude'. Stage every listed path (modified, added, deleted, untracked) by explicit path; never git add -A, git add . or anything under .claude/. If nothing is listed, return the current HEAD sha and note "nothing to commit". The commit message is the text between the two --- lines, verbatim, followed by a blank line and the trailer line:\n---\n${message}\n---\n${TRAILER}\nAfter committing run graphify update . if graphify is on PATH (ignore if absent). Return the new sha and the committed paths.`,
+const commit = (ph, label, message) => agent(`${COMMON}\nRun git status --short -- ':!.claude' ':!graphify-out'. Stage every listed path (modified, added, deleted, untracked) by explicit path; never git add -A, git add . or anything under .claude/ or graphify-out/. If nothing is listed, return the current HEAD sha and note "nothing to commit". The commit message is the text between the two --- lines, verbatim, followed by a blank line and the trailer line:\n---\n${message}\n---\n${TRAILER}\nAfter committing run graphify update . if graphify is on PATH (ignore if absent). Return the new sha and the committed paths.`,
   { ...CHEAP, phase: ph, label, schema: COMMIT_S })
 
 async function fix(ph, item, problem, label) {

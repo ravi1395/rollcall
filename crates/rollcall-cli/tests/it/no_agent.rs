@@ -294,7 +294,7 @@ fn breaker2_binary_empty_name_fallback_and_separators() {
     assert!(lines[at + 1].starts_with("  b c  "), "{plain}");
 }
 
-/// `git init -b <branch>` plus one empty commit in `root/<name>`.
+/// `git init -b <branch>` plus one empty commit in `parent/<name>`.
 fn breaker3_init_repo(parent: &std::path::Path, p: &Private, name: &str, branch: &str) {
     let dir = parent.join(name);
     std::fs::create_dir(&dir).expect("repo dir");
