@@ -295,8 +295,8 @@ fn breaker2_binary_empty_name_fallback_and_separators() {
 }
 
 /// `git init -b <branch>` plus one empty commit in `root/<name>`.
-fn breaker3_init_repo(p: &Private, name: &str, branch: &str) {
-    let dir = p.w.root.join(name);
+fn breaker3_init_repo(parent: &std::path::Path, p: &Private, name: &str, branch: &str) {
+    let dir = parent.join(name);
     std::fs::create_dir(&dir).expect("repo dir");
     for args in [
         vec!["init", "-q", "-b", branch],
@@ -346,15 +346,19 @@ fn breaker3_binary_blank_names_and_branches_fall_back_and_trailing_spaces_are_no
     let blank_branches = ["\u{a0}", "\u{3000}", "\u{2028}\u{2029}", "\u{2000}\u{200b}"];
     let x41 = "x".repeat(41);
     let trailing = [format!("{x41}\u{3000}"), "ab\u{3000}\u{a0}".to_owned()];
+    // A directory name wider than the 40-column cap puts every blank-name fallback path over the
+    // cap on any OS: Linux's `/tmp/.tmpXXXXXX/root` alone is about 22 columns.
+    let pad = p.w.root.join("p".repeat(41));
+    std::fs::create_dir(&pad).expect("pad dir");
     for name in blank_names {
-        breaker3_init_repo(&p, name, "main");
+        breaker3_init_repo(&pad, &p, name, "main");
     }
     for (i, branch) in blank_branches.iter().enumerate() {
-        breaker3_init_repo(&p, &format!("blankbranch{i}"), branch);
+        breaker3_init_repo(&p.w.root, &p, &format!("blankbranch{i}"), branch);
     }
-    breaker3_init_repo(&p, "featbranch", "\u{2028}feat");
+    breaker3_init_repo(&p.w.root, &p, "featbranch", "\u{2028}feat");
     for name in &trailing {
-        breaker3_init_repo(&p, name, "main");
+        breaker3_init_repo(&p.w.root, &p, name, "main");
     }
 
     let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
@@ -392,6 +396,10 @@ fn breaker3_binary_blank_names_and_branches_fall_back_and_trailing_spaces_are_no
                 "{name:?}: {line:?}\n{plain}"
             );
             assert!(!line.starts_with(char::is_whitespace), "{line:?}");
+            assert!(
+                width(shown.trim_end()) > 40,
+                "{name:?}: premise, fallback path must be over the cap: {shown:?}"
+            );
             let at = last_cell(line);
             assert_eq!(
                 at,
