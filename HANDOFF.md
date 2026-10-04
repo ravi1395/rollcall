@@ -57,6 +57,13 @@ Asked with today's behaviour and each option's effect; answers below are the aut
 
 **Suggested order for session 9:** fix CI test → push → green CI → open PR → spec rev 16 (stop for review) → after approval, plan + implement.
 
+**Workflow for all of the above:** `.claude/workflows/rollcall-v1.js` (Sonnet implementers, Opus breaker + Opus skeptic, per the author 2026-10-04). Run one stage at a time from the main loop:
+- `Workflow({scriptPath: "/Users/ravichandrasekhar/Projects/rollcall/.claude/workflows/rollcall-v1.js", args: {stage: "ci-fix"}})` → then the main loop pushes, checks CI, opens the PR.
+- `args: {stage: "spec"}` → drafts spec rev 16 + `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`, commits locally, **stops for author review**.
+- `args: {stage: "implement", specApproved: true}` (optional `items: ["I2", …]`) → serial items I2 → I1 → I3 → I5a → I5c → I5e → I5d → I5b → I4; per item: implement → full gate → commit → breaker → guard → fixes → skeptic (≤ 3 rounds); stops at the first item that is not accepted. Never pushes.
+- By name (`Workflow({name: "rollcall-v1", …})`) was not found in session 8 (registry likely loads at session start); `scriptPath` is verified: a dry run with a bad stage threw the expected error after 0 agents.
+- Deviations from defaults, chosen deliberately: Opus (not Fable) skeptic at the author's request; one serial lane in the main checkout instead of R2 worktree lanes, because the items share `cli.rs`, `output.rs` and `config.rs`.
+
 ## Test state
 - Local full gate not re-run this session (docs-only commit). Last known: session 6 at `1877ca6` → 766 passed / 0 failed / 4 ignored.
 - CI at `960cb0a`: 113 passed / 1 failed / 2 ignored in `it` on ubuntu; macOS green.
