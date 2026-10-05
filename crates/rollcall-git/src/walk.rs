@@ -43,6 +43,7 @@ struct Walker<'a> {
     follow_symlinks: bool,
     skip_names: HashSet<String>,
     skip_paths: Vec<PathBuf>,
+    ignore: &'a [PathBuf],
     budget_entries: u64,
     deadline: Option<Instant>,
     queue: Mutex<Queue>,
@@ -68,6 +69,11 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> Discovery {
         };
     };
 
+    // Unlike the path skips, an ignored path binds an explicit root too (§4.2).
+    if opts.ignore.iter().any(|ignored| root.starts_with(ignored)) {
+        return Discovery::default();
+    }
+
     // An explicit root under a skipped path is allowed; the skip binds only from outside.
     let skip_paths = path_skips(&home)
         .into_iter()
@@ -84,6 +90,7 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> Discovery {
         follow_symlinks: opts.follow_symlinks,
         skip_names,
         skip_paths,
+        ignore: &opts.ignore,
         budget_entries: opts.budget_entries,
         deadline: Instant::now().checked_add(opts.budget),
         queue: Mutex::new(Queue {
@@ -327,7 +334,10 @@ impl Walker<'_> {
     }
 
     fn under_skipped_path(&self, path: &Path) -> bool {
-        self.skip_paths.iter().any(|skip| path.starts_with(skip))
+        self.skip_paths
+            .iter()
+            .chain(self.ignore)
+            .any(|skip| path.starts_with(skip))
     }
 }
 
@@ -353,6 +363,7 @@ mod tests {
             follow_symlinks: false,
             submodules: true,
             skip_dirs: Vec::new(),
+            ignore: Vec::new(),
             budget_entries: 100_000,
             budget: Duration::from_secs(30),
         }

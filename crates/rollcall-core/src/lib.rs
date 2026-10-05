@@ -283,6 +283,8 @@ pub struct WalkOptions {
     pub follow_symlinks: bool,
     pub submodules: bool,
     pub skip_dirs: Vec<String>,
+    /// §3.2 config `ignore`, canonical paths: the walk never descends into these.
+    pub ignore: Vec<PathBuf>,
     pub budget_entries: u64,
     pub budget: Duration,
 }

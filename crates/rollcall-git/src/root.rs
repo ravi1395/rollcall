@@ -147,6 +147,7 @@ mod tests {
             follow_symlinks: false,
             submodules: false,
             skip_dirs: Vec::new(),
+            ignore: Vec::new(),
             budget_entries: 100_000,
             budget: Duration::from_secs(30),
         }
@@ -274,6 +275,7 @@ mod tests {
         repo(&home.join("kept/app"));
         let skipping = WalkOptions {
             skip_dirs: vec!["vendor".to_string()],
+            ignore: Vec::new(),
             ..opts(&home)
         };
         assert_eq!(

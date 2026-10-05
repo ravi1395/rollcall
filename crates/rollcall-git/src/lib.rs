@@ -278,6 +278,7 @@ mod tests {
             follow_symlinks: false,
             submodules: true,
             skip_dirs: Vec::new(),
+            ignore: Vec::new(),
             budget_entries: 100_000,
             budget: GENEROUS,
         }

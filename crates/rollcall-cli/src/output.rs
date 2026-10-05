@@ -270,8 +270,7 @@ pub fn build_status(
         submodules: scanned_submodules == Some(true),
         sources: log_sources(ctx),
     };
-    let mut repos: Vec<Repo> = index
-        .repos_for_root(&root)
+    let mut repos: Vec<Repo> = scan::visible_rows(ctx, &root, index.repos_for_root(&root))
         .iter()
         .map(|row| builder.repo(row))
         .collect();
@@ -634,14 +633,14 @@ fn flatten<'a>(rows: &'a [RepoRow], out: &mut Vec<&'a RepoRow>) {
 
 /// Prints the one-line `scanned <root>: …` summary (§3.1) to `err`.
 pub fn scan_summary(
-    _ctx: &Ctx,
+    ctx: &Ctx,
     outcome: &ScanOutcome,
     root: &Path,
     elapsed: Duration,
     err: &mut dyn Write,
 ) -> ExitCode {
     let root = scan::canonical_root(root);
-    let rows = outcome.index.repos_for_root(&root);
+    let rows = scan::visible_rows(ctx, &root, outcome.index.repos_for_root(&root));
     let mut all = Vec::new();
     flatten(&rows, &mut all);
     let worktrees: usize = all.iter().map(|r| r.state.worktrees.len()).sum();
@@ -2039,6 +2038,46 @@ mod tests {
             text.lines().nth(1).unwrap().starts_with("   feat  "),
             "{text:?}"
         );
+    }
+
+    /// I3-6 (and I3-7 for the TUI's first paint, which answers from the cache): the snapshot of
+    /// a root whose cached scan holds six repos lists only the two that `ignore` leaves.
+    #[test]
+    fn the_tui_snapshot_lists_only_the_repos_that_ignore_leaves() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut w = world();
+        for name in ["a", "app", "app2", "grp/x", "grp/y", "z"] {
+            init_repo(&w.root.join(name));
+        }
+        let render = |w: &World, outcome: &scan::ScanOutcome| -> Vec<String> {
+            let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+            let model = crate::tui::Model::new(doc, w.ctx.now, true);
+            let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+            terminal.draw(|f| crate::tui::draw(f, &model)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..buf.area.height)
+                .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+                .collect()
+        };
+        let all = render(&w, &scan_root(&w, ScanMode::Fresh));
+        assert!(all[0].contains("6 repos"), "control: {all:#?}");
+
+        w.ctx.config.ignore = ["grp", "app", "z"].map(|n| w.root.join(n)).to_vec();
+        let shown = render(&w, &scan_root(&w, ScanMode::NoScan));
+        assert!(shown[0].contains("2 repos"), "{shown:#?}");
+        // The list pane's first column: one row per visible repo, in §3.3 order.
+        let listed: Vec<&str> = shown[1..]
+            .iter()
+            .filter_map(|line| {
+                line.trim_start_matches(['│', '▶', ' '])
+                    .split_whitespace()
+                    .next()
+            })
+            .filter(|word| ["a", "app", "app2", "x", "y", "z"].contains(word))
+            .collect();
+        assert_eq!(listed, ["a", "app2"], "{shown:#?}");
     }
 
     /// E ignores trailing Unicode whitespace of any kind, so the next cell sits two past the
