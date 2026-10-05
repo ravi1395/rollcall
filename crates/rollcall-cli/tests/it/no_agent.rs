@@ -4,15 +4,15 @@ use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
 
 /// Plain `status` without its leading risk line (I5c): the repo and worktree rows alone.
+/// Asserts the line is there, so a repo row named `at risk: …` (§8.2 prints names as
+/// written) is never dropped in its place.
 fn rows_only(plain: &str) -> String {
-    match plain.strip_prefix("at risk:") {
-        Some(rest) => rest
-            .split_once('\n')
-            .expect("a risk line ends")
-            .1
-            .to_owned(),
-        None => plain.to_owned(),
-    }
+    assert!(plain.starts_with("at risk: "), "no risk line: {plain}");
+    plain
+        .split_once('\n')
+        .expect("a risk line ends")
+        .1
+        .to_owned()
 }
 
 #[test]
