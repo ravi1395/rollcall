@@ -524,3 +524,24 @@ fn breaker_i3_an_ignored_dir_counts_once_in_skipped_dirs() {
     let (_, doc) = sb.json(&["doctor", "--json", root]);
     assert_eq!(doc["walk"]["skipped_dirs"], json!(before + 1), "{doc}");
 }
+
+/// §4.2: a walk-reachable repo under an ignored path is dropped before its git state is computed,
+/// so a fresh scan's exit code never sees its error (the read-time filter alone would not stop it).
+#[test]
+fn breaker_i3_a_walk_reachable_ignored_error_repo_never_reaches_the_exit_code() {
+    let sb = Sb::new();
+    let main = sb.base.join("elsewhere/ign/main");
+    sb.repo(&main);
+    sb.repo(&sb.root.join("a"));
+    let wt = sb.root.join("wt");
+    sb.git(
+        &main,
+        &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
+    );
+    fs::write(main.join(".git/HEAD"), "garbage\n").unwrap();
+    let (code, doc) = sb.status_json(&sb.root, &[]);
+    assert_eq!(code, Some(4), "control: {doc}");
+    sb.ignore(&[sb.base.join("elsewhere/ign").display().to_string()]);
+    let (code, doc) = sb.status_json(&sb.root, &[]);
+    assert_eq!((code, names(&doc)), (Some(0), "a".to_owned()), "{doc}");
+}
