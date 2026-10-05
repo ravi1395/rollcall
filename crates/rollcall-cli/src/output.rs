@@ -365,8 +365,27 @@ fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
         rows.push(repo_cells(repo, now));
         rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now)));
     }
-    // The risk line is not a row: it stays out of the column widths.
-    risk_line(&doc.repos, now) + &align(&rows)
+    // The risk line and the hints are not rows: they stay out of the column widths.
+    risk_line(&doc.repos, now) + &align(&rows) + &prune_hints(&doc.repos)
+}
+
+/// §8.2: after every row, `hint: <N> missing worktree(s) — run 'git worktree prune' in <path>`
+/// per repo with a missing worktree, in the order given. rollcall only suggests the command.
+fn prune_hints(repos: &[Repo]) -> String {
+    let mut text = String::new();
+    for repo in repos {
+        let missing = (repo.worktrees.iter())
+            .filter(|w| w.stale_reason == Some(StaleReason::Missing))
+            .count();
+        if missing > 0 {
+            let s = if missing == 1 { "" } else { "s" };
+            let path = sanitise(&repo.path);
+            text += &format!(
+                "hint: {missing} missing worktree{s} — run 'git worktree prune' in {path}\n"
+            );
+        }
+    }
+    text
 }
 
 /// Most repos the risk line names before it counts the rest.
@@ -852,12 +871,15 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
-    /// `status` without its risk line (I5c): the repo and worktree rows alone.
+    /// `status` without its risk line (I5c) and prune hints (I5e): the repo and worktree rows alone.
     fn rows_only(text: String) -> String {
-        match text.strip_prefix("at risk:") {
-            Some(rest) => rest.split_once('\n').unwrap().1.to_owned(),
-            None => text,
-        }
+        let rows = match text.strip_prefix("at risk:") {
+            Some(rest) => rest.split_once('\n').unwrap().1,
+            None => &text,
+        };
+        rows.split_inclusive('\n')
+            .filter(|l| !l.starts_with("hint:"))
+            .collect()
     }
 
     fn run_doctor(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
@@ -2228,6 +2250,33 @@ mod tests {
         assert_eq!(first(2).as_deref(), Some("at risk: r1 ↑2"));
         let only_r3 = first(1).unwrap();
         assert!(!only_r3.starts_with("at risk:"), "{only_r3}");
+    }
+
+    /// I5e-6: the hint describes only the repos in the doc it renders, so a filter that trims
+    /// `doc.repos` (I5d's `--dirty`) trims the hint too. A path is sanitised.
+    #[test]
+    fn the_prune_hint_describes_only_the_repos_shown() {
+        let (w, doc) = blank_doc();
+        let mut clean = doc.repos[0].clone();
+        clean.path = "/clean".to_owned();
+        let mut gone = doc.repos[0].clone();
+        gone.path = "/gone\u{1b}[2Jx".to_owned();
+        gone.worktrees[0].stale_reason = Some(StaleReason::Missing);
+        let show = |repos: &[Repo]| {
+            let doc = StatusDoc {
+                repos: repos.to_vec(),
+                ..doc.clone()
+            };
+            plain_status(&doc, w.ctx.now)
+        };
+        let both = show(&[clean.clone(), gone.clone()]);
+        let hint = both.lines().last().unwrap();
+        assert!(
+            hint.starts_with("hint: 1 missing worktree — run 'git worktree prune' in /gone"),
+            "{both:?}"
+        );
+        assert!(!both.contains('\u{1b}'), "{both:?}");
+        assert!(!show(&[clean]).contains("hint:"));
     }
 
     /// I3-6 (and I3-7 for the TUI's first paint, which answers from the cache): the snapshot of

@@ -3,16 +3,16 @@ use crate::discovery::{Private, json_of, own_f};
 use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
 
-/// Plain `status` without its leading risk line (I5c): the repo and worktree rows alone.
+/// Plain `status` without its leading risk line (I5c) and trailing prune hints (I5e): the repo
+/// and worktree rows alone.
 fn rows_only(plain: &str) -> String {
-    match plain.strip_prefix("at risk:") {
-        Some(rest) => rest
-            .split_once('\n')
-            .expect("a risk line ends")
-            .1
-            .to_owned(),
-        None => plain.to_owned(),
-    }
+    let rows = match plain.strip_prefix("at risk:") {
+        Some(rest) => rest.split_once('\n').expect("a risk line ends").1,
+        None => plain,
+    };
+    rows.split_inclusive('\n')
+        .filter(|l| !l.starts_with("hint:"))
+        .collect()
 }
 
 #[test]
