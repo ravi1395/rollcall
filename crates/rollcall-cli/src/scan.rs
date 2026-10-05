@@ -242,6 +242,27 @@ pub fn visible_rows(ctx: &Ctx, root: &Path, rows: Vec<RepoRow>) -> Vec<RepoRow> 
     rows
 }
 
+/// §4.2: the stored diagnostics with their repo counts redone from the visible rows, so an
+/// `ignore` added after the scan leaves `doctor` counts too; walk and source data stay as stored.
+pub fn visible_diagnostics(
+    ctx: &Ctx,
+    root: &Path,
+    stored: DoctorDoc,
+    rows: Vec<RepoRow>,
+) -> DoctorDoc {
+    let Some(scanned_at) = stored.scanned_at else {
+        return stored;
+    };
+    let rows = visible_rows(ctx, root, rows);
+    DoctorDoc {
+        notes: stored.notes,
+        repo_timeouts: stored.repo_timeouts,
+        repo_timeouts_abandoned: stored.repo_timeouts_abandoned,
+        sources: stored.sources,
+        ..doctor_counts(root, scanned_at, &rows, stored.walk)
+    }
+}
+
 // ---- locking ----
 
 /// `None`: another scanner holds the lock (or it cannot be taken: the cache answers either way).
@@ -504,6 +525,11 @@ fn doctor_counts(
 /// Lexically normalised, with the deepest existing ancestor replaced by its realpath (§4.3:
 /// "canonicalised with realpath where they exist; otherwise lexically normalised").
 pub(crate) fn canonical_lenient(path: &Path) -> PathBuf {
+    // An existing path is realpath'd as written: popping `..` first would
+    // climb out of a symlink's parent instead of its target's (§4.3).
+    if let Ok(real) = fs::canonicalize(path) {
+        return real;
+    }
     let mut lexical = PathBuf::new();
     for component in path.components() {
         match component {

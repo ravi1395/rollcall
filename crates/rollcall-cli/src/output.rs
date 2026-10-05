@@ -510,17 +510,17 @@ fn worktree_cells(w: &Worktree, now: Timestamp) -> [String; 3] {
 }
 
 pub fn doctor(
-    _ctx: &Ctx,
+    ctx: &Ctx,
     outcome: &ScanOutcome,
     root: &Path,
     json: bool,
     out: &mut dyn Write,
 ) -> ExitCode {
     let root = scan::canonical_root(root);
-    let doc = outcome
-        .index
-        .last_diagnostics(&root)
-        .unwrap_or_else(|| empty_doctor(&root));
+    let doc = outcome.index.last_diagnostics(&root).map_or_else(
+        || empty_doctor(&root),
+        |stored| scan::visible_diagnostics(ctx, &root, stored, outcome.index.repos_for_root(&root)),
+    );
     let text = if json {
         json_line(&doc)
     } else {
