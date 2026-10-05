@@ -511,3 +511,16 @@ fn breaker_i3_doctor_no_scan_counts_after_the_ignore_is_added() {
     let (_, doc) = sb.json(&["doctor", "--json", "--no-scan", root]);
     assert_eq!(doc["repos_by_kind"]["normal"], json!(2), "{doc}");
 }
+
+/// §4.2: each ignored directory the walk reaches counts once in `walk.skipped_dirs`
+/// (author decision 2026-10-05).
+#[test]
+fn breaker_i3_an_ignored_dir_counts_once_in_skipped_dirs() {
+    let sb = Sb::new().fixture();
+    let root = sb.root.to_str().unwrap();
+    let (_, doc) = sb.json(&["doctor", "--json", root]);
+    let before = doc["walk"]["skipped_dirs"].as_u64().unwrap();
+    sb.ignore(&[sb.r("grp")]);
+    let (_, doc) = sb.json(&["doctor", "--json", root]);
+    assert_eq!(doc["walk"]["skipped_dirs"], json!(before + 1), "{doc}");
+}
