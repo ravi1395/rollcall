@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ratatui::text::Span;
-use rollcall_core::text::{render_text, sanitise, shell_quote};
+use rollcall_core::text::{decode_entities, render_text, sanitise, shell_quote};
 use rollcall_core::{
     Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
     StaleReason, StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
@@ -68,7 +68,22 @@ pub(crate) fn render_with(
     policy: TextPolicy,
     redact_emails: bool,
 ) -> rollcall_core::SessionOut {
-    let scrub = |t: String| render_text(&t, redact_emails);
+    render_impl(session, source, policy, redact_emails, false)
+}
+
+/// `decode`: plain `status` decodes HTML entities first, so the pipeline is decode → sanitise →
+/// scrub → truncate (§8.2); every other consumer keeps the text as logged.
+fn render_impl(
+    session: &Session,
+    source: &dyn SessionSource,
+    policy: TextPolicy,
+    redact_emails: bool,
+    decode: bool,
+) -> rollcall_core::SessionOut {
+    let scrub = |t: String| {
+        let t = if decode { decode_entities(&t) } else { t };
+        render_text(&t, redact_emails)
+    };
     let show = |r: &TextRef| source.resolve(r).map(scrub);
     let title = session
         .title
@@ -124,6 +139,7 @@ struct Builder<'a> {
     policy: TextPolicy,
     submodules: bool,
     sources: [Box<dyn SessionSource>; 2],
+    decode: bool,
 }
 
 impl Builder<'_> {
@@ -190,11 +206,12 @@ impl Builder<'_> {
             .iter()
             .find(|s| s.kind() == session.source)
             .expect("one source per SourceKind");
-        render_with(
+        render_impl(
             session,
             source.as_ref(),
             self.policy,
             self.ctx.config.redact_emails,
+            self.decode,
         )
     }
 }
@@ -259,6 +276,17 @@ pub fn build_status(
     stale: bool,
     policy: TextPolicy,
 ) -> StatusDoc {
+    build_status_with(ctx, index, root, stale, policy, false)
+}
+
+fn build_status_with(
+    ctx: &Ctx,
+    index: &dyn Index,
+    root: &Path,
+    stale: bool,
+    policy: TextPolicy,
+    decode: bool,
+) -> StatusDoc {
     // The cache is keyed by the realpath of the root (scan.rs).
     let root = scan::canonical_root(root);
     let scanned_submodules = index.scanned_submodules(&root);
@@ -269,6 +297,7 @@ pub fn build_status(
         policy,
         submodules: scanned_submodules == Some(true),
         sources: log_sources(ctx),
+        decode,
     };
     let mut repos: Vec<Repo> = scan::visible_rows(ctx, &root, index.repos_for_root(&root))
         .iter()
@@ -319,7 +348,7 @@ pub fn status(
         prompts: true,
         redact: ctx.config.redact_prompts,
     };
-    let doc = build_status(ctx, &outcome.index, root, outcome.stale, policy);
+    let doc = build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
     let text = if json {
         json_line(&doc)
     } else {
@@ -1972,6 +2001,94 @@ mod tests {
         let s = &wt["last_session"];
         assert_eq!(s["title"], "hello there now", "{s}");
         assert_eq!(s["last_prompt"], "hello there now", "{s}");
+    }
+
+    // ---- HTML entities in plain-status session text (§8.2, I5a) ----
+
+    /// A one-repo world whose only Claude session has `title` (a `custom-title` record) and `prompt`.
+    fn entity_world(title: Option<&str>, prompt: &str) -> (World, scan::ScanOutcome) {
+        let w = world();
+        init_repo(&w.root.join("ent"));
+        write_claude_session(&w, &w.root.join("ent"), prompt);
+        if let Some(title) = title {
+            let record = serde_json::json!(
+                {"type": "custom-title", "sessionId": ID, "customTitle": title}
+            );
+            let log = w.home.join(format!("claude/projects/p/{ID}.jsonl"));
+            let mut text = std::fs::read_to_string(&log).unwrap();
+            text.push_str(&format!("{record}\n"));
+            std::fs::write(&log, text).unwrap();
+        }
+        let outcome = scan_root(&w, ScanMode::Fresh);
+        (w, outcome)
+    }
+
+    /// The worktree line of the single repo.
+    fn worktree_line(text: &str) -> &str {
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        lines[1]
+    }
+
+    const ENTITY_TITLE: &str = "&lt;command-name&gt;/clear&lt;/command-name&gt;";
+
+    #[test]
+    fn plain_status_decodes_entities_and_json_keeps_them() {
+        let (w, outcome) = entity_world(Some(ENTITY_TITLE), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(
+            worktree_line(&text).ends_with("\"<command-name>/clear</command-name>\""),
+            "{text}"
+        );
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            ENTITY_TITLE
+        );
+    }
+
+    #[test]
+    fn a_decoded_secret_is_scrubbed_in_plain_status() {
+        let (w, outcome) = entity_world(Some("deploy token&#61;abc123def"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(text.contains("[redacted]"), "{text}");
+        assert!(!text.contains("abc123def"), "{text}");
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            "deploy token&#61;abc123def"
+        );
+    }
+
+    #[test]
+    fn a_decoded_escape_sequence_is_removed_from_plain_status() {
+        let (w, outcome) = entity_world(Some("x&#27;[2Jy"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(worktree_line(&text).ends_with("\"xy\""), "{text:?}");
+    }
+
+    #[test]
+    fn plain_status_truncates_after_decoding() {
+        let (w, outcome) = entity_world(Some(&"&amp;".repeat(300)), "p");
+        let text = run_status(&w, &outcome, false);
+        let want = format!("\"{}…\"", "&".repeat(199));
+        assert!(worktree_line(&text).ends_with(&want), "{text}");
+    }
+
+    #[test]
+    fn plain_status_decodes_the_prompt_of_an_untitled_session() {
+        let (w, outcome) = entity_world(None, "a &amp; b");
+        let text = run_status(&w, &outcome, false);
+        assert!(worktree_line(&text).ends_with("\"a & b\""), "{text}");
+    }
+
+    #[test]
+    fn the_doc_behind_the_tui_and_mcp_keeps_entities_undecoded() {
+        let (w, outcome) = entity_world(Some(ENTITY_TITLE), "p");
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        let session = doc.repos[0].worktrees[0].last_session.as_ref().unwrap();
+        assert_eq!(session.title.as_deref(), Some(ENTITY_TITLE));
     }
 
     // ---- blank names fall back to the path; every Unicode space is trimmed before a stop (§8.2) ----

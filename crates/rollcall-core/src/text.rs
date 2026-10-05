@@ -116,6 +116,49 @@ pub fn scrub(text: &str, redact_emails: bool) -> String {
     })
 }
 
+/// Longest `&…;` reference tried: `&#x10FFFF;` is 10 bytes.
+const MAX_ENTITY: usize = 12;
+
+/// §8.2: decodes `&lt; &gt; &amp; &quot;` and numeric `&#N;` / `&#xH;` references in one pass.
+/// A numeric reference that is not a Unicode scalar value, and any other `&…;`, stays as written.
+pub fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let (c, len) = entity(rest).unwrap_or(('&', 1));
+        out.push(c);
+        rest = &rest[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The character and byte length of the reference at the start of `s` (which starts with `&`).
+fn entity(s: &str) -> Option<(char, usize)> {
+    let end = s.bytes().take(MAX_ENTITY).position(|b| b == b';')?;
+    let c = match &s[1..end] {
+        "lt" => '<',
+        "gt" => '>',
+        "amp" => '&',
+        "quot" => '"',
+        body => {
+            let digits = body.strip_prefix('#')?;
+            let (radix, digits) = match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => (16, hex),
+                None => (10, digits),
+            };
+            // `from_str_radix` alone would accept a leading `+`.
+            if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+                return None;
+            }
+            char::from_u32(u32::from_str_radix(digits, radix).ok()?)?
+        }
+    };
+    Some((c, end + 1))
+}
+
 /// Number of extended grapheme clusters.
 pub fn grapheme_len(text: &str) -> usize {
     text.graphemes(true).count()
@@ -597,6 +640,60 @@ mod tests {
     fn combining_marks_stay_with_their_base_at_the_boundary() {
         let text = format!("{}e\u{301}zz", "a".repeat(198));
         assert_eq!(truncate200(&text), format!("{}e\u{301}…", "a".repeat(198)));
+    }
+
+    // ---- decode_entities ----
+
+    #[test]
+    fn decode_entities_decodes_the_named_five() {
+        assert_eq!(decode_entities("&lt;command-name&gt;"), "<command-name>");
+        assert_eq!(decode_entities("&gt;"), ">");
+        assert_eq!(decode_entities("&amp;"), "&");
+        assert_eq!(decode_entities("&quot;"), "\"");
+        assert_eq!(decode_entities("&#39;"), "'");
+    }
+
+    #[test]
+    fn decode_entities_decodes_numeric_references() {
+        assert_eq!(decode_entities("&#65;"), "A");
+        assert_eq!(decode_entities("&#x41;"), "A");
+        assert_eq!(decode_entities("&#X41;"), "A");
+        assert_eq!(decode_entities("&#x1F600;"), "\u{1F600}");
+    }
+
+    #[test]
+    fn decode_entities_is_one_pass() {
+        assert_eq!(decode_entities("&amp;lt;"), "&lt;");
+        assert_eq!(decode_entities("&amp;amp;"), "&amp;");
+    }
+
+    #[test]
+    fn decode_entities_leaves_everything_else_as_written() {
+        for raw in [
+            "&nbsp;",
+            "&#xD800;",
+            "&#x110000;",
+            "&#;",
+            "&#xZZ;",
+            "&#x;",
+            "&#+65;",
+            "&#99999999999999999999;",
+            "&lt",
+            "&",
+            "a & b",
+            "&&lt;",
+        ] {
+            let want = if raw == "&&lt;" { "&<" } else { raw };
+            assert_eq!(decode_entities(raw), want, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn decode_entities_keeps_surrounding_text_and_multibyte_chars() {
+        assert_eq!(
+            decode_entities("é &lt; ü &#233; &nbsp;é"),
+            "é < ü é &nbsp;é"
+        );
     }
 
     // ---- render_text ----
