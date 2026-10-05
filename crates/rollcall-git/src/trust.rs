@@ -531,6 +531,49 @@ mod tests {
         assert!(repo.find_object(head).is_ok(), "still found");
     }
 
+    /// Every item of `references().all()` and `prefixed("refs/remotes/")` as a ref name, or the
+    /// error text.
+    fn listed_refs(repo: &gix::Repository) -> Vec<Result<String, String>> {
+        let platform = repo.references().expect("references");
+        let all = platform.all().expect("all");
+        let remotes = platform.prefixed("refs/remotes/").expect("prefixed");
+        all.chain(remotes)
+            .map(|r| match r {
+                Ok(r) => Ok(r.name().as_bstr().to_string()),
+                Err(e) => Err(e.to_string()),
+            })
+            .collect()
+    }
+
+    /// The premise of the §4.4 dot-file exemption (revision 16): gix skips a dot-named loose ref
+    /// without reading it. A gix that stops doing so makes this fail, and the exemption must go.
+    #[test]
+    fn gix_skips_a_dot_named_loose_ref_and_refuses_a_non_dot_one() {
+        let (_t, base) = tempdir_real();
+        let repo_dir = base.join("r");
+        init_repo(&repo_dir);
+        let git_dir = repo_dir.join(".git");
+        let junk = vec![0xA7u8; 6144];
+        fs::create_dir_all(git_dir.join("refs/remotes/origin")).unwrap();
+        fs::write(git_dir.join("refs/heads/.DS_Store"), &junk).unwrap();
+        fs::write(git_dir.join("refs/remotes/origin/.DS_Store"), &junk).unwrap();
+        let repo = open(&git_dir, &benign(&base));
+
+        let listed = listed_refs(&repo);
+        assert!(!listed.is_empty(), "the listing must see the real branch");
+        for item in &listed {
+            let name = item
+                .as_ref()
+                .unwrap_or_else(|e| panic!("iteration error: {e}"));
+            assert!(!name.contains(".DS_Store"), "{name}");
+        }
+
+        // Control: a non-dot name of the same size is read, and the iteration fails on it.
+        fs::write(git_dir.join("refs/heads/junk"), &junk).unwrap();
+        let listed = listed_refs(&open(&git_dir, &benign(&base)));
+        assert!(listed.iter().any(Result::is_err), "{listed:?}");
+    }
+
     #[test]
     fn open_options_are_fully_isolated() {
         // Audit note N1: only `Options::isolated()` denies environment access.

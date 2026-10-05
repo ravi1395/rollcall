@@ -436,6 +436,18 @@ fn scan_h_refuses_a_flooded_object_pack_directory() {
 }
 
 #[test]
+fn scan_h_dot_named_refs_are_exempt_from_the_size_cap_and_nothing_else_is() {
+    let Some(s) = scan_h() else { return };
+    // (i) a 6 KiB `refs/heads/.DS_Store`; (ii) the same under refs/remotes/origin and in a linked worktree's admin refs.
+    assert_no_error(s, "h-dot-ref-heads");
+    assert_no_error(s, "h-dot-ref-remote-and-admin");
+    // (iii) the control without the dot, (iv) a dot-named symlink, (v) a file inside a dot-named directory.
+    assert_carries(s, "h-dot-ref-junk", UNTRUSTED_GIT_DIR);
+    assert_carries(s, "h-dot-ref-symlink", UNTRUSTED_GIT_DIR);
+    assert_carries(s, "h-dot-ref-dot-dir", UNTRUSTED_GIT_DIR);
+}
+
+#[test]
 fn marker_walk_finds_nested_markers_and_ignores_symlink_targets() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let deep = tmp.path().join("a/b");

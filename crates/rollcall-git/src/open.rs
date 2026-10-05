@@ -124,7 +124,8 @@ fn count_ref_entry(seen: &mut usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Every entry under `refs`: directories must be real directories, files regular and ≤ 4 KiB.
+/// Every entry under `refs`: directories must be real directories, files regular and ≤ 4 KiB
+/// (a regular file whose name starts with `.` is exempt from the size cap).
 fn check_refs_tree(refs: &Path, seen: &mut usize) -> Result<(), String> {
     match fs::symlink_metadata(refs) {
         Ok(md) if md.is_dir() => {}
@@ -145,6 +146,9 @@ fn check_refs_tree(refs: &Path, seen: &mut usize) -> Result<(), String> {
                 .map_err(|e| untrusted(&path, &e.to_string()))?;
             if md.is_dir() {
                 stack.push(path);
+            } else if md.is_file() && entry.file_name().as_bytes().starts_with(b".") {
+                // Revision 16: gix's loose-ref iteration skips a dot-named file without reading
+                // it (Finder `.DS_Store`), so only the entry count above applies to it.
             } else if let Some(why) = metadata_problem(&md, REF_CAP) {
                 return Err(untrusted(&path, &why));
             }
@@ -1036,6 +1040,66 @@ mod tests {
         let (_g, dir) = bare();
         write_refs(&dir, MAX_REF_ENTRIES + 1);
         expect_untrusted(check(&dir));
+    }
+
+    /// `check_refs_tree` over `<dir>/refs`, the way `check_git_dir` calls it.
+    fn refs_verdict(dir: &Path) -> Result<(), String> {
+        check_refs_tree(&dir.join("refs"), &mut 0)
+    }
+
+    #[test]
+    fn dot_named_regular_file_over_the_cap_is_exempt() {
+        let (_g, dir) = bare();
+        make_sparse(&dir.join("refs/heads/.DS_Store"), 6144);
+        assert_eq!(refs_verdict(&dir), Ok(()));
+    }
+
+    #[test]
+    fn non_dot_file_over_the_cap_is_still_refused() {
+        let (_g, dir) = bare();
+        make_sparse(&dir.join("refs/heads/junk"), 6144);
+        let err = refs_verdict(&dir).expect_err("refused");
+        assert!(err.contains(NOT_TRUSTED), "{err}");
+        assert!(err.contains("larger than 4096 bytes"), "{err}");
+    }
+
+    #[test]
+    fn dot_named_symlink_is_still_refused() {
+        let (_g, dir) = bare();
+        let link = dir.join("refs/heads/.x");
+        let target = dir.join("refs/heads/target-file");
+        fs::write(&target, [b'x'; 100]).unwrap();
+        symlink(&target, &link).unwrap();
+        let err = refs_verdict(&dir).expect_err("refused");
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    #[test]
+    fn file_inside_a_dot_named_directory_is_not_exempt() {
+        let (_g, dir) = bare();
+        make_sparse(&dir.join("refs/heads/.d/junk"), 6144);
+        let err = refs_verdict(&dir).expect_err("refused");
+        assert!(err.contains("larger than 4096 bytes"), "{err}");
+    }
+
+    #[test]
+    fn dot_named_files_still_count_toward_the_entry_stop() {
+        let (_g, dir) = bare();
+        let heads = dir.join("refs/heads");
+        for i in 0..=MAX_REF_ENTRIES {
+            fs::write(heads.join(format!(".f{i}")), "").unwrap();
+        }
+        let err = refs_verdict(&dir).expect_err("refused");
+        assert!(err.contains("more than 10000 ref entries"), "{err}");
+    }
+
+    #[test]
+    fn dot_named_file_in_a_linked_worktrees_refs_is_exempt() {
+        let (_g, main, _worktree, admin) = linked();
+        make_sparse(&admin.join("refs/.DS_Store"), 6144);
+        assert!(pre_open_checks(&main.join(".git"), Some(&main), None).is_ok());
+        make_sparse(&admin.join("refs/junk"), 6144);
+        expect_untrusted(pre_open_checks(&main.join(".git"), Some(&main), None));
     }
 
     /// `n` chained alternate dirs; returns the repo git dir whose alternates lists the first.

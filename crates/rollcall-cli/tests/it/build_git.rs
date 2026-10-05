@@ -865,6 +865,7 @@ fn apply_target(cx: &Ctx, r: &Repo, path: &Path, gitdir: &Path) {
         }
         Special::GitoxideKeys => gitoxide_keys(cx, path, gitdir, target),
         Special::PackBomb => pack_bomb(gitdir, target),
+        Special::DotRef => dot_ref(gitdir, target),
         Special::ObjectsPackFlood => {
             let count: usize = target
                 .strip_prefix("empty_files:")
@@ -875,6 +876,29 @@ fn apply_target(cx: &Ctx, r: &Repo, path: &Path, gitdir: &Path) {
             }
         }
         _ => {}
+    }
+}
+
+/// `target` is a comma-separated list of `[admin:]<path>=<file|symlink>:<bytes>` (see the manifest header).
+fn dot_ref(gitdir: &Path, target: &str) {
+    for entry in target.split(',') {
+        let (file, kind) = entry.split_once('=').expect("<path>=<kind>:<bytes>");
+        let file = match file.strip_prefix("admin:") {
+            Some(rel) => only_admin_dir(gitdir).join(rel),
+            None => gitdir.join(file),
+        };
+        let (kind, bytes) = kind.split_once(':').expect("<kind>:<bytes>");
+        let bytes: usize = bytes.parse().expect("byte count");
+        let content: Vec<u8> = (0..bytes).map(|i| (i * 131 % 251) as u8).collect();
+        match kind {
+            "file" => write_file(&file, content),
+            "symlink" => {
+                let real = gitdir.join("dot-ref-target");
+                write_file(&real, content);
+                replace_with_symlink(&file, &real);
+            }
+            other => panic!("dot_ref kind {other}"),
+        }
     }
 }
 
