@@ -357,15 +357,41 @@ pub fn status(
     finish(out, &text, outcome.exit)
 }
 
-/// §8.2: a line per repo, then an indented line per worktree, columns aligned like `ls`. Every
-/// text that came from a repo or a log is sanitised; JSON keeps it exact.
+/// §8.2: the risk line (if any), a line per repo, then an indented line per worktree, columns
+/// aligned like `ls`. Every text that came from a repo or a log is sanitised; JSON keeps it exact.
 fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
     let mut rows = Vec::new();
     for repo in &doc.repos {
         rows.push(repo_cells(repo, now));
         rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now)));
     }
-    align(&rows)
+    // The risk line is not a row: it stays out of the column widths.
+    risk_line(&doc.repos, now) + &align(&rows)
+}
+
+/// Most repos the risk line names before it counts the rest.
+const RISK_MAX: usize = 5;
+
+/// §8.2: `at risk: <name> <badges>; …` for the repos with attention 2 or 3 (an error repo has 4)
+/// in the order given, which is §3.3 order, then `; +N more`. Empty when no repo qualifies.
+fn risk_line(repos: &[Repo], now: Timestamp) -> String {
+    let mut risky = repos.iter().filter(|r| matches!(r.attention, 2 | 3));
+    let mut entries: Vec<String> = risky
+        .by_ref()
+        .take(RISK_MAX)
+        .map(|r| {
+            let [name, badges, _] = repo_cells(r, now);
+            format!("{name} {badges}")
+        })
+        .collect();
+    if entries.is_empty() {
+        return String::new();
+    }
+    match risky.count() {
+        0 => {}
+        more => entries.push(format!("+{more} more")),
+    }
+    format!("at risk: {}\n", entries.join("; "))
 }
 
 /// Widest a column may grow from one cell; wider cells overflow on their own row.
@@ -826,6 +852,14 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
+    /// `status` without its risk line (I5c): the repo and worktree rows alone.
+    fn rows_only(text: String) -> String {
+        match text.strip_prefix("at risk:") {
+            Some(rest) => rest.split_once('\n').unwrap().1.to_owned(),
+            None => text,
+        }
+    }
+
     fn run_doctor(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
         let mut out = Vec::new();
         doctor(&w.ctx, outcome, &w.root, json, &mut out);
@@ -974,7 +1008,7 @@ mod tests {
         write_claude_session(&w, &w.root.join("a"), "hello there");
         let outcome = scan_root(&w, ScanMode::Fresh);
 
-        let text = run_status(&w, &outcome, false);
+        let text = rows_only(run_status(&w, &outcome, false));
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 4, "{text}");
         assert!(
@@ -1196,7 +1230,7 @@ mod tests {
         write_claude_session(&w, &w.root.join("longer-name"), "hello there");
         let outcome = scan_root(&w, ScanMode::Fresh);
 
-        let text = run_status(&w, &outcome, false);
+        let text = rows_only(run_status(&w, &outcome, false));
         no_trailing_space(&text);
         let lines: Vec<Vec<char>> = text.lines().map(|l| l.chars().collect()).collect();
         assert_eq!(lines.len(), 4, "{text}");
@@ -1810,7 +1844,7 @@ mod tests {
         let n = rows.len();
         let outcome = commit(&w, rows, empty_doctor(&w));
 
-        let text = run_status(&w, &outcome, false);
+        let text = rows_only(run_status(&w, &outcome, false));
         let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
         assert_eq!(doc.repos.len(), n, "{text}");
         let mut cells = Vec::new();
@@ -2155,6 +2189,45 @@ mod tests {
             text.lines().nth(1).unwrap().starts_with("   feat  "),
             "{text:?}"
         );
+    }
+
+    /// I5c-6: the risk line describes only the repos in the doc it renders, so a filter that
+    /// trims `doc.repos` (I5d's `--top N`) trims the line too. §3.3 order: r3 (4), r1 (3), r2 (2), r4 (0).
+    #[test]
+    fn the_risk_line_describes_only_the_repos_shown() {
+        let (w, doc) = blank_doc();
+        let repo = |name: &str, attention: u8, dirty: u32, unpushed: u32, error: bool| {
+            let mut r = doc.repos[0].clone();
+            r.name = name.to_owned();
+            r.attention = attention;
+            r.worktrees[0].dirty_count = dirty;
+            r.worktrees[0].untracked_count = 0;
+            r.worktrees[0].upstream = (unpushed > 0).then(|| "origin/main".to_owned());
+            r.worktrees[0].unpushed = (unpushed > 0).then_some(unpushed);
+            r.worktrees[0].error = error.then(|| "git error: unsafe tracked file".to_owned());
+            r
+        };
+        let repos = [
+            repo("r3", 4, 1, 0, true),
+            repo("r1", 3, 0, 2, false),
+            repo("r2", 2, 1, 0, false),
+            repo("r4", 0, 0, 0, false),
+        ];
+        let first = |n: usize| {
+            let doc = StatusDoc {
+                repos: repos[..n].to_vec(),
+                ..doc.clone()
+            };
+            plain_status(&doc, w.ctx.now)
+                .lines()
+                .next()
+                .map(str::to_owned)
+        };
+        assert_eq!(first(4).as_deref(), Some("at risk: r1 ↑2; r2 ●1"));
+        assert_eq!(first(3).as_deref(), Some("at risk: r1 ↑2; r2 ●1"));
+        assert_eq!(first(2).as_deref(), Some("at risk: r1 ↑2"));
+        let only_r3 = first(1).unwrap();
+        assert!(!only_r3.starts_with("at risk:"), "{only_r3}");
     }
 
     /// I3-6 (and I3-7 for the TUI's first paint, which answers from the cache): the snapshot of

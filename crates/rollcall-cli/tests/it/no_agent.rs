@@ -3,6 +3,18 @@ use crate::discovery::{Private, json_of, own_f};
 use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
 
+/// Plain `status` without its leading risk line (I5c): the repo and worktree rows alone.
+fn rows_only(plain: &str) -> String {
+    match plain.strip_prefix("at risk:") {
+        Some(rest) => rest
+            .split_once('\n')
+            .expect("a risk line ends")
+            .1
+            .to_owned(),
+        None => plain.to_owned(),
+    }
+}
+
 #[test]
 fn no_agent_dirs_leave_every_session_null() {
     let p = Private::new(Which::FClean);
@@ -69,7 +81,7 @@ fn breaker_plain_status_binary_lines_and_columns() {
     use rollcall_core::text::sanitise;
     let p = own_f();
     let root = p.w.root.to_str().expect("utf-8 root");
-    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
     let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
     let lines: Vec<&str> = plain.split_terminator('\n').collect();
     let repos = doc["repos"].as_array().expect("repos");
@@ -254,7 +266,7 @@ fn breaker2_binary_empty_name_fallback_and_separators() {
             assert!(out.status.success(), "git {args:?} failed in {dir:?}");
         }
     }
-    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
     let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
     assert!(
         !plain.contains(['\u{2028}', '\u{2029}', '\u{200b}']),
@@ -362,7 +374,7 @@ fn breaker3_binary_blank_names_and_branches_fall_back_and_trailing_spaces_are_no
         breaker3_init_repo(&p.w.root, &p, name, "main");
     }
 
-    let plain = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
     let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
     let repos = doc["repos"].as_array().expect("repos");
     let lines: Vec<&str> = plain.split_terminator('\n').collect();
