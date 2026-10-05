@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-05 impl/v0 (~/Projects/rollcall), end of session 10
 
-**Status: ACTIVE.** Supersedes the session 8 handoff (byte copies: `.handoffs/20261005-002036-consumed-HANDOFF.md` at ingest, `.handoffs/20261005-230357-superseded-HANDOFF.md` at end). Spec rev 16: `docs/superpowers/specs/2026-09-29-rollcall-design.md`; fixed criteria: `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`; workflow: `.claude/workflows/rollcall-v1.js` (its prompts read the three author/autonomy sections at the bottom of this file, so keep those headings).
+**Status: CONSUMED by session 11 (2026-10-05, archived `.handoffs/20261005-230515-consumed-HANDOFF.md`); session 11 is executing the directive below.** Supersedes the session 8 handoff (byte copies: `.handoffs/20261005-002036-consumed-HANDOFF.md` at ingest, `.handoffs/20261005-230357-superseded-HANDOFF.md` at end). Spec rev 16: `docs/superpowers/specs/2026-09-29-rollcall-design.md`; fixed criteria: `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`; workflow: `.claude/workflows/rollcall-v1.js` (its prompts read the three author/autonomy sections at the bottom of this file, so keep those headings).
 
 **Session 11 directive: run all the remaining work end to end in one go, not one step.** Sequence:
 1. Finish I3's verification (below, "In progress"): breaker, guard, fixes, gate, commit, skeptic.
