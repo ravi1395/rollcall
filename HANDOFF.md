@@ -1,50 +1,40 @@
-# HANDOFF — 2026-10-06 impl/v0 (~/Projects/rollcall), end of session 11
+# HANDOFF — 2026-10-06 impl/v0 (~/Projects/rollcall), end of session 12
 
-**Status: ACTIVE.** Supersedes the session 10 handoff (byte copies: `.handoffs/20261005-230515-consumed-HANDOFF.md` at ingest, `.handoffs/20261006-101619-superseded-HANDOFF.md` at end). Spec rev 16: `docs/superpowers/specs/2026-09-29-rollcall-design.md`; fixed criteria: `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`; workflow: `.claude/workflows/rollcall-v1.js` (its prompts read the three author/autonomy sections at the bottom of this file, so keep those headings).
+**Status: ACTIVE.** Supersedes the session 11 handoff (byte copy at ingest: `.handoffs/20261006-223120-consumed-HANDOFF.md`). Spec rev 16: `docs/superpowers/specs/2026-09-29-rollcall-design.md`; fixed criteria: `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md` (items I2, I1, I3, I5a, I5c, I5e, I5d, I5b, I4, S11 Follow-ups); workflow: `.claude/workflows/rollcall-v1.js` (its prompts read the author/autonomy sections at the bottom of this file, so keep those headings).
 
-**Session 12 directive: run all the remaining work end to end in one go, not one step.** Sequence:
-1. **S11 follow-ups** (author decisions 2026-10-06, section at the bottom; all four approved, including their R1 exceptions). First write their fixed criteria into ACCEPTANCE.md as a new section `## S11 Follow-ups` (IDs `S11-n`, observable, each able to fail), and record the three R1 exceptions in the plan's pinned list (`docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md`: the `config.rs: … Ctx {…}`, `output.rs: status(…)` and `WorktreeState {…}` entries, annotated like the `WalkOptions { … ignore … }` one) and in spec §3.1/§8.2. Then implement A–D, run the breaker (`Agent({subagent_type: "breaker", model: "opus"})`), guard, fix, gate, commit, and run the skeptic (`skeptical-reviewer`, `model: "fable"`) until accepted. Use direct Agent calls, not the workflow (see Gotchas).
-2. **One main-loop skeptic over `eeb6aeb..HEAD`** against all nine ACCEPTANCE.md items plus S11. It must check **I5c-6 and I5e-6 on the real binary**. Both were left `unverified` because they need `--top` / `--dirty`, which I5d added after them. Each item's reviewer passed everything else.
-3. Full R2 gate, then push `impl/v0` (already authorized; 27+ unpushed commits).
-4. If CI goes green, open the PR `impl/v0` → `main` (never merge it, never enable auto-merge). If billing still blocks CI, report that and don't wait.
-
-Stop only on: R1 hits beyond the three approved below, AMBIGUOUS breaker findings, a fix loop that makes no progress, or any need to edit `.claude/workflows/rollcall-v1.js`.
+**Next session: one step is left, and it waits on the author.** CI on `impl/v0` cannot run until GitHub billing is fixed. Once the author says billing is fixed, re-run CI on `1147a53` or later (`gh run rerun <id>` or push), and if it goes green open the PR `impl/v0` → `main` (already authorized; never merge it, never enable auto-merge). Don't open the PR while CI is billing-blocked (author decision of session 10).
 
 ## Done (verified)
-- **I3 config `ignore` paths: accepted.** Committed `272f87b`, `f676104` (breaker tests plus fixes: realpath-as-written in `scan::canonical_lenient`; `doctor` recounts from visible rows via `scan::visible_diagnostics`), `bac6556`, `aa10506`, `3da937a`. Fable skeptic: I3-1..12, R1 and the gate all met; gate 852 passed / 0 failed / 4 ignored at `aa10506`. Mutation reds were quoted for the doctor recount (`left: 6 right: 2`), skipped_dirs (`left: 0 right: 1`) and the scan-time drop (`left: (Some(4), "a")`).
-- **I5a HTML entities: accepted** (workflow run `wf_27be9aad-870`): `fd6509a`, `863293f`. Follow-up `84db9ee` (merged in `bb76630`): decoded prompt text goes through §5.0 again, and the `rows_only` test helpers assert the risk line instead of stripping any `at risk:` line.
-- **I5d filters, I5b colour/width, I4 tap rename: accepted** (run `wf_ceb91383-b01`): `681f96d`, `135aded`, `fc7ea65`, `6ff96ee`, `5273324`. No release run (I4 only changed `dist-workspace.toml` and regenerated `release.yml`).
-- **I5c risk line and I5e prune hint: implemented, every criterion met except the deferred ones above** (`81e73d6`, `5fe28d7`, `a2737ce`, `2535db0`). I5c-6 and I5e-6 are unverified only because of the ordering, not because of a defect.
-- The final workflow skeptic (I5d, I5b, I4) failed exactly one check: the **R1 pinned signature** change to `output::status` (it gained `filters`, `render`). Its fix is follow-up A below.
+- **S11 follow-ups A–D: accepted.** Commits: `1209b48` (criteria, spec notes, plan R1 annotations), `af84933` (feat), `8c237b1` (breaker fix: the locked set is keyed per (repo path, worktree path)), `c860290` (breaker tests `crates/rollcall-cli/tests/breaker_s11.rs`), `2e70a2d` (repeat scope per the author's answers), `f2c11a5` (docs). Fable skeptic at `f2c11a5` found S11-1..17, 11a and 11b all met, and re-ran two mutations itself: S11-6 (width reverted to crossterm `terminal::size()` → `widest line 60 columns on a 40-column stdout (controlling terminal 60)`) and S11-14 (dropping the locked filter → red).
+- **Range gate `eeb6aeb..f2c11a5`: GATE PASS** (Fable). Every ACCEPTANCE.md item and the Conventions section are met. **I5c-6 and I5e-6 are verified on the real binary**: `--top 2` gives `at risk: r1 ↑2`, `--top 1` gives no risk line, and `--dirty` hides the clean repo's hint. I4-7 ran `dist generate` 0.33.0 on a scratch clone and printed nothing. R1 over the range: only the approved rustix line plus its one lock line; no `mod` list changes.
+- **Open questions (1) and (2) from session 11: answered and done.** Committed `1147a53`. The refused-root peek (`root.rs` `peek`) now chains `WalkOptions.ignore` into its path skips; new unit test `root::tests::ignored_paths_are_not_suggested`, red before the fix and green after. Spec §4.2 and §4.3 have notes. Single-file fix with a test, so it went direct, with no breaker or skeptic pass.
+- **Pushed:** `origin/impl/v0` = `1147a53`; `git rev-list --count origin/impl/v0..HEAD` → 0.
 
 ## In progress
-- Nothing half-edited. `git status --short` → `?? graphify-out/` only (untracked; never commit). HEAD `5273324` plus this handoff commit; `git rev-list --count origin/impl/v0..HEAD` was 27 before this commit.
+- Nothing. `git status --short` → `?? graphify-out/` only (untracked; never commit).
 
-## Decisions + why (session 11)
-- **A side worktree for main-loop fixes while a workflow runs.** The workflow's commit agent stages every changed path in the main checkout, so main-loop edits made while it runs end up in its commits. The `s11-followups` branch was merged between workflow runs (`bb76630`, conflicts resolved in `rows_only`).
-- **I5c-6 / I5e-6 deferred, not fixed.** Adding `--top` / `--dirty` inside I5c/I5e would have pre-empted I5d. The I5d code trims `doc.repos` before `plain_status`, and that is what the two criteria rely on. Verify them on the real binary in step 2.
-- Permission prompts: the global `ask` rules for `rm`/`truncate` caused most prompts. The classifier blocks Claude from editing `~/.claude/settings.json`, so a proposed file was staged in the session 11 scratchpad for the author to apply (backup at `~/.claude/settings.json.bak-20261005-231034`). Whether it was applied is unknown; check with `grep -c '"Bash(rm \*)"' ~/.claude/settings.json` (0 means applied).
+## Decisions + why (session 12)
+- **S11-3 exception.** The old I5e probe `breaker_probe_locked_missing_worktree_is_counted` recorded behaviour (AMBIGUOUS) that author decision D reversed. It was inverted and renamed `…_is_not_counted`, and S11-3 now names that edit. Decision D is what forces this change; no criterion was weakened.
+- **Locked set per repo.** The breaker showed that two repos can register a linked worktree at the same path, and a global path set let one repo's lock hide the other's hint. The set is now keyed by `(Repo.path, Worktree.path)`, built in `Builder::repo`. `Repo`, `Worktree` and `StatusDoc` stay unchanged (R1).
+- **Repeat scope by per-argument `overrides_with`, not `args_override_self`.** `args_override_self` on the `Status` variant also covered `--json` and the flattened shared flags. Per the author, only `--dirty`, `--stale`, `--top` and `--color` take the last value.
 
 ## Test state
-- `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked` at `5273324` → exit 0; the `test result:` lines sum to **947 passed / 0 failed / 5 ignored**. The 5th ignored test is `breaker_i5b.rs` `breaker_width_is_that_of_the_stdout_terminal_not_the_controlling_one`; follow-up B makes it a regression test (remove its `#[ignore]`).
-- R1 so far: `git diff --quiet eeb6aeb..HEAD -- Cargo.lock '*Cargo.toml'` → exit 0 (follow-up B will change this, as approved).
-- CI: none since `960cb0a` (billing); nothing pushed in session 11.
+- `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked` at `1147a53` → exit 0; the `test result:` lines sum to **973 passed / 0 failed / 4 ignored**. The ignored tests are `materialize_perf`, `materialize_demo`, `fs.rs::modes_child` and `fs.rs::lock_child`, all by design.
+- CI run `37540606022` (`f2c11a5`): every job `failure` with 0 steps. Annotation: "The job was not started because recent account payments have failed or your spending limit needs to be increased." No code signal; Linux (`tcgetwinsize` under the ubuntu runner) is still untested.
 
 ## Gotchas
-- **The workflow can't run the follow-ups.** `rollcall-v1.js` filters items through a fixed `ORDER` list (I2…I4), so an `S11` section is dropped, and editing the script is blocked (self-modification). Drive S11 with direct Agent calls: Sonnet implementer (`model: "sonnet"`), then the breaker, then Fable as skeptic.
-- **Workflow-reported AMBIGUOUS items arrive in its result, not as stops.** Read `ambiguous_for_author` and each item's `optional` after every run. The workflow continues past them, but the directive says to stop and ask.
-- **Don't edit the main checkout while a workflow runs** (see Decisions).
-- Python `re.sub` replacement strings turn `\n` into real newlines. Session 11 broke a Rust char literal that way; use plain `str.replace`.
-- Carried over: breaker stalls (resume with an unchanged script); hostile `scan_h*` tests are slow in debug builds (long cargo timeouts); concurrent sessions may edit this branch (stage explicit paths); `git config handoff.auto false`; use a scratch `HOME` for manual runs; never print prompt text from `~/.claude` / `~/.codex`.
-- Optional skeptic notes (non-blocking): the `StatusFilters` doc line sits above `ColorMode` in `cli.rs`, and `StatusFilters` has no doc of its own; the I5b-1..4 and I5d-6 tests use private fixtures, not `$F` (a skeptic re-ran them against `$F` and they held); new test files are in `crates/rollcall-cli/tests/*.rs`, not `tests/it/`.
+- **CI is billing-blocked, not red.** Check annotations with `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations` before debugging any failure.
+- The workflow can't run S11-style sections: `ORDER` in `rollcall-v1.js` is fixed, and editing the script is blocked. Use direct Agent calls.
+- The permission-prompt fix was never applied: `grep -c '"Bash(rm \*)"' ~/.claude/settings.json` → 1. The proposal from the session 11 scratchpad is the author's to apply.
+- Carried over: Python `re.sub` replacement strings turn `\n` into real newlines (use `str.replace`); hostile `scan_h*` tests are slow in debug; concurrent sessions may edit this branch (stage explicit paths); `git config handoff.auto false`; use a scratch `HOME` for manual runs; never print prompt text from `~/.claude` / `~/.codex`.
+- Skeptic observations (non-blocking): a missing worktree with a non-UTF-8 path shares its lossy lock key with a twin (no test; §4.4 says such paths fail as `git error: worker failed` anyway). On macOS the cache follows `$HOME/Library/Caches`, not `XDG_CACHE_HOME`.
 
 ## Suggested skills
-- `gate-record-audit` before each skeptic round, `probe-hygiene` before mutation probes, `repo-debt-report` before push, `verify-ledger` before any merge-ready claim.
+- `verify-ledger` before any merge-ready claim, `repo-debt-report` before the PR, `ci-divergence-triage` if CI runs and goes red.
 
 ## Not started
-- S11 follow-ups A–D, the range skeptic, push, CI, PR (directive above).
-- **Open author questions (not blocking; ask once and record the answers):** (1) `check_root`'s refused-root suggestions (`root.rs` `Peek::admits`) can name an ignored repo. §4.3 says the peek applies the §4.2 skips, so the fix is to mirror the walk's `.chain(ignore)`, or add a spec note. (2) A linked worktree under an ignored dir whose main repo is outside the root is never discovered (the walk doesn't descend). §4.2's I3-12 assumption "stays listed" can't hold there; add a spec line.
-- Tap prerequisites (create `ravi1395/homebrew-rollcall`, the `HOMEBREW_TAP_TOKEN` secret) and any release run are author actions, later.
+- PR `impl/v0` → `main`: waits on green CI, which waits on billing.
+- Tap prerequisites (create `ravi1395/homebrew-rollcall`, add the `HOMEBREW_TAP_TOKEN` secret) and any release run: author actions, later.
 - Carried over, optional: the `lock_when_free` fork-race window; the full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`.
 
 ## Author decisions 2026-10-03 (session 8; each is approved scope, not yet designed or specced)
@@ -92,3 +82,5 @@ Asked with today's behaviour and each option's effect; answers below are the aut
 - **C. Lenient flags.** A `--top N` above `usize::MAX` means all repos (`0`, non-integers and negatives stay exit 2, per I5d-5). A repeated filter flag takes the last value, not exit 2 (clap `args_override_self` or equivalent). Update spec §3.1/§8.2.
 - **D. Locked missing worktrees are left out of the prune hint.** `WorktreeState` gains `locked: bool` with `#[serde(default)]` so old caches load (R1 exception, plan `WorktreeState {…}` entry). It is set when `<admin_dir>/locked` exists, checked with `symlink_metadata` only, never read (in `rollcall-git` `state::missing_worktree_state`). It is not in the JSON doc. A repo whose missing worktrees are all locked gets no hint; otherwise the count excludes locked ones. Re-check the §4.4 audit note for the new admin-dir probe.
 - **Accepted, spec notes only:** a repo named `hint:` prints a row that starts like a hint line; an `error:` badge with an empty message prints `ESC[31merror:ESC[0m ` (trailing space outside the colour).
+
+- **Session 12 answers (2026-10-06):** only `--dirty`, `--stale`, `--top` and `--color` take their last value when repeated; any other repeated flag (`--json`, `--yes`, `--no-scan`, `--submodules`, `--follow-symlinks`) stays exit 2 in `status`, the piped form and `scan` alike. Every occurrence is validated (`--top 0 --top 2` exits 2). Refused-root suggestions skip config `ignore` paths (done, `1147a53`). A linked worktree under an ignored dir whose main repo is outside the root is not shown (spec §4.2 note only).
