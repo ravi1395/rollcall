@@ -16,6 +16,7 @@ use rollcall_core::{
 use rollcall_sessions::codex_db;
 use rollcall_sessions::{Claude, Codex, SessionSource};
 
+use crate::cli::StatusFilters;
 use crate::config::Ctx;
 use crate::scan::{self, ScanOutcome};
 
@@ -365,19 +366,38 @@ pub fn status(
     outcome: &ScanOutcome,
     root: &Path,
     json: bool,
+    filters: &StatusFilters,
     out: &mut dyn Write,
 ) -> ExitCode {
     let policy = TextPolicy {
         prompts: true,
         redact: ctx.config.redact_prompts,
     };
-    let doc = build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
+    let mut doc = build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
     let text = if json {
         json_line(&doc)
     } else {
+        // The exit code stays that of the whole scan (§3.1), not of the rows kept.
+        filter_repos(&mut doc.repos, filters);
         plain_status(&doc, ctx.now)
     };
     finish(out, &text, outcome.exit)
+}
+
+/// §8.2: `--dirty` / `--stale` keep the repos where any worktree matches (either flag: OR), then
+/// `--top N` keeps the first N of the §3.3 order. A kept repo keeps all its worktrees.
+fn filter_repos(repos: &mut Vec<Repo>, f: &StatusFilters) {
+    if f.dirty || f.stale {
+        repos.retain(|r| {
+            r.worktrees.iter().any(|w| {
+                let dirty = w.dirty_count + w.untracked_count > 0 || w.unpushed > Some(0);
+                (f.dirty && dirty) || (f.stale && w.stale_reason.is_some())
+            })
+        });
+    }
+    if let Some(n) = f.top {
+        repos.truncate(n.get());
+    }
 }
 
 /// §8.2: the risk line (if any), a line per repo, then an indented line per worktree, columns
@@ -890,7 +910,14 @@ mod tests {
 
     fn run_status(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
         let mut out = Vec::new();
-        status(&w.ctx, outcome, &w.root, json, &mut out);
+        status(
+            &w.ctx,
+            outcome,
+            &w.root,
+            json,
+            &StatusFilters::default(),
+            &mut out,
+        );
         String::from_utf8(out).unwrap()
     }
 
@@ -1571,6 +1598,7 @@ mod tests {
             &outcome,
             &w.root,
             true,
+            &StatusFilters::default(),
             &mut Broken
         )));
     }

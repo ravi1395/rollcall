@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -53,6 +54,20 @@ pub struct CommonFlags {
     pub no_scan: bool,
 }
 
+/// §8.2: the repo filters of plain `status` (accepted and ignored with `--json`).
+#[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatusFilters {
+    /// Only repos with a dirty, untracked or unpushed worktree.
+    #[arg(long)]
+    pub dirty: bool,
+    /// Only repos with a stale worktree.
+    #[arg(long)]
+    pub stale: bool,
+    /// Only the first N repos, after the other filters.
+    #[arg(long, value_name = "N")]
+    pub top: Option<NonZeroUsize>,
+}
+
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct RootArgs {
     /// Root directory to scan [default: the current directory].
@@ -78,6 +93,8 @@ pub enum Command {
         /// Print the StatusDoc as JSON.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        filters: StatusFilters,
     },
     /// Scan and print one summary line to stderr.
     Scan {
@@ -160,7 +177,7 @@ where
 fn dispatch(cli: Cli, env: EnvPaths, stdout_is_tty: bool) -> ExitCode {
     match dispatch_target(stdout_is_tty, cli.command.as_ref()) {
         Target::Tui => with_ctx(&cli.root.flags, env, |ctx| app::run(ctx, &cli.root.root())),
-        Target::Status => run_status(&cli.root, false, env),
+        Target::Status => run_status(&cli.root, false, &StatusFilters::default(), env),
         Target::Subcommand(command) => run_command(command, env),
     }
 }
@@ -169,7 +186,11 @@ fn run_command(command: &Command, env: EnvPaths) -> ExitCode {
     match command {
         // Before any config or context load: the worker reads nothing but its stdin.
         Command::Worker => scan::worker_main(),
-        Command::Status { root, json } => run_status(root, *json, env),
+        Command::Status {
+            root,
+            json,
+            filters,
+        } => run_status(root, *json, filters, env),
         Command::Scan { root } => with_ctx(&root.flags, env, |ctx| {
             let started = Instant::now();
             let outcome = scan::scan(&ctx, &root.root(), scan_mode(&root.flags));
@@ -239,7 +260,7 @@ fn run_command(command: &Command, env: EnvPaths) -> ExitCode {
     }
 }
 
-fn run_status(root: &RootArgs, json: bool, env: EnvPaths) -> ExitCode {
+fn run_status(root: &RootArgs, json: bool, filters: &StatusFilters, env: EnvPaths) -> ExitCode {
     with_ctx(&root.flags, env, |ctx| {
         let outcome = scan::scan(&ctx, &root.root(), scan_mode(&root.flags));
         output::status(
@@ -247,6 +268,7 @@ fn run_status(root: &RootArgs, json: bool, env: EnvPaths) -> ExitCode {
             &outcome,
             &root.root(),
             json,
+            filters,
             &mut std::io::stdout().lock(),
         )
     })
@@ -334,7 +356,7 @@ mod tests {
             "some/dir",
         ])
         .unwrap();
-        let Some(Command::Status { root, json }) = cli.command else {
+        let Some(Command::Status { root, json, .. }) = cli.command else {
             panic!("expected status");
         };
         assert!(json);
