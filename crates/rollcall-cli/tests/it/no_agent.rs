@@ -4,15 +4,15 @@ use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
 
 /// Plain `status` without its leading risk line (I5c) and trailing prune hints (I5e): the repo
-/// and worktree rows alone.
+/// and worktree rows alone. Asserts the risk line is there and strips only trailing hints, so a
+/// repo row named `at risk: …` or `hint: …` (§8.2 prints names as written) is never dropped.
 fn rows_only(plain: &str) -> String {
-    let rows = match plain.strip_prefix("at risk:") {
-        Some(rest) => rest.split_once('\n').expect("a risk line ends").1,
-        None => plain,
-    };
-    rows.split_inclusive('\n')
-        .filter(|l| !l.starts_with("hint:"))
-        .collect()
+    assert!(plain.starts_with("at risk: "), "no risk line: {plain}");
+    let mut rows: Vec<&str> = plain.split_inclusive('\n').skip(1).collect();
+    while rows.last().is_some_and(|l| l.starts_with("hint: ")) {
+        rows.pop();
+    }
+    rows.concat()
 }
 
 #[test]

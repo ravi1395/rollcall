@@ -6,7 +6,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ratatui::text::Span;
-use rollcall_core::text::{decode_entities, render_text, sanitise, shell_quote};
+use rollcall_core::text::{
+    decode_entities, filter_prompt_block, render_text, sanitise, shell_quote,
+};
 use rollcall_core::{
     Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
     StaleReason, StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
@@ -84,7 +86,23 @@ fn render_impl(
         let t = if decode { decode_entities(&t) } else { t };
         render_text(&t, redact_emails)
     };
-    let show = |r: &TextRef| source.resolve(r).map(scrub);
+    // §5.0 again on decoded prompt text (author decision 2026-10-06): an entity-encoded
+    // `<system-reminder>` is dropped or cut like a raw one. Titles of other kinds are not prompts.
+    let prompt = |t: String| {
+        let t = if decode {
+            filter_prompt_block(&decode_entities(&t))?
+        } else {
+            t
+        };
+        Some(render_text(&t, redact_emails))
+    };
+    let text_of = |t: String, kind: TitleKind| {
+        if kind == TitleKind::Prompt {
+            prompt(t)
+        } else {
+            Some(scrub(t))
+        }
+    };
     let title = session
         .title
         .as_ref()
@@ -98,14 +116,19 @@ fn render_impl(
                 TextRef::CodexThread { .. },
             ) => codex_db::resolve_thread_title(db_path, thread_id)
                 .filter(|(_, now)| now == kind)
-                .map(|(text, _)| (scrub(text), *kind)),
-            _ => show(r).map(|text| (text, *kind)),
+                .and_then(|(text, _)| text_of(text, *kind))
+                .map(|text| (text, *kind)),
+            _ => source
+                .resolve(r)
+                .and_then(|text| text_of(text, *kind))
+                .map(|text| (text, *kind)),
         });
     let last_prompt = session
         .last_prompt
         .as_ref()
         .filter(|_| policy.prompts && !policy.redact)
-        .and_then(show);
+        .and_then(|r| source.resolve(r))
+        .and_then(prompt);
     let (title, title_kind) = match title {
         Some((text, kind)) => (Some(text), Some(kind)),
         None => (None, None),
@@ -871,15 +894,16 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
-    /// `status` without its risk line (I5c) and prune hints (I5e): the repo and worktree rows alone.
+    /// `status` without its risk line (I5c) and trailing prune hints (I5e): the repo and
+    /// worktree rows alone. Asserts the risk line is there and strips only trailing hints, so a
+    /// repo row named `at risk: …` or `hint: …` (§8.2 prints names as written) is never dropped.
     fn rows_only(text: String) -> String {
-        let rows = match text.strip_prefix("at risk:") {
-            Some(rest) => rest.split_once('\n').unwrap().1,
-            None => &text,
-        };
-        rows.split_inclusive('\n')
-            .filter(|l| !l.starts_with("hint:"))
-            .collect()
+        assert!(text.starts_with("at risk: "), "no risk line: {text}");
+        let mut rows: Vec<&str> = text.split_inclusive('\n').skip(1).collect();
+        while rows.last().is_some_and(|l| l.starts_with("hint: ")) {
+            rows.pop();
+        }
+        rows.concat()
     }
 
     fn run_doctor(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
@@ -2137,6 +2161,34 @@ mod tests {
         let (w, outcome) = entity_world(None, "a &amp; b");
         let text = run_status(&w, &outcome, false);
         assert!(worktree_line(&text).ends_with("\"a & b\""), "{text}");
+    }
+
+    /// Author decision 2026-10-06: decoded prompt text goes through the §5.0 filter again, so an
+    /// entity-encoded injected section is dropped or cut like a raw one; JSON keeps the raw text.
+    #[test]
+    fn plain_status_filters_decoded_prompt_text_again() {
+        let (w, outcome) = entity_world(None, "&lt;system-reminder&gt;x");
+        let text = run_status(&w, &outcome, false);
+        assert!(!worktree_line(&text).contains('"'), "{text}");
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            "&lt;system-reminder&gt;x"
+        );
+
+        let (w, outcome) = entity_world(None, "fix it &lt;system-reminder&gt;be careful");
+        let text = run_status(&w, &outcome, false);
+        assert!(worktree_line(&text).ends_with("\"fix it\""), "{text}");
+    }
+
+    #[test]
+    fn a_decoded_custom_title_starting_with_lt_is_not_prompt_filtered() {
+        let (w, outcome) = entity_world(Some("&lt;system-reminder&gt;x"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(
+            worktree_line(&text).ends_with("\"<system-reminder>x\""),
+            "{text}"
+        );
     }
 
     #[test]

@@ -88,4 +88,5 @@ Asked with today's behaviour and each option's effect; answers below are the aut
 - I3: approve the R1 exception adding `ignore: Vec<PathBuf>` to `WalkOptions`; the walk never descends into an ignored dir (I3-9 stays as written).
 - I1: accept `git error: …` for a HEAD symref to a dot-named loose ref (bounded, no read).
 - I3 breaker AMBIGUOUS (session 11): (A) `doctor` from the cache recounts from the visible rows after an `ignore` is added (filter on read); (B) ignored dirs still count in `walk.skipped_dirs`; (C) a session whose cwd is in an ignored repo nested inside a non-ignored repo goes to the outer repo under the §6 longest-prefix rule (follows from the rule; no test exercises it). Accepted, no change.
+- I5a/I5c breaker AMBIGUOUS (session 11, 2026-10-06): keep `&#X…;` decoding and the 12-byte reference cap; accept that entity-encoded secrets are unscrubbed outside plain status; re-run the §5.0 filter on decoded prompt text; print repo names as written in the risk line (no escaping). Recorded in spec §8.2.
 - Session 10 confirmed the launch: run the full `implement` workflow end to end, push `impl/v0`, no PR while CI is billing-blocked.
