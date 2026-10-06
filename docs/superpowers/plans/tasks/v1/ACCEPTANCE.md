@@ -162,3 +162,38 @@ I4-6: `grep -n '^allow-dirty' dist-workspace.toml` prints `allow-dirty = ["ci"]`
 I4-7: The committed workflow matches what `dist` generates apart from the pins: in a scratch copy of the tree with `allow-dirty = []`, `dist generate` followed by `git diff -U0 -- .github/workflows/release.yml | grep '^[-+] ' | grep -v 'uses:'` prints nothing. (It prints the `repository:` line whenever the toml and the workflow name different taps, e.g. when only one of them was edited; verified 2026-10-04 with dist 0.33.0 on a scratch copy.)
 I4-8: No release is started: `git tag -l` is unchanged across the item and no workflow run is triggered.
 I4-9 (assumption): `grep -n 'brew install' README.md` prints only `brew install ravi1395/rollcall/rollcall-cli`, and `grep -rnE 'homebrew-tap|ravi1395/tap' README.md` prints nothing. The author's 2026-10-04 answer names only `dist-workspace.toml` and `release.yml` for the tap work; this criterion stands until the author confirms or drops the README change.
+
+## S11 Follow-ups
+
+Spec sections: §3.1 (exit codes, `status` row), §4.4 (pre-open checks), §8.2 (width truncation, filters, prune hint, author decisions 2026-10-06)
+Has logic: yes
+Files (hint): `crates/rollcall-cli/src/config.rs` (`Ctx`, `load`), `crates/rollcall-cli/src/cli.rs` (`StatusFilters`, `Command::Status`, `run_status`), `crates/rollcall-cli/src/output.rs` (`status`, `build_status_with`, `plain_status`, `prune_hints`), `crates/rollcall-cli/Cargo.toml`, `Cargo.lock`, `crates/rollcall-core/src/lib.rs` (`WorktreeState`), `crates/rollcall-git/src/state.rs` (`missing_worktree_state`), `crates/rollcall-cli/tests/breaker_i5b.rs`
+
+Item base: `9cb5a77`. Author decisions 2026-10-06 A–D (handoff of session 11), R1 exceptions approved for `Ctx`, `output::status` and `WorktreeState`, plus the `rustix` dependency line.
+
+A. Filters and render mode in `Ctx`
+S11-1: `crates/rollcall-cli/src/output.rs` declares `pub fn status(ctx: &Ctx, outcome: &ScanOutcome, root: &Path, json: bool, out: &mut dyn Write) -> ExitCode` (no other parameters), and `Ctx` has the fields `status_filters: StatusFilters` and `render: Render` in addition to the pinned four.
+S11-2: Unit: the `Ctx` returned by `config::load` has `status_filters == StatusFilters::default()` and `render == Render::default()`.
+S11-3: Behaviour is unchanged: `git diff 9cb5a77 -- crates/rollcall-cli/tests/` changes no existing assertion; the only change to an existing line in that directory is the removed `#[ignore …]` of S11-6 (and its doc comment). The full R2 gate passes, which re-runs every I5b, I5c, I5d and I5e test.
+
+B. Width from stdout's own terminal
+S11-4: `git diff 9cb5a77 -- crates/rollcall-cli/Cargo.toml` adds exactly one line, a `rustix` dependency whose features include `termios`; `git diff 9cb5a77 -- Cargo.lock` adds exactly one line, `"rustix",`, inside the `name = "rollcall-cli"` package's `dependencies`, and removes none; the number of `[[package]]` entries in `Cargo.lock` is unchanged.
+S11-5: `grep -rn "terminal::size" crates/rollcall-cli/src/` prints nothing; the status width comes from `rustix::termios::tcgetwinsize` on stdout; `grep -rn "unsafe" crates/rollcall-cli/src/` prints no new line versus `9cb5a77`.
+S11-6: `breaker_width_is_that_of_the_stdout_terminal_not_the_controlling_one` (`crates/rollcall-cli/tests/breaker_i5b.rs`) has no `#[ignore]` and passes; with the width read reverted to `ratatui::crossterm::terminal::size()` it fails (mutation red quoted in the gate record).
+
+C. Lenient flags
+S11-7: `rollcall status <root> --top 18446744073709551616` and `--top 99999999999999999999999999` each exit with the code of `rollcall status <root>` and print output byte-identical to it (all repos).
+S11-8: `--top 0`, `--top x` and `--top -1` each still exit `2` (I5d-5 unchanged).
+S11-9: On the I5d fixture: `--dirty --dirty` prints exactly what `--dirty` prints, `--stale --stale` exactly what `--stale` prints, `--top 1 --top 2` exactly what `--top 2` prints (two repos) and `--top 2 --top 1` exactly what `--top 1` prints; none exits `2`.
+S11-10 (assumption): A repeated `--color` takes the last value: `--color always --color never` contains no `0x1B` byte and `--color never --color always` contains `ESC[`.
+S11-11: Repeatable arguments elsewhere keep accumulating: `rollcall mcp --root A --root B` still serves both roots (the existing MCP tests for repeated `--root` pass unchanged).
+
+D. Locked missing worktrees
+S11-12: `WorktreeState` has `locked: bool` marked `#[serde(default)]`; unit: deserialising a serialised `WorktreeState` with the `locked` key removed succeeds with `locked == false`, and a `WorktreeState` with `locked: true` round-trips through serde with `locked == true` (the worker process and the cache carry it).
+S11-13: Unit (`rollcall-git`): for a missing linked worktree, `missing_worktree_state` gives `locked == true` when `<admin_dir>/locked` exists as an empty file, a file with a reason, a mode-000 file, a dangling symlink or a FIFO (the FIFO case returns under a watchdog, proving the file is never opened); `locked == false` when it does not exist.
+S11-14: Plain `status` on a repo `<p>` with two missing linked worktrees: with one of them locked (`git worktree lock` or a `locked` file) the last line is `hint: 1 missing worktree — run 'git worktree prune' in <p>`; with both locked no line starts with `hint:`; with three missing and one locked the line reads `hint: 2 missing worktrees — …`.
+S11-15: Locked missing worktrees still print their worktree line with the `missing` badge (as unlocked ones do), and `rollcall status --json` output is byte-identical with and without the `locked` files; `git diff 9cb5a77 -- crates/rollcall-core/src/lib.rs` changes no field of `Repo`, `Worktree` or `StatusDoc`.
+S11-16: The `locked` probe is one `symlink_metadata` on the admin dir entry, made where `missing_worktree_state` already runs (before any pre-open check, as the admin `HEAD` read is today); spec §4.4 records it.
+
+Record
+S11-17: R1: the plan's pinned entries for `Ctx`, `output.rs: status(…)` and `WorktreeState {…}` show the new shape annotated as the 2026-10-06 author-approved exceptions (like the `WalkOptions { … ignore … }` entry); spec §3.1/§8.2 carry the 2026-10-06 notes (A–D, `tcgetwinsize` in place of `crossterm::terminal::size()`, lenient `--top` and repeated flags, locked worktrees out of the hint, `hint:`-named repo and empty `error:` badge); no other pinned signature, `mod` list or `Cargo.toml` changes versus `9cb5a77`.
