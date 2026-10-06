@@ -59,7 +59,11 @@ fn peek(root: &Path, opts: &WalkOptions, deadline: Instant, entries: &mut u64) -
             .copied()
             .chain(opts.skip_dirs.iter().map(String::as_str))
             .collect(),
-        skip_paths: path_skips(&home),
+        // Config `ignore` hides a repo from suggestions as from the walk (§4.3).
+        skip_paths: path_skips(&home)
+            .into_iter()
+            .chain(opts.ignore.iter().cloned())
+            .collect(),
         deadline,
     };
     let mut suggestions = Vec::new();
@@ -107,7 +111,8 @@ impl Peek<'_> {
         found
     }
 
-    /// §4.2 skips, the macOS privacy directories, `SF_DATALESS`, and the same-device rule.
+    /// §4.2 skips (config `ignore` included), the macOS privacy directories, `SF_DATALESS`, and
+    /// the same-device rule.
     fn admits(&self, path: &Path) -> bool {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let privacy_dir = cfg!(target_os = "macos")
@@ -285,6 +290,27 @@ mod tests {
         assert_eq!(
             suggestions(check_root(&home, &opts(&home))),
             vec![home.join("kept"), home.join("vendor")]
+        );
+    }
+
+    /// Author decision 2026-10-06 (session 12): the peek applies config `ignore` as the walk does.
+    #[test]
+    fn ignored_paths_are_not_suggested() {
+        let (_dir, home) = tempdir_real();
+        repo(&home.join("vendor/app"));
+        repo(&home.join("kept/app"));
+        repo(&home.join("deep/one"));
+        let ignoring = WalkOptions {
+            ignore: vec![home.join("vendor"), home.join("deep/one")],
+            ..opts(&home)
+        };
+        assert_eq!(
+            suggestions(check_root(&home, &ignoring)),
+            vec![home.join("kept")]
+        );
+        assert_eq!(
+            suggestions(check_root(&home, &opts(&home))),
+            vec![home.join("deep"), home.join("kept"), home.join("vendor")]
         );
     }
 
