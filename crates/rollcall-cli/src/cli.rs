@@ -79,7 +79,8 @@ pub struct StatusFilters {
     pub top: Option<NonZeroUsize>,
 }
 
-/// `--top N` past the largest count keeps every repo; `0`, a sign or a non-number is an error.
+/// `--top N` past the largest count keeps every repo; `0`, a minus sign or a non-number is an
+/// error (a leading `+` is allowed).
 fn parse_top(s: &str) -> Result<NonZeroUsize, String> {
     match s.parse::<NonZeroUsize>() {
         Ok(n) => Ok(n),

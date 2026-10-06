@@ -175,16 +175,21 @@ struct Builder<'a> {
     submodules: bool,
     sources: [Box<dyn SessionSource>; 2],
     decode: bool,
-    /// Paths (as `Worktree.path` prints them) of the worktrees whose admin dir is locked: the
-    /// §7 documents do not carry it, the prune hint needs it.
-    locked: RefCell<HashSet<String>>,
+    /// `(Repo.path, Worktree.path)` of the worktrees whose admin dir is locked, per repo since
+    /// two repos may register the same path: the §7 documents do not carry it, the hint needs it.
+    locked: RefCell<HashSet<(String, String)>>,
 }
 
 impl Builder<'_> {
     fn repo(&self, row: &RepoRow) -> Repo {
         let mut worktrees = Vec::new();
         let mut ended = Vec::new();
+        let path = row.path.to_string_lossy().into_owned();
         for state in &row.state.worktrees {
+            if state.locked {
+                let wt = state.path.to_string_lossy().into_owned();
+                self.locked.borrow_mut().insert((path.clone(), wt));
+            }
             let sessions = self.index.sessions_for(self.root, &state.path);
             ended.extend(sessions.iter().map(|s| s.ended_at));
             worktrees.push(self.worktree(state, &sessions));
@@ -199,7 +204,7 @@ impl Builder<'_> {
         );
         Repo {
             name: row.name.clone(),
-            path: row.path.to_string_lossy().into_owned(),
+            path,
             kind: row.kind,
             contains_root: row.contains_root,
             default_branch: row.state.default_branch.clone(),
@@ -216,12 +221,8 @@ impl Builder<'_> {
 
     fn worktree(&self, state: &WorktreeState, sessions: &[Session]) -> Worktree {
         let stale = rank::stale_reason(state, self.ctx.now, self.ctx.config.stale_days);
-        let path = state.path.to_string_lossy().into_owned();
-        if state.locked {
-            self.locked.borrow_mut().insert(path.clone());
-        }
         Worktree {
-            path,
+            path: state.path.to_string_lossy().into_owned(),
             is_main: state.is_main,
             external: !canonical_lenient(&state.path).starts_with(self.root),
             branch: state.branch.clone(),
@@ -328,7 +329,7 @@ fn build_status_with(
     stale: bool,
     policy: TextPolicy,
     decode: bool,
-) -> (StatusDoc, HashSet<String>) {
+) -> (StatusDoc, HashSet<(String, String)>) {
     // The cache is keyed by the realpath of the root (scan.rs).
     let root = scan::canonical_root(root);
     let scanned_submodules = index.scanned_submodules(&root);
@@ -424,7 +425,7 @@ fn filter_repos(repos: &mut Vec<Repo>, f: &StatusFilters) {
 /// aligned like `ls`. Every text that came from a repo or a log is sanitised; JSON keeps it exact.
 fn plain_status(
     doc: &StatusDoc,
-    locked: &HashSet<String>,
+    locked: &HashSet<(String, String)>,
     now: Timestamp,
     render: Render,
 ) -> String {
@@ -447,11 +448,12 @@ fn plain_status(
 /// §8.2: after every row, `hint: <N> missing worktree(s) — run 'git worktree prune' in <path>`
 /// per repo with a missing worktree, in the order given. A locked one is not counted: `git
 /// worktree prune` skips it. rollcall only suggests the command.
-fn prune_hints(repos: &[Repo], locked: &HashSet<String>) -> String {
+fn prune_hints(repos: &[Repo], locked: &HashSet<(String, String)>) -> String {
     let mut text = String::new();
     for repo in repos {
         let missing = (repo.worktrees.iter())
-            .filter(|w| w.stale_reason == Some(StaleReason::Missing) && !locked.contains(&w.path))
+            .filter(|w| w.stale_reason == Some(StaleReason::Missing))
+            .filter(|w| !locked.contains(&(repo.path.clone(), w.path.clone())))
             .count();
         if missing > 0 {
             let s = if missing == 1 { "" } else { "s" };
