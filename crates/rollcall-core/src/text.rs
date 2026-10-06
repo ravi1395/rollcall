@@ -159,6 +159,11 @@ fn entity(s: &str) -> Option<(char, usize)> {
     Some((c, end + 1))
 }
 
+/// The extended grapheme clusters of `text`, in order.
+pub fn graphemes(text: &str) -> impl Iterator<Item = &str> {
+    text.graphemes(true)
+}
+
 /// Number of extended grapheme clusters.
 pub fn grapheme_len(text: &str) -> usize {
     text.graphemes(true).count()

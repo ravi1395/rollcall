@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ratatui::text::Span;
 use rollcall_core::text::{
-    decode_entities, filter_prompt_block, render_text, sanitise, shell_quote,
+    decode_entities, filter_prompt_block, graphemes, render_text, sanitise, shell_quote,
 };
 use rollcall_core::{
     Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
@@ -32,6 +32,15 @@ pub struct TextPolicy {
     pub prompts: bool,
     /// `redact_prompts`: hide all title and prompt text; overrides `prompts`.
     pub redact: bool,
+}
+
+/// What plain `status` adds for a terminal (§8.2); `Default` is a pipe: plain text, every line whole.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Render {
+    /// Paint badges with SGR sequences.
+    pub color: bool,
+    /// Terminal width in columns; 0 when stdout is not a terminal or its width is unreadable.
+    pub width: usize,
 }
 
 /// What `R` and the `rc` function resume.
@@ -367,6 +376,7 @@ pub fn status(
     root: &Path,
     json: bool,
     filters: &StatusFilters,
+    render: Render,
     out: &mut dyn Write,
 ) -> ExitCode {
     let policy = TextPolicy {
@@ -379,7 +389,7 @@ pub fn status(
     } else {
         // The exit code stays that of the whole scan (§3.1), not of the rows kept.
         filter_repos(&mut doc.repos, filters);
-        plain_status(&doc, ctx.now)
+        plain_status(&doc, ctx.now, render)
     };
     finish(out, &text, outcome.exit)
 }
@@ -402,14 +412,21 @@ fn filter_repos(repos: &mut Vec<Repo>, f: &StatusFilters) {
 
 /// §8.2: the risk line (if any), a line per repo, then an indented line per worktree, columns
 /// aligned like `ls`. Every text that came from a repo or a log is sanitised; JSON keeps it exact.
-fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
+fn plain_status(doc: &StatusDoc, now: Timestamp, render: Render) -> String {
+    let Render { color, width } = render;
     let mut rows = Vec::new();
     for repo in &doc.repos {
-        rows.push(repo_cells(repo, now));
-        rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now)));
+        rows.push(repo_cells(repo, now, color));
+        rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now, color)));
     }
     // The risk line and the hints are not rows: they stay out of the column widths.
-    risk_line(&doc.repos, now) + &align(&rows) + &prune_hints(&doc.repos)
+    let text = risk_line(&doc.repos, now, color) + &align(&rows) + &prune_hints(&doc.repos);
+    if width == 0 {
+        return text;
+    }
+    text.lines()
+        .map(|line| truncate_cols(line, width, color) + "\n")
+        .collect()
 }
 
 /// §8.2: after every row, `hint: <N> missing worktree(s) — run 'git worktree prune' in <path>`
@@ -436,13 +453,13 @@ const RISK_MAX: usize = 5;
 
 /// §8.2: `at risk: <name> <badges>; …` for the repos with attention 2 or 3 (an error repo has 4)
 /// in the order given, which is §3.3 order, then `; +N more`. Empty when no repo qualifies.
-fn risk_line(repos: &[Repo], now: Timestamp) -> String {
+fn risk_line(repos: &[Repo], now: Timestamp, color: bool) -> String {
     let mut risky = repos.iter().filter(|r| matches!(r.attention, 2 | 3));
     let mut entries: Vec<String> = risky
         .by_ref()
         .take(RISK_MAX)
         .map(|r| {
-            let [name, badges, _] = repo_cells(r, now);
+            let [name, badges, _] = repo_cells(r, now, color);
             format!("{name} {badges}")
         })
         .collect();
@@ -464,7 +481,7 @@ const COL_CAP: usize = 40;
 /// A non-empty cell starts at its stop or 2 past the text before it, whichever is later, so an
 /// over-cap cell shifts only its own line; an empty cell adds nothing.
 fn align(rows: &[[String; 3]]) -> String {
-    let width = |cell: &str| Span::raw(cell).width();
+    let width = cols;
     let widest = |col: usize| {
         let fits = rows
             .iter()
@@ -492,6 +509,77 @@ fn align(rows: &[[String; 3]]) -> String {
     text
 }
 
+const RESET: &str = "\x1b[0m";
+// The TUI palette (`tui.rs`: YELLOW, BLUE, RED, DIM) as SGR sequences of the named ANSI colours.
+const YELLOW: &str = "\x1b[33m";
+const BLUE: &str = "\x1b[34m";
+const RED: &str = "\x1b[31m";
+const DIM: &str = "\x1b[2m";
+
+/// `text` in the SGR `style` when `color` is on. Trailing whitespace stays outside the colour, so
+/// trimming a line behaves the same with and without it.
+fn paint(text: impl Into<String>, style: &str, color: bool) -> String {
+    let text = text.into();
+    if !color {
+        return text;
+    }
+    let body = text.trim_end();
+    format!("{style}{body}{RESET}{}", &text[body.len()..])
+}
+
+/// Splits `text` into SGR sequences (`ESC [ … m`, flagged `true`) and the text between them. The
+/// only escapes in plain output are ours: `sanitise` removes every other ESC.
+fn sgr_runs(mut text: &str) -> impl Iterator<Item = (bool, &str)> {
+    std::iter::from_fn(move || {
+        let sgr = text.starts_with("\x1b[");
+        let end = if sgr {
+            text.find('m').map_or(text.len(), |i| i + 1)
+        } else {
+            let mut chars = text.char_indices().skip(1);
+            chars
+                .find(|&(_, c)| c == '\x1b')
+                .map_or(text.len(), |(i, _)| i)
+        };
+        let (run, rest) = text.split_at(end);
+        text = rest;
+        (!run.is_empty()).then_some((sgr, run))
+    })
+}
+
+/// Display columns of `text`, not counting SGR sequences.
+fn cols(text: &str) -> usize {
+    let shown = sgr_runs(text).filter(|&(sgr, _)| !sgr);
+    shown.map(|(_, run)| Span::raw(run).width()).sum()
+}
+
+/// §8.2: `line` cut at a grapheme boundary so that it plus a trailing `…` fits `width` columns,
+/// with a reset after the `…` when `color` is on. A `width` of 0 (none readable) cuts nothing.
+fn truncate_cols(line: &str, width: usize, color: bool) -> String {
+    if width == 0 || cols(line) <= width {
+        return line.to_owned();
+    }
+    let (mut out, mut used) = (String::new(), 0);
+    'runs: for (sgr, run) in sgr_runs(line) {
+        if sgr {
+            out.push_str(run);
+            continue;
+        }
+        for grapheme in graphemes(run) {
+            let w = Span::raw(grapheme).width();
+            if used + w >= width {
+                break 'runs;
+            }
+            out.push_str(grapheme);
+            used += w;
+        }
+    }
+    out.push('…');
+    if color {
+        out.push_str(RESET);
+    }
+    out
+}
+
 fn age(now: Timestamp, then: Timestamp) -> String {
     let secs = (now.as_second() - then.as_second()).max(0);
     match secs {
@@ -502,13 +590,13 @@ fn age(now: Timestamp, then: Timestamp) -> String {
     }
 }
 
-fn count_badges(dirty: u32, unpushed: u32) -> Vec<String> {
+fn count_badges(dirty: u32, unpushed: u32, color: bool) -> Vec<String> {
     let mut badges = Vec::new();
     if dirty > 0 {
-        badges.push(format!("●{dirty}"));
+        badges.push(paint(format!("●{dirty}"), BLUE, color));
     }
     if unpushed > 0 {
-        badges.push(format!("↑{unpushed}"));
+        badges.push(paint(format!("↑{unpushed}"), YELLOW, color));
     }
     badges
 }
@@ -519,31 +607,32 @@ fn no_upstream(w: &Worktree) -> bool {
 }
 
 /// `[name, badges, last activity]` of a repo row.
-fn repo_cells(repo: &Repo, now: Timestamp) -> [String; 3] {
+fn repo_cells(repo: &Repo, now: Timestamp, color: bool) -> [String; 3] {
     let wts = &repo.worktrees;
     let mut badges = Vec::new();
     if let Some(error) = &repo.error {
-        badges.push(format!("error: {}", sanitise(error)));
+        badges.push(paint(format!("error: {}", sanitise(error)), RED, color));
     }
     match repo.kind {
-        RepoKind::Nested => badges.push("nested".to_owned()),
-        RepoKind::Bare => badges.push("bare".to_owned()),
-        RepoKind::ExternalMain => badges.push("ext".to_owned()),
+        RepoKind::Nested => badges.push(paint("nested", DIM, color)),
+        RepoKind::Bare => badges.push(paint("bare", DIM, color)),
+        RepoKind::ExternalMain => badges.push(paint("ext", DIM, color)),
         RepoKind::Normal => {}
     }
     badges.extend(count_badges(
         wts.iter().map(|w| w.dirty_count + w.untracked_count).sum(),
         wts.iter().filter_map(|w| w.unpushed).sum(),
+        color,
     ));
     let stale = wts.iter().filter(|w| w.stale_reason.is_some()).count();
     if stale > 0 {
-        badges.push(format!("{stale} stale"));
+        badges.push(paint(format!("{stale} stale"), DIM, color));
     }
     if wts.iter().any(no_upstream) {
-        badges.push("no-upstream".to_owned());
+        badges.push(paint("no-upstream", DIM, color));
     }
     let activity = if repo.attention == 0 {
-        rank::quiet(repo.last_activity_at, now)
+        paint(rank::quiet(repo.last_activity_at, now), DIM, color)
     } else {
         repo.last_activity_at
             .map_or("—".to_owned(), |t| age(now, t))
@@ -570,30 +659,34 @@ fn worktree_label(w: &Worktree) -> String {
     }
 }
 
-fn state_badges(w: &Worktree) -> Vec<String> {
+fn state_badges(w: &Worktree, color: bool) -> Vec<String> {
     if let Some(error) = &w.error {
-        return vec![format!("error: {}", sanitise(error))];
+        return vec![paint(format!("error: {}", sanitise(error)), RED, color)];
     }
     let mut badges = Vec::new();
     if w.external {
-        badges.push("ext".to_owned());
+        badges.push(paint("ext", DIM, color));
     }
     if w.stale_reason == Some(StaleReason::Missing) {
-        badges.push("missing".to_owned());
+        badges.push(paint("missing", DIM, color));
         return badges;
     }
-    let counts = count_badges(w.dirty_count + w.untracked_count, w.unpushed.unwrap_or(0));
+    let counts = count_badges(
+        w.dirty_count + w.untracked_count,
+        w.unpushed.unwrap_or(0),
+        color,
+    );
     if counts.is_empty() && w.stale_reason.is_none() {
         badges.push("✓ clean".to_owned());
     }
     badges.extend(counts);
     match w.stale_reason {
-        Some(StaleReason::Merged) => badges.push("merged·stale".to_owned()),
-        Some(StaleReason::Inactive) => badges.push("stale".to_owned()),
+        Some(StaleReason::Merged) => badges.push(paint("merged·stale", DIM, color)),
+        Some(StaleReason::Inactive) => badges.push(paint("stale", DIM, color)),
         Some(StaleReason::Missing) | None => {}
     }
     if no_upstream(w) {
-        badges.push("no-upstream".to_owned());
+        badges.push(paint("no-upstream", DIM, color));
     }
     badges
 }
@@ -616,10 +709,10 @@ fn session_text(s: &rollcall_core::SessionOut, now: Timestamp) -> String {
 }
 
 /// `[indented branch, state badges, last session]` of a worktree row.
-fn worktree_cells(w: &Worktree, now: Timestamp) -> [String; 3] {
+fn worktree_cells(w: &Worktree, now: Timestamp, color: bool) -> [String; 3] {
     [
         format!("  {}", worktree_label(w)),
-        state_badges(w).join(" "),
+        state_badges(w, color).join(" "),
         w.last_session
             .as_ref()
             .map_or(String::new(), |s| session_text(s, now)),
@@ -916,6 +1009,7 @@ mod tests {
             &w.root,
             json,
             &StatusFilters::default(),
+            Render::default(),
             &mut out,
         );
         String::from_utf8(out).unwrap()
@@ -1355,7 +1449,7 @@ mod tests {
                 shown == "ok" || shown.starts_with('/') && shown.len() > 1,
                 "{shown:?}"
             );
-            assert_eq!(repo_cells(repo, w.ctx.now)[0], shown, "{text}");
+            assert_eq!(repo_cells(repo, w.ctx.now, false)[0], shown, "{text}");
             assert!(!line.starts_with(' '), "{line:?}");
         }
         assert!(
@@ -1599,6 +1693,7 @@ mod tests {
             &w.root,
             true,
             &StatusFilters::default(),
+            Render::default(),
             &mut Broken
         )));
     }
@@ -1924,9 +2019,13 @@ mod tests {
         let mut cells = Vec::new();
         let mut is_repo = Vec::new();
         for repo in &doc.repos {
-            cells.push(repo_cells(repo, w.ctx.now));
+            cells.push(repo_cells(repo, w.ctx.now, false));
             is_repo.push(true);
-            cells.extend(repo.worktrees.iter().map(|t| worktree_cells(t, w.ctx.now)));
+            cells.extend(
+                repo.worktrees
+                    .iter()
+                    .map(|t| worktree_cells(t, w.ctx.now, false)),
+            );
             is_repo.extend(repo.worktrees.iter().map(|_| false));
         }
         assert_eq!(text, align(&cells));
@@ -2015,8 +2114,12 @@ mod tests {
 
         let mut rows = Vec::new();
         for repo in &doc.repos {
-            rows.push(repo_cells(repo, w.ctx.now));
-            rows.extend(repo.worktrees.iter().map(|t| worktree_cells(t, w.ctx.now)));
+            rows.push(repo_cells(repo, w.ctx.now, false));
+            rows.extend(
+                repo.worktrees
+                    .iter()
+                    .map(|t| worktree_cells(t, w.ctx.now, false)),
+            );
         }
         assert_eq!(text, align(&rows));
         let lines: Vec<&str> = text.lines().collect();
@@ -2238,6 +2341,54 @@ mod tests {
         (w, doc)
     }
 
+    /// `text` without its SGR sequences.
+    fn unpainted(text: &str) -> String {
+        sgr_runs(text)
+            .filter(|&(sgr, _)| !sgr)
+            .map(|(_, run)| run)
+            .collect()
+    }
+
+    #[test]
+    fn a_repo_error_badge_is_red_and_its_trailing_space_stays_outside_the_colour() {
+        let (w, mut doc) = blank_doc();
+        doc.repos[0].error = Some("boom  ".to_owned());
+        let on = Render {
+            color: true,
+            width: 0,
+        };
+        let cells = repo_cells(&doc.repos[0], w.ctx.now, true);
+        assert!(
+            cells[1].starts_with("\x1b[31merror: boom\x1b[0m"),
+            "{cells:?}"
+        );
+        let colour = plain_status(&doc, w.ctx.now, on);
+        let plain = plain_status(&doc, w.ctx.now, Render::default());
+        assert!(colour.contains(RED), "{colour:?}");
+        assert_eq!(unpainted(&colour), plain);
+    }
+
+    #[test]
+    fn a_width_cuts_every_line_and_keeps_one_line_per_row() {
+        let (w, doc) = blank_doc();
+        let plain = plain_status(&doc, w.ctx.now, Render::default());
+        let widest = plain.lines().map(cols).max().unwrap();
+        assert!(widest > 12, "{plain}");
+        for color in [false, true] {
+            let render = Render { color, width: 12 };
+            let cut = plain_status(&doc, w.ctx.now, render);
+            assert_eq!(cut.lines().count(), plain.lines().count(), "{cut}");
+            assert!(cut.lines().all(|l| cols(l) <= 12), "{cut}");
+            assert!(cut.lines().any(|l| unpainted(l).ends_with('…')), "{cut}");
+        }
+        // A width at least as wide as the widest line changes nothing.
+        let render = Render {
+            color: false,
+            width: widest,
+        };
+        assert_eq!(plain_status(&doc, w.ctx.now, render), plain);
+    }
+
     #[test]
     fn a_repo_name_that_sanitises_to_whitespace_shows_the_sanitised_path() {
         let (w, mut doc) = blank_doc();
@@ -2245,9 +2396,9 @@ mod tests {
             doc.repos[0].name = name.to_owned();
             let want = sanitise(&doc.repos[0].path);
             assert!(want.starts_with('/'), "{want:?}");
-            let cells = repo_cells(&doc.repos[0], w.ctx.now);
+            let cells = repo_cells(&doc.repos[0], w.ctx.now, false);
             assert_eq!(cells[0], want, "{name:?}");
-            let text = plain_status(&doc, w.ctx.now);
+            let text = plain_status(&doc, w.ctx.now, Render::default());
             let first = text.lines().next().unwrap();
             assert!(first.starts_with(&want), "{name:?}: {text:?}");
             assert!(
@@ -2262,8 +2413,12 @@ mod tests {
         let (w, mut doc) = blank_doc();
         for name in ["\tfoo", " foo", "\u{2028}foo", "\n \u{200b}foo"] {
             doc.repos[0].name = name.to_owned();
-            assert_eq!(repo_cells(&doc.repos[0], w.ctx.now)[0], "foo", "{name:?}");
-            let text = plain_status(&doc, w.ctx.now);
+            assert_eq!(
+                repo_cells(&doc.repos[0], w.ctx.now, false)[0],
+                "foo",
+                "{name:?}"
+            );
+            let text = plain_status(&doc, w.ctx.now, Render::default());
             assert!(text.starts_with("foo  "), "{name:?}: {text:?}");
         }
     }
@@ -2274,9 +2429,9 @@ mod tests {
         let want = format!("  {}", sanitise(&doc.repos[0].worktrees[0].path));
         for branch in [" ", "\u{2029}", "\t", "\u{200b}", ""] {
             doc.repos[0].worktrees[0].branch = Some(branch.to_owned());
-            let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now);
+            let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
             assert_eq!(cells[0], want, "{branch:?}");
-            let text = plain_status(&doc, w.ctx.now);
+            let text = plain_status(&doc, w.ctx.now, Render::default());
             assert!(
                 text.lines().nth(1).unwrap().starts_with(&want),
                 "{branch:?}: {text:?}"
@@ -2284,9 +2439,9 @@ mod tests {
         }
         // Not blank once sanitised: U+2028 becomes a space but `feat` keeps the label.
         doc.repos[0].worktrees[0].branch = Some("\u{2028}feat".to_owned());
-        let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now);
+        let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
         assert_eq!(cells[0], "   feat");
-        let text = plain_status(&doc, w.ctx.now);
+        let text = plain_status(&doc, w.ctx.now, Render::default());
         assert!(
             text.lines().nth(1).unwrap().starts_with("   feat  "),
             "{text:?}"
@@ -2320,7 +2475,7 @@ mod tests {
                 repos: repos[..n].to_vec(),
                 ..doc.clone()
             };
-            plain_status(&doc, w.ctx.now)
+            plain_status(&doc, w.ctx.now, Render::default())
                 .lines()
                 .next()
                 .map(str::to_owned)
@@ -2347,7 +2502,7 @@ mod tests {
                 repos: repos.to_vec(),
                 ..doc.clone()
             };
-            plain_status(&doc, w.ctx.now)
+            plain_status(&doc, w.ctx.now, Render::default())
         };
         let both = show(&[clean.clone(), gone.clone()]);
         let hint = both.lines().last().unwrap();
@@ -2413,5 +2568,56 @@ mod tests {
             let text = align(&cells(&[[&col1, "", "q"], ["a", "bb", "c"]]));
             assert_eq!(text, format!("{x41}  q\na  bb  c\n"), "{space:?}");
         }
+    }
+
+    #[test]
+    fn truncating_cuts_at_a_column_budget_that_leaves_room_for_the_ellipsis() {
+        // `ab漢字` is 6 columns; 3 columns of text fit alongside the `…` in 4.
+        assert_eq!(truncate_cols("ab漢字", 4, false), "ab…");
+        // A wide character that would cross the budget is dropped whole.
+        assert_eq!(truncate_cols("a漢字", 3, false), "a…");
+        assert_eq!(truncate_cols("abcdef", 4, false), "abc…");
+        assert_eq!(truncate_cols("abcdef", 1, false), "…");
+    }
+
+    #[test]
+    fn truncating_never_splits_a_grapheme() {
+        let e = "e\u{301}";
+        let four = format!("{e}{e}{e}{e}");
+        assert_eq!(truncate_cols(&four, 3, false), format!("{e}{e}…"));
+        // A ZWJ family is one cluster: kept whole or not at all.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let cut = truncate_cols(&format!("ab{family}cd"), 3, false);
+        assert!(cut == "ab…" || cut == format!("a{family}…"), "{cut:?}");
+        assert!(!cut.contains('\u{200D}') || cut.contains(family), "{cut:?}");
+    }
+
+    #[test]
+    fn a_line_within_the_width_is_returned_unchanged() {
+        for color in [false, true] {
+            assert_eq!(truncate_cols("abcd", 4, color), "abcd");
+            assert_eq!(truncate_cols("ab漢字", 6, color), "ab漢字");
+            assert_eq!(truncate_cols("", 4, color), "");
+            // Already ends in `…` and fits: not touched.
+            assert_eq!(truncate_cols("abc…", 4, color), "abc…");
+        }
+    }
+
+    #[test]
+    fn width_zero_means_no_readable_width_and_cuts_nothing() {
+        assert_eq!(truncate_cols("abcdef", 0, false), "abcdef");
+        assert_eq!(truncate_cols("abcdef", 0, true), "abcdef");
+    }
+
+    #[test]
+    fn colour_escapes_take_no_columns_and_a_cut_line_ends_in_a_reset_when_colour_is_on() {
+        let line = "ab \x1b[34m●12\x1b[0m cd";
+        // 9 visible columns: nothing to cut at 9, the escapes are untouched.
+        assert_eq!(truncate_cols(line, 9, true), line);
+        // Cut inside the badge: kept escape, ellipsis, then a reset; later escapes are dropped.
+        assert_eq!(truncate_cols(line, 5, true), "ab \x1b[34m●…\x1b[0m");
+        // §8.2: with colour on, the reset follows the `…` wherever the cut falls.
+        assert_eq!(truncate_cols(line, 3, true), "ab…\x1b[0m");
+        assert_eq!(truncate_cols("abcdef", 4, true), "abc…\x1b[0m");
     }
 }
