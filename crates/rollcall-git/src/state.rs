@@ -705,6 +705,7 @@ fn blank_state(path: &Path, is_main: bool) -> WorktreeState {
         missing: false,
         merged: false,
         error: None,
+        locked: false,
     }
 }
 
@@ -725,6 +726,7 @@ pub fn worktree_state(
         Ok(()) => state,
         Err(stop) => WorktreeState {
             error: Some(stop.message()),
+            locked: false,
             ..blank_state(wt_path, is_main)
         },
     }
@@ -787,6 +789,8 @@ pub fn missing_worktree_state(admin_dir: &Path, wt_path: &Path) -> WorktreeState
     WorktreeState {
         branch,
         missing: true,
+        // Existence only (§4.4): `locked` may be a FIFO or unreadable, so it is never opened.
+        locked: std::fs::symlink_metadata(admin_dir.join("locked")).is_ok(),
         ..blank_state(wt_path, false)
     }
 }
@@ -1357,6 +1361,7 @@ mod tests {
                 missing: false,
                 merged: false,
                 error: None,
+                locked: false,
             }
         );
     }
@@ -2047,6 +2052,7 @@ mod tests {
                 missing: true,
                 merged: false,
                 error: None,
+                locked: false,
             }
         );
     }
@@ -2073,6 +2079,39 @@ mod tests {
         assert_eq!(branch_after(""), None);
         std::fs::remove_file(&head).expect("remove HEAD");
         assert_eq!(missing_worktree_state(&admin, &wt).branch, None);
+    }
+
+    /// S11-13: `locked` is the existence of `<admin>/locked`, whatever it is; never opened.
+    #[test]
+    fn missing_worktree_is_locked_iff_the_lock_entry_exists() {
+        use std::os::unix::fs::symlink;
+
+        let (_t, base) = tempdir_real();
+        let (_main, wt, admin) = repo_with_linked_feat(&base);
+        let lock = admin.join("locked");
+        let locked_now = |admin: &Path, wt: &Path| {
+            let (admin, wt) = (admin.to_path_buf(), wt.to_path_buf());
+            // R3: a FIFO opened for reading would block forever.
+            let state = within(move || missing_worktree_state(&admin, &wt));
+            assert!(state.missing);
+            state.locked
+        };
+
+        assert!(!locked_now(&admin, &wt), "absent");
+        std::fs::write(&lock, "").expect("empty lock");
+        assert!(locked_now(&admin, &wt), "empty file");
+        std::fs::write(&lock, "on a usb stick\n").expect("lock with reason");
+        assert!(locked_now(&admin, &wt), "file with a reason");
+        std::fs::set_permissions(&lock, Permissions::from_mode(0o000)).expect("chmod 000");
+        assert!(locked_now(&admin, &wt), "mode 000");
+        std::fs::remove_file(&lock).expect("remove lock");
+        symlink(base.join("no-such-target"), &lock).expect("dangling symlink");
+        assert!(locked_now(&admin, &wt), "dangling symlink");
+        std::fs::remove_file(&lock).expect("remove lock");
+        mkfifo(&lock);
+        assert!(locked_now(&admin, &wt), "fifo");
+        std::fs::remove_file(&lock).expect("remove lock");
+        assert!(!locked_now(&admin, &wt), "absent again");
     }
 
     // ---- revision 12: nested repositories, status call shape ------------------------------------

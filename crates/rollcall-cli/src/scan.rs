@@ -39,9 +39,11 @@ pub struct ScanOutcome {
 }
 
 const EXIT_OK: u8 = 0;
-/// An error row, a partial walk, or no scan ever completed (§3.1).
+/// A partial walk, or no scan ever completed (§3.1).
 const EXIT_INCOMPLETE: u8 = 1;
 const EXIT_REFUSED: u8 = 3;
+/// The scan completed, the walk was not partial, and some row carries an error (§3.1).
+pub const EXIT_ERROR_ROWS: u8 = 4;
 
 /// How often a scan that waits for another scanner's lock looks again.
 const LOCK_POLL: Duration = Duration::from_millis(10);
@@ -56,10 +58,10 @@ pub fn scan(ctx: &Ctx, root: &Path, mode: ScanMode) -> ScanOutcome {
         return outcome(index, true, EXIT_REFUSED);
     }
     match mode {
-        ScanMode::NoScan => cached(index, &root),
+        ScanMode::NoScan => cached(ctx, index, &root),
         ScanMode::Fresh => match take_lock(ctx, &root) {
             Some(lock) => scan_here(ctx, &root, index, lock),
-            None => cached(index, &root),
+            None => cached(ctx, index, &root),
         },
         ScanMode::WaitAtMost(wait) => scan_within(ctx, root, index, wait),
     }
@@ -109,6 +111,7 @@ fn walk_options(ctx: &Ctx, root: &Path) -> WalkOptions {
         follow_symlinks: config.follow_symlinks,
         submodules: config.submodules,
         skip_dirs: config.skip_dirs.clone(),
+        ignore: config.ignore.clone(),
         budget_entries: config.walk_budget_entries,
         budget: Duration::from_secs(config.walk_budget_secs),
     }
@@ -141,21 +144,28 @@ fn outcome(index: SqliteIndex, stale: bool, exit: u8) -> ScanOutcome {
     }
 }
 
-fn cached(index: SqliteIndex, root: &Path) -> ScanOutcome {
-    let exit = cached_exit(&index, root);
+fn cached(ctx: &Ctx, index: SqliteIndex, root: &Path) -> ScanOutcome {
+    let exit = cached_exit(ctx, &index, root);
     outcome(index, true, exit)
 }
 
-/// §3.1 from stored rows: no scan ever, a partial walk, or any error row is 1.
-fn cached_exit(index: &SqliteIndex, root: &Path) -> u8 {
+/// §3.1 from stored rows: no scan ever or a partial walk is 1 (it wins), else any error row is 4.
+fn cached_exit(ctx: &Ctx, index: &SqliteIndex, root: &Path) -> u8 {
     if index.scanned_at(root).is_none() {
         return EXIT_INCOMPLETE;
     }
     let partial = index
         .last_diagnostics(root)
         .is_some_and(|doctor| doctor.walk.budget_hit);
-    if partial || index.repos_for_root(root).iter().any(has_error) {
+    let rows = visible_rows(ctx, root, index.repos_for_root(root));
+    exit_for(partial, rows.iter().any(has_error))
+}
+
+fn exit_for(partial: bool, error_rows: bool) -> u8 {
+    if partial {
         EXIT_INCOMPLETE
+    } else if error_rows {
+        EXIT_ERROR_ROWS
     } else {
         EXIT_OK
     }
@@ -165,6 +175,92 @@ fn has_error(row: &RepoRow) -> bool {
     row.state.error.is_some()
         || row.state.worktrees.iter().any(|w| w.error.is_some())
         || row.submodules.iter().any(has_error)
+}
+
+// ---- ignore (§3.2, §4.2) ----
+
+/// `config::load` made every `ignore` entry absolute and canonical, and `starts_with` compares
+/// whole components, so `/r/app2` is not under `/r/app`.
+fn is_ignored(ctx: &Ctx, path: &Path) -> bool {
+    ctx.config
+        .ignore
+        .iter()
+        .any(|entry| path.starts_with(entry))
+}
+
+/// §4.2: drops the repos at or under an ignored path before any git state is computed, and every
+/// repo (an enclosing one too) when `root` itself is at or under one. A submodule goes with its
+/// parent, and `submodule_of` indexes are remapped.
+fn drop_ignored(ctx: &Ctx, root: &Path, repos: Vec<DiscoveredRepo>) -> Vec<DiscoveredRepo> {
+    let all = is_ignored(ctx, root);
+    let mut keep: Vec<bool> = repos
+        .iter()
+        .map(|r| !all && !is_ignored(ctx, r.workdir.as_deref().unwrap_or(&r.git_dir)))
+        .collect();
+    let mut changed = true;
+    while std::mem::take(&mut changed) {
+        for (i, repo) in repos.iter().enumerate() {
+            if keep[i]
+                && repo
+                    .submodule_of
+                    .is_some_and(|p| keep.get(p) == Some(&false))
+            {
+                keep[i] = false;
+                changed = true;
+            }
+        }
+    }
+    let mut next = 0;
+    let new_index: Vec<usize> = keep
+        .iter()
+        .map(|&kept| {
+            next += usize::from(kept);
+            next - usize::from(kept)
+        })
+        .collect();
+    repos
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(mut repo, kept)| {
+            repo.submodule_of = repo.submodule_of.and_then(|p| new_index.get(p).copied());
+            kept.then_some(repo)
+        })
+        .collect()
+}
+
+/// §4.2: rows already in the cache are hidden on read, so an `ignore` added after a scan takes
+/// effect without one (`--no-scan`, lock held, MCP, the TUI's first paint).
+pub fn visible_rows(ctx: &Ctx, root: &Path, rows: Vec<RepoRow>) -> Vec<RepoRow> {
+    if is_ignored(ctx, root) {
+        return Vec::new();
+    }
+    let mut rows = rows;
+    rows.retain(|row| !is_ignored(ctx, &row.path));
+    for row in &mut rows {
+        row.submodules = visible_rows(ctx, root, std::mem::take(&mut row.submodules));
+    }
+    rows
+}
+
+/// §4.2: the stored diagnostics with their repo counts redone from the visible rows, so an
+/// `ignore` added after the scan leaves `doctor` counts too; walk and source data stay as stored.
+pub fn visible_diagnostics(
+    ctx: &Ctx,
+    root: &Path,
+    stored: DoctorDoc,
+    rows: Vec<RepoRow>,
+) -> DoctorDoc {
+    let Some(scanned_at) = stored.scanned_at else {
+        return stored;
+    };
+    let rows = visible_rows(ctx, root, rows);
+    DoctorDoc {
+        notes: stored.notes,
+        repo_timeouts: stored.repo_timeouts,
+        repo_timeouts_abandoned: stored.repo_timeouts_abandoned,
+        sources: stored.sources,
+        ..doctor_counts(root, scanned_at, &rows, stored.walk)
+    }
 }
 
 // ---- locking ----
@@ -194,14 +290,19 @@ fn scan_here(ctx: &Ctx, root: &Path, mut index: SqliteIndex, lock: ScanLock) -> 
                 sanitise(&root.to_string_lossy()),
                 sanitise(&e)
             );
-            cached_with(index, root, EXIT_INCOMPLETE)
+            cached_with(ctx, index, root, EXIT_INCOMPLETE)
         }
     }
 }
 
-/// Stale, and at least `floor` whatever the cache says.
-fn cached_with(index: SqliteIndex, root: &Path, floor: u8) -> ScanOutcome {
-    let exit = cached_exit(&index, root).max(floor);
+/// Stale; a nonzero `floor` is the code whatever the cache says (a scan that failed did not
+/// complete, so a stored scan's error rows, which alone answer 4, must not be reported).
+fn cached_with(ctx: &Ctx, index: SqliteIndex, root: &Path, floor: u8) -> ScanOutcome {
+    let exit = if floor == EXIT_OK {
+        cached_exit(ctx, &index, root)
+    } else {
+        floor
+    };
     outcome(index, true, exit)
 }
 
@@ -215,7 +316,7 @@ fn scan_within(ctx: &Ctx, root: PathBuf, index: SqliteIndex, wait: Duration) -> 
             break lock;
         }
         if Instant::now() >= give_up {
-            return cached(index, &root);
+            return cached(ctx, index, &root);
         }
         thread::sleep(LOCK_POLL);
     };
@@ -229,16 +330,17 @@ fn scan_within(ctx: &Ctx, root: PathBuf, index: SqliteIndex, wait: Duration) -> 
     });
     match rx.recv_timeout(give_up.saturating_duration_since(Instant::now())) {
         Ok(done) => done,
-        Err(_) => cached(open_index(ctx), &root),
+        Err(_) => cached(ctx, open_index(ctx), &root),
     }
 }
 
 // ---- one scan ----
 
-/// The scan proper, under the lock: returns the exit code (0 or 1) once the result is committed.
+/// The scan proper, under the lock: returns the exit code (0, 1 or 4) once the result is committed.
 fn run_scan(ctx: &Ctx, root: &Path, index: &mut SqliteIndex) -> Result<u8, String> {
     let scanned_at = ctx.now;
-    let discovery = rollcall_git::discover(root, &walk_options(ctx, root));
+    let mut discovery = rollcall_git::discover(root, &walk_options(ctx, root));
+    discovery.repos = drop_ignored(ctx, root, discovery.repos);
     let fanout = git_states(&discovery.repos, &git_options(ctx, root));
     let mut notes = discovery.notes.clone();
     notes.extend(fanout.notes);
@@ -268,11 +370,7 @@ fn run_scan(ctx: &Ctx, root: &Path, index: &mut SqliteIndex) -> Result<u8, Strin
         sources: sources.iter().map(|s| s.diag.clone()).collect(),
         ..doctor_counts(root, scanned_at, &repos, discovery.walk)
     };
-    let exit = if discovery.partial || repos.iter().any(has_error) {
-        EXIT_INCOMPLETE
-    } else {
-        EXIT_OK
-    };
+    let exit = exit_for(discovery.partial, repos.iter().any(has_error));
     index
         .commit_scan(
             root,
@@ -426,7 +524,12 @@ fn doctor_counts(
 
 /// Lexically normalised, with the deepest existing ancestor replaced by its realpath (§4.3:
 /// "canonicalised with realpath where they exist; otherwise lexically normalised").
-fn canonical_lenient(path: &Path) -> PathBuf {
+pub(crate) fn canonical_lenient(path: &Path) -> PathBuf {
+    // An existing path is realpath'd as written: popping `..` first would
+    // climb out of a symlink's parent instead of its target's (§4.3).
+    if let Ok(real) = fs::canonicalize(path) {
+        return real;
+    }
     let mut lexical = PathBuf::new();
     for component in path.components() {
         match component {
@@ -998,6 +1101,8 @@ mod tests {
                 ..EnvPaths::default()
             },
             cache_dir: home.join("cache"),
+            status_filters: Default::default(),
+            render: Default::default(),
         };
         World {
             _dir: dir,
@@ -1109,18 +1214,22 @@ mod tests {
         assert_eq!(rows[0].state.error, None);
     }
 
+    /// A repo whose `.git` file names a gitdir that does not exist: one `Repo.error` row.
+    fn bad_repo(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join(".git"), "gitdir: ../does-not-exist\n").unwrap();
+    }
+
     #[test]
-    fn an_error_row_exits_1() {
+    fn an_error_row_exits_4() {
         let w = world();
-        let bad = w.root.join("bad");
-        std::fs::create_dir_all(&bad).unwrap();
-        std::fs::write(bad.join(".git"), "gitdir: ../does-not-exist\n").unwrap();
+        bad_repo(&w.root.join("bad"));
         let outcome = within({
             let (ctx, root) = (w.ctx.clone(), w.root.clone());
             move || scan(&ctx, &root, ScanMode::Fresh)
         });
         assert!(!outcome.stale);
-        exit_is(&outcome, 1);
+        exit_is(&outcome, 4);
         let rows = outcome.index.repos_for_root(&w.root);
         assert!(
             rows[0]
@@ -1131,7 +1240,93 @@ mod tests {
                 .starts_with("bad gitdir: ")
         );
         // A cache answer recomputes the same code from the stored rows.
+        exit_is(&scan(&w.ctx, &w.root, ScanMode::NoScan), 4);
+        // And so does an answer given while another scanner holds the lock.
+        let _held = lock_when_free(&w);
+        let held = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        assert!(held.stale);
+        exit_is(&held, 4);
+    }
+
+    #[test]
+    fn a_worktree_error_row_alone_exits_4() {
+        let w = world();
+        let main = w.root.join("main");
+        init_repo(&main);
+        let linked = w.root.join("linked");
+        git(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+        // A linked worktree whose admin dir has no `commondir` is an untrusted worktree path.
+        let admin = std::fs::read_dir(main.join(".git/worktrees"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::remove_file(admin.join("commondir")).unwrap();
+        let outcome = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        let rows = outcome.index.repos_for_root(&w.root);
+        // Premise: the repo row is clean and only a worktree row carries an error.
+        assert!(rows.iter().all(|r| r.state.error.is_none()), "{rows:?}");
+        assert!(
+            rows.iter()
+                .flat_map(|r| &r.state.worktrees)
+                .any(|wt| wt.error.is_some()),
+            "{rows:?}"
+        );
+        exit_is(&outcome, 4);
+    }
+
+    #[test]
+    fn a_partial_walk_with_an_error_row_exits_1() {
+        let mut w = world();
+        // A chain, so the walk order is fixed: root (1 entry), `bad` (`.git` and `sub`: the error
+        // row is found), then `sub` runs the budget out.
+        let bad = w.root.join("bad");
+        bad_repo(&bad);
+        std::fs::create_dir_all(bad.join("sub")).unwrap();
+        for i in 0..10 {
+            std::fs::write(bad.join(format!("sub/f{i}")), "x").unwrap();
+        }
+        w.ctx.config.walk_budget_entries = 5;
+        let outcome = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        // Premise: the walk stopped early and the row that was found carries an error.
+        assert!(
+            outcome
+                .index
+                .last_diagnostics(&w.root)
+                .unwrap()
+                .walk
+                .budget_hit
+        );
+        assert!(outcome.index.repos_for_root(&w.root).iter().any(has_error));
+        exit_is(&outcome, 1);
         exit_is(&scan(&w.ctx, &w.root, ScanMode::NoScan), 1);
+    }
+
+    #[test]
+    fn a_failed_scan_that_falls_back_to_a_cache_with_error_rows_exits_1() {
+        let w = world();
+        bad_repo(&w.root.join("bad"));
+        let first = within({
+            let (ctx, root) = (w.ctx.clone(), w.root.clone());
+            move || scan(&ctx, &root, ScanMode::Fresh)
+        });
+        // Premise: the stored complete scan alone answers 4.
+        exit_is(&first, 4);
+        exit_is(&cached(&w.ctx, open(&w), &w.root), 4);
+        // `scan_here` answers a failed scan with this call: the scan did not complete.
+        let fallback = cached_with(&w.ctx, open(&w), &w.root, EXIT_INCOMPLETE);
+        assert!(fallback.stale);
+        exit_is(&fallback, 1);
     }
 
     #[test]
@@ -1319,6 +1514,7 @@ mod tests {
             follow_symlinks: false,
             submodules: false,
             skip_dirs: Vec::new(),
+            ignore: Vec::new(),
             budget_entries: 10_000,
             budget: Duration::from_secs(10),
         };
@@ -1693,5 +1889,159 @@ mod tests {
         assert_eq!(error_of(&out, 0), None);
         assert_eq!(error_of(&out, 1), Some("bad gitdir: x"));
         assert_eq!(error_of(&out, 2), None);
+    }
+
+    // ---- ignore ----
+
+    fn ign_repo(path: &str, submodule_of: Option<usize>) -> DiscoveredRepo {
+        DiscoveredRepo {
+            git_dir: PathBuf::from(path).join(".git"),
+            workdir: Some(path.into()),
+            kind: RepoKind::Normal,
+            contains_root: false,
+            submodule_of,
+            linked: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn with_ignore(w: &World, paths: &[&str]) -> Ctx {
+        let mut ctx = w.ctx.clone();
+        ctx.config.ignore = paths.iter().map(PathBuf::from).collect();
+        ctx
+    }
+
+    /// `a`, `p`, `p/sub` (a submodule of `p`), a bare repo `b.git`, and `app`.
+    fn ign_set() -> Vec<DiscoveredRepo> {
+        let mut bare = ign_repo("/r/b.git", None);
+        bare.workdir = None;
+        bare.git_dir = "/r/b.git".into();
+        bare.kind = RepoKind::Bare;
+        vec![
+            ign_repo("/r/a", None),
+            ign_repo("/r/p", None),
+            ign_repo("/r/p/sub", Some(1)),
+            bare,
+            ign_repo("/r/app", None),
+        ]
+    }
+
+    fn ign_paths(repos: &[DiscoveredRepo]) -> Vec<String> {
+        repos
+            .iter()
+            .map(|r| {
+                let path = r.workdir.as_ref().unwrap_or(&r.git_dir);
+                path.display().to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn drop_ignored_matches_whole_components_and_keeps_submodule_parents_straight() {
+        let w = world();
+        let drop =
+            |paths: &[&str]| drop_ignored(&with_ignore(&w, paths), Path::new("/r"), ign_set());
+        // `/r/app` is not under `/r/a`; removing `a` shifts every later index down by one.
+        let kept = drop(&["/r/a"]);
+        assert_eq!(ign_paths(&kept), ["/r/p", "/r/p/sub", "/r/b.git", "/r/app"]);
+        assert_eq!(kept[1].submodule_of, Some(0));
+        // A bare repo is matched by its git dir; a repo by its working tree, which hides its submodules.
+        assert_eq!(
+            ign_paths(&drop(&["/r/b.git"])),
+            ["/r/a", "/r/p", "/r/p/sub", "/r/app"]
+        );
+        assert_eq!(ign_paths(&drop(&["/r/p"])), ["/r/a", "/r/b.git", "/r/app"]);
+        // A submodule alone: its parent stays.
+        let kept = drop(&["/r/p/sub"]);
+        assert_eq!(ign_paths(&kept), ["/r/a", "/r/p", "/r/b.git", "/r/app"]);
+        assert!(kept.iter().all(|r| r.submodule_of.is_none()));
+        // Nothing ignored: unchanged.
+        assert_eq!(drop(&[]), ign_set());
+    }
+
+    #[test]
+    fn a_root_at_or_under_an_ignored_path_drops_every_repo_even_the_enclosing_one() {
+        let w = world();
+        let mut enclosing = ign_repo("/r", None);
+        enclosing.contains_root = true;
+        let repos = vec![enclosing, ign_repo("/r/grp/x", None)];
+        for ignore in ["/r/grp", "/r"] {
+            let ctx = with_ignore(&w, &[ignore]);
+            assert!(drop_ignored(&ctx, Path::new("/r/grp"), repos.clone()).is_empty());
+        }
+        // The root above the ignored path: only what is under it goes.
+        let ctx = with_ignore(&w, &["/r/grp"]);
+        assert_eq!(
+            ign_paths(&drop_ignored(&ctx, Path::new("/r"), repos)),
+            ["/r"]
+        );
+    }
+
+    fn ign_row(path: &str, submodules: Vec<RepoRow>) -> RepoRow {
+        RepoRow {
+            path: path.into(),
+            name: path.rsplit('/').next().unwrap().to_owned(),
+            kind: RepoKind::Normal,
+            contains_root: false,
+            state: RepoState {
+                default_branch: None,
+                has_remote: false,
+                error: None,
+                worktrees: Vec::new(),
+                pending: None,
+            },
+            submodules,
+        }
+    }
+
+    #[test]
+    fn visible_rows_filters_top_level_and_submodule_rows() {
+        let w = world();
+        let rows = || {
+            vec![
+                ign_row("/r/a", Vec::new()),
+                ign_row(
+                    "/r/p",
+                    vec![
+                        ign_row("/r/p/sub", Vec::new()),
+                        ign_row("/r/p/keep", Vec::new()),
+                    ],
+                ),
+                ign_row("/r/app2", Vec::new()),
+            ]
+        };
+        let shown = |paths: &[&str], root: &str| -> Vec<String> {
+            let mut flat = Vec::new();
+            let rows = visible_rows(&with_ignore(&w, paths), Path::new(root), rows());
+            flatten(&rows, &mut flat);
+            flat.iter().map(|r| r.path.display().to_string()).collect()
+        };
+        assert_eq!(
+            shown(&[], "/r"),
+            ["/r/a", "/r/p", "/r/p/sub", "/r/p/keep", "/r/app2"]
+        );
+        assert_eq!(
+            shown(&["/r/a"], "/r"),
+            ["/r/p", "/r/p/sub", "/r/p/keep", "/r/app2"]
+        );
+        assert_eq!(
+            shown(&["/r/p/sub"], "/r"),
+            ["/r/a", "/r/p", "/r/p/keep", "/r/app2"]
+        );
+        assert_eq!(shown(&["/r/p"], "/r"), ["/r/a", "/r/app2"]);
+        assert!(shown(&["/r"], "/r/p").is_empty());
+    }
+
+    #[test]
+    fn an_ignored_cached_error_row_does_not_make_the_cached_exit_4() {
+        let w = world();
+        init_repo(&w.root.join("good"));
+        std::fs::create_dir_all(w.root.join("bad")).unwrap();
+        std::fs::write(w.root.join("bad/.git"), "gitdir: ../nowhere\n").unwrap();
+        exit_is(&fresh(&w, &w.root), 4);
+        let ctx = with_ignore(&w, &[w.root.join("bad").to_str().unwrap()]);
+        exit_is(&cached(&ctx, open(&w), &w.root), 0);
+        exit_is(&scan(&ctx, &w.root, ScanMode::NoScan), 0);
+        exit_is(&cached(&w.ctx, open(&w), &w.root), 4);
     }
 }

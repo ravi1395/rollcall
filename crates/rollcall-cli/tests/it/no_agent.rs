@@ -1,7 +1,19 @@
 //! Gates P32 (spec 12.1 #13, non-TUI; 3.1 non-TTY): a run with no agent data, and `rollcall PATH` piped.
 use crate::discovery::{Private, json_of, own_f};
-use crate::support::{RUN_DEADLINE, Which};
+use crate::support::{RUN_DEADLINE, Which, git_path, spawn_watchdog};
 use serde_json::Value;
+
+/// Plain `status` without its leading risk line (I5c) and trailing prune hints (I5e): the repo
+/// and worktree rows alone. Asserts the risk line is there and strips only trailing hints, so a
+/// repo row named `at risk: …` or `hint: …` (§8.2 prints names as written) is never dropped.
+fn rows_only(plain: &str) -> String {
+    assert!(plain.starts_with("at risk: "), "no risk line: {plain}");
+    let mut rows: Vec<&str> = plain.split_inclusive('\n').skip(1).collect();
+    while rows.last().is_some_and(|l| l.starts_with("hint: ")) {
+        rows.pop();
+    }
+    rows.concat()
+}
 
 #[test]
 fn no_agent_dirs_leave_every_session_null() {
@@ -58,4 +70,392 @@ fn piped_rollcall_equals_status() {
     );
     assert_eq!(piped.stdout, status.stdout);
     assert_eq!(piped.code, status.code);
+    assert_eq!(piped.code, 4, "F holds error rows: exit 4 (§3.1)");
+}
+
+/// §8.2 through the real binary: one unindented line per repo, one indented line per worktree,
+/// no trailing whitespace, and worktree badges (col2) / sessions (col3) start on shared columns.
+#[test]
+fn breaker_plain_status_binary_lines_and_columns() {
+    use ratatui::text::Span;
+    use rollcall_core::text::sanitise;
+    let p = own_f();
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    let lines: Vec<&str> = plain.split_terminator('\n').collect();
+    let repos = doc["repos"].as_array().expect("repos");
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+    assert!(total > 3, "fixture too small to check alignment: {plain}");
+
+    let width = |s: &str| Span::raw(s).width();
+    let (mut col2, mut col3) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    for repo in repos {
+        let line = lines[i];
+        i += 1;
+        assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+        let name = sanitise(repo["name"].as_str().expect("name"));
+        assert!(
+            !line.starts_with(' ') && line.starts_with(name.as_str()),
+            "{line:?}"
+        );
+        // Repo col3 is "quiet Nd", an age or "—": the last cell, after the last two-space gap.
+        let s3 = match line.find("  quiet ") {
+            Some(q) => q + 2,
+            None => line.rfind("  ").expect("repo col3") + 2,
+        };
+        let c2 = line[name.len()..s3].trim();
+        if width(&name) <= 40 && width(c2) <= 40 {
+            col3.push((width(&line[..s3]), line));
+        }
+        for wt in repo["worktrees"].as_array().expect("worktrees") {
+            let line = lines[i];
+            i += 1;
+            assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+            let label = match (
+                wt["branch"].as_str(),
+                wt["detached"].as_bool(),
+                wt["head"].as_str(),
+            ) {
+                (Some(b), ..) => b.to_owned(),
+                (None, Some(true), Some(h)) => format!("(detached {})", &h[..7]),
+                _ => wt["path"].as_str().expect("path").to_owned(),
+            };
+            let c1 = format!("  {}", sanitise(&label));
+            assert!(
+                line.starts_with(c1.as_str()) && !line[2..].starts_with(' '),
+                "{line:?}"
+            );
+            let rest = &line[c1.len()..];
+            let at = c1.len() + rest.len() - rest.trim_start().len();
+            assert!(at - c1.len() >= 2, "{line:?}");
+            if width(&c1) <= 40 {
+                col2.push((width(&line[..at]), line));
+            }
+            if let Some(src) = wt["last_session"]["source"].as_str() {
+                let s3 = line[at..].find(&format!("  {src} ")).expect("session cell") + at + 2;
+                let c2 = line[at..s3].trim_end();
+                if width(&c1) <= 40 && width(c2) <= 40 {
+                    col3.push((width(&line[..s3]), line));
+                }
+            }
+        }
+    }
+    assert!(col2.len() > 1 && col3.len() > 1, "{plain}");
+    for col in [col2, col3] {
+        if let Some((first, _)) = col.first() {
+            assert!(col.iter().all(|(w, _)| w == first), "misaligned: {col:#?}");
+        }
+    }
+}
+
+/// §8.2 through the real binary, in a world of its own: quiet repos whose names are over 40 display
+/// columns leave every other line byte-identical, and their `quiet Nd` cell starts at the badge
+/// column's stop or two past the end of the name, whichever is later.
+#[test]
+fn plain_status_binary_over_cap_repo_names_shift_only_their_own_line() {
+    use ratatui::text::Span;
+    let width = |s: &str| Span::raw(s).width();
+    let p = Private::new(Which::F);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let before = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+    // The last column's stop, read off a row whose cells are all within the cap.
+    let normal = before
+        .lines()
+        .find(|l| l.starts_with("normal "))
+        .expect("normal");
+    let s3 = width(&normal[..normal.find("quiet").expect("quiet cell")]);
+
+    // 41 ASCII columns (rejoins the stop), 60 (past the stop), 21 x 2-column chars = 42 columns
+    // (21 chars, 63 bytes: only a display-width measure puts it over the cap).
+    let names = ["a".repeat(41), "b".repeat(60), "漢".repeat(21)];
+    assert!(
+        s3 > 41 + 2 && s3 < 60 + 2 && s3 > 42 + 2,
+        "stop {s3}: {before}"
+    );
+    for name in &names {
+        let dir = p.w.root.join(name);
+        std::fs::create_dir(&dir).expect("repo dir");
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let mut cmd = p.w.sb.command(git_path());
+            cmd.current_dir(&dir)
+                .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+                .args(&args);
+            let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+            assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+        }
+    }
+    let after = p.run(&["status", root], &[], RUN_DEADLINE).stdout;
+
+    let lines: Vec<&str> = after.lines().collect();
+    let (mut others, mut seen, mut i) = (Vec::new(), 0, 0);
+    while i < lines.len() {
+        let line = lines[i];
+        assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+        match names.iter().find(|n| line.starts_with(n.as_str())) {
+            Some(name) => {
+                seen += 1;
+                let cell = &line[name.len()..];
+                let at = width(name) + cell.len() - cell.trim_start().len();
+                assert!(cell.trim_start().starts_with("quiet "), "{line:?}");
+                assert_eq!(at, s3.max(width(name) + 2), "{line:?}");
+                assert!(lines[i + 1].starts_with("  main"), "{after}");
+                i += 2;
+            }
+            None => {
+                others.push(line);
+                i += 1;
+            }
+        }
+    }
+    assert_eq!(seen, names.len(), "{after}");
+    let before: Vec<&str> = before.lines().collect();
+    assert_eq!(others, before, "an over-cap name moved other rows");
+}
+
+/// §8.2 AC6 and §9 U+2028/U+2029 through the real binary: a repo whose directory name sanitises
+/// to empty is shown by its sanitised path on an unindented line; a separator in a repo or branch
+/// name is a space in plain output and exact in `--json`.
+#[test]
+fn breaker2_binary_empty_name_fallback_and_separators() {
+    use rollcall_core::text::sanitise;
+    let p = Private::new(Which::FClean);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    for (name, branch) in [("\u{200b}", "main"), ("z\u{2028}w", "b\u{2029}c")] {
+        let dir = p.w.root.join(name);
+        std::fs::create_dir(&dir).expect("repo dir");
+        for args in [
+            vec!["init", "-q", "-b", branch],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let mut cmd = p.w.sb.command(git_path());
+            cmd.current_dir(&dir)
+                .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+                .args(&args);
+            let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+            assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+        }
+    }
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    assert!(
+        !plain.contains(['\u{2028}', '\u{2029}', '\u{200b}']),
+        "{plain:?}"
+    );
+    let repos = doc["repos"].as_array().expect("repos");
+    let lines: Vec<&str> = plain.lines().collect();
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+    let unindented = lines.iter().filter(|l| !l.starts_with(' ')).count();
+    assert_eq!(unindented, repos.len(), "{plain}");
+
+    let find = |name: &str| {
+        repos
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap_or_else(|| panic!("no repo named {name:?} in --json"))
+    };
+    let blank = find("\u{200b}");
+    let shown = sanitise(blank["path"].as_str().expect("path"));
+    assert!(shown.starts_with('/'), "{shown:?}");
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&format!("{shown}  ")))
+        .unwrap_or_else(|| panic!("no line for {shown:?}: {plain}"));
+    assert!(lines[at + 1].starts_with("  main"), "{plain}");
+
+    let sep = find("z\u{2028}w");
+    assert_eq!(sep["worktrees"][0]["branch"], "b\u{2029}c", "{sep}");
+    assert!(sep["path"].as_str().expect("path").ends_with("z\u{2028}w"));
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("z w  "))
+        .unwrap_or_else(|| panic!("no line for \"z w\": {plain}"));
+    assert!(lines[at + 1].starts_with("  b c  "), "{plain}");
+}
+
+/// `git init -b <branch>` plus one empty commit in `parent/<name>`.
+fn breaker3_init_repo(parent: &std::path::Path, p: &Private, name: &str, branch: &str) {
+    let dir = parent.join(name);
+    std::fs::create_dir(&dir).expect("repo dir");
+    for args in [
+        vec!["init", "-q", "-b", branch],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let mut cmd = p.w.sb.command(git_path());
+        cmd.current_dir(&dir)
+            .env("GIT_AUTHOR_DATE", "2026-09-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+            .args(&args);
+        let out = spawn_watchdog(cmd, RUN_DEADLINE).expect("git finishes");
+        assert!(out.status.success(), "git {args:?} failed in {dir:?}");
+    }
+}
+
+/// §8.2 rev 15 through the real binary (DC1-DC3): repo directories and branches that sanitise to
+/// whitespace show the sanitised path (repo unindented, worktree after the two-space indent); a
+/// branch with visible text keeps it; a name ending in Unicode whitespace has its last cell at
+/// max(S3, E + 2) with E excluding that whitespace; `--json` keeps every name and branch exact.
+#[test]
+fn breaker3_binary_blank_names_and_branches_fall_back_and_trailing_spaces_are_not_counted() {
+    use ratatui::text::Span;
+    use rollcall_core::text::sanitise;
+    let width = |s: &str| Span::raw(s).width();
+    let p = Private::new(Which::FClean);
+    let root = p.w.root.to_str().expect("utf-8 root");
+    let blank_names = [
+        " ",
+        "\t",
+        "\n",
+        "\u{a0}",
+        "\u{3000}",
+        " \u{200b} ",
+        "\u{1680}\u{2028}",
+        "\u{205f}\u{202f}",
+    ];
+    let blank_branches = ["\u{a0}", "\u{3000}", "\u{2028}\u{2029}", "\u{2000}\u{200b}"];
+    let x41 = "x".repeat(41);
+    let trailing = [format!("{x41}\u{3000}"), "ab\u{3000}\u{a0}".to_owned()];
+    // A directory name wider than the 40-column cap puts every blank-name fallback path over the
+    // cap on any OS: Linux's `/tmp/.tmpXXXXXX/root` alone is about 22 columns.
+    let pad = p.w.root.join("p".repeat(41));
+    std::fs::create_dir(&pad).expect("pad dir");
+    for name in blank_names {
+        breaker3_init_repo(&pad, &p, name, "main");
+    }
+    for (i, branch) in blank_branches.iter().enumerate() {
+        breaker3_init_repo(&p.w.root, &p, &format!("blankbranch{i}"), branch);
+    }
+    breaker3_init_repo(&p.w.root, &p, "featbranch", "\u{2028}feat");
+    for name in &trailing {
+        breaker3_init_repo(&p.w.root, &p, name, "main");
+    }
+
+    let plain = rows_only(&p.run(&["status", root], &[], RUN_DEADLINE).stdout);
+    let (_, doc) = json_of(p.run(&["status", "--json", root], &[], RUN_DEADLINE));
+    let repos = doc["repos"].as_array().expect("repos");
+    let lines: Vec<&str> = plain.split_terminator('\n').collect();
+    let total: usize = repos
+        .iter()
+        .map(|r| 1 + r["worktrees"].as_array().expect("worktrees").len())
+        .sum();
+    assert_eq!(lines.len(), total, "{plain}");
+
+    // S3 from an untouched in-cap repo line: where its last cell ("quiet …" or an age) starts.
+    let last_cell = |line: &str| match line.find("  quiet ") {
+        Some(q) => q + 2,
+        None => line.rfind("  ").expect("last cell") + 2,
+    };
+    let mut s3 = None;
+    let (mut seen_blank, mut seen_branch, mut seen_trailing) = (0, 0, 0);
+    let mut i = 0;
+    for repo in repos {
+        let (line, wts) = (lines[i], &lines[i + 1..]);
+        i += 1 + repo["worktrees"].as_array().expect("worktrees").len();
+        assert_eq!(line, line.trim_end(), "trailing whitespace: {line:?}");
+        let name = repo["name"].as_str().expect("name");
+        let path = repo["path"].as_str().expect("path");
+        let branch = repo["worktrees"][0]["branch"].as_str();
+        if blank_names.contains(&name) {
+            seen_blank += 1;
+            assert!(path.ends_with(&format!("/{name}")), "--json path {path:?}");
+            let shown = sanitise(path);
+            assert!(shown.starts_with('/'), "{shown:?}");
+            assert!(
+                line.starts_with(shown.trim_end()),
+                "{name:?}: {line:?}\n{plain}"
+            );
+            assert!(!line.starts_with(char::is_whitespace), "{line:?}");
+            assert!(
+                width(shown.trim_end()) > 40,
+                "{name:?}: premise, fallback path must be over the cap: {shown:?}"
+            );
+            let at = last_cell(line);
+            assert_eq!(
+                at,
+                shown.trim_end().len() + 2,
+                "{name:?}: last cell not at E + 2 of the over-cap path: {line:?}"
+            );
+            assert_eq!(branch, Some("main"), "{repo}");
+            assert!(wts[0].starts_with("  main  "), "{wts:?}");
+        } else if let Some(b) = branch.filter(|b| blank_branches.contains(b)) {
+            seen_branch += 1;
+            let want = format!("  {}", sanitise(path));
+            assert!(
+                wts[0].starts_with(want.trim_end()) && !wts[0][2..].starts_with(' '),
+                "{b:?}: {:?}\n{plain}",
+                wts[0]
+            );
+            assert!(line.starts_with("blankbranch"), "{line:?}");
+        } else if name == "featbranch" {
+            assert_eq!(branch, Some("\u{2028}feat"), "{repo}");
+            assert!(wts[0].starts_with("   feat  "), "{:?}", wts[0]);
+        } else if trailing.iter().any(|t| t == name) {
+            seen_trailing += 1;
+            let text = name.trim_end();
+            assert!(line.starts_with(&format!("{text}  ")), "{line:?}");
+            let at = width(&line[..last_cell(line)]);
+            let s3 = s3.expect("an in-cap repo sorted before the trailing-space repos");
+            assert_eq!(
+                at,
+                usize::max(s3, width(text) + 2),
+                "{name:?}: {line:?}\n{plain}"
+            );
+        } else if width(&sanitise(name)) <= 40 && !line.starts_with('/') {
+            let at = width(&line[..last_cell(line)]);
+            assert_eq!(
+                *s3.get_or_insert(at),
+                at,
+                "in-cap rows misaligned:\n{plain}"
+            );
+        }
+    }
+    assert_eq!(
+        (seen_blank, seen_branch, seen_trailing),
+        (blank_names.len(), blank_branches.len(), trailing.len()),
+        "{plain}"
+    );
 }

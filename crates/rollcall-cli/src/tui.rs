@@ -723,6 +723,18 @@ mod tests {
     }
 
     #[test]
+    fn the_tui_shows_session_titles_undecoded() {
+        let mut m = with_sessions();
+        for w in &mut m.doc.repos.iter_mut().flat_map(|r| r.worktrees.iter_mut()) {
+            if let Some(s) = &mut w.last_session {
+                s.title = Some("&lt;command-name&gt;".to_owned());
+            }
+        }
+        let shown = text(&render(&m));
+        assert!(shown.contains("&lt;command-name&gt;"), "{shown}");
+    }
+
+    #[test]
     fn snapshot_with_sessions() {
         insta::assert_snapshot!(text(&render(&with_sessions())));
     }

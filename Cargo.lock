@@ -2418,6 +2418,7 @@ dependencies = [
  "rollcall-sessions",
  "rollcall-store",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "shell-words",

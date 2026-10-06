@@ -1,12 +1,14 @@
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
+use std::num::{IntErrorKind, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::config::{self, Ctx, EnvPaths};
+use crate::output::Render;
 use crate::resume::Shell;
 use crate::scan::{self, ScanMode};
 use crate::{app, mcp, output, resume};
@@ -53,6 +55,41 @@ pub struct CommonFlags {
     pub no_scan: bool,
 }
 
+/// §8.2: the repo filters of plain `status` (accepted and ignored with `--json`).
+/// §8.2 `--color`: when plain `status` paints its badges.
+#[derive(ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ColorMode {
+    /// Only when stdout is a terminal and `NO_COLOR` is unset or empty.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatusFilters {
+    /// Only repos with a dirty, untracked or unpushed worktree.
+    // A repeated filter or `--color` takes its last value (§3.1); other flags stay single.
+    #[arg(long, overrides_with = "dirty")]
+    pub dirty: bool,
+    /// Only repos with a stale worktree.
+    #[arg(long, overrides_with = "stale")]
+    pub stale: bool,
+    /// Only the first N repos, after the other filters.
+    #[arg(long, value_name = "N", value_parser = parse_top, overrides_with = "top")]
+    pub top: Option<NonZeroUsize>,
+}
+
+/// `--top N` past the largest count keeps every repo; `0`, a minus sign or a non-number is an
+/// error (a leading `+` is allowed).
+fn parse_top(s: &str) -> Result<NonZeroUsize, String> {
+    match s.parse::<NonZeroUsize>() {
+        Ok(n) => Ok(n),
+        Err(e) if *e.kind() == IntErrorKind::PosOverflow => Ok(NonZeroUsize::MAX),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct RootArgs {
     /// Root directory to scan [default: the current directory].
@@ -78,6 +115,11 @@ pub enum Command {
         /// Print the StatusDoc as JSON.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        filters: StatusFilters,
+        /// Colour the badges (accepted and ignored with `--json`).
+        #[arg(long, value_enum, default_value_t, overrides_with = "color")]
+        color: ColorMode,
     },
     /// Scan and print one summary line to stderr.
     Scan {
@@ -160,16 +202,28 @@ where
 fn dispatch(cli: Cli, env: EnvPaths, stdout_is_tty: bool) -> ExitCode {
     match dispatch_target(stdout_is_tty, cli.command.as_ref()) {
         Target::Tui => with_ctx(&cli.root.flags, env, |ctx| app::run(ctx, &cli.root.root())),
-        Target::Status => run_status(&cli.root, false, env),
-        Target::Subcommand(command) => run_command(command, env),
+        Target::Status => run_status(
+            &cli.root,
+            false,
+            &StatusFilters::default(),
+            ColorMode::Auto,
+            stdout_is_tty,
+            env,
+        ),
+        Target::Subcommand(command) => run_command(command, env, stdout_is_tty),
     }
 }
 
-fn run_command(command: &Command, env: EnvPaths) -> ExitCode {
+fn run_command(command: &Command, env: EnvPaths, stdout_is_tty: bool) -> ExitCode {
     match command {
         // Before any config or context load: the worker reads nothing but its stdin.
         Command::Worker => scan::worker_main(),
-        Command::Status { root, json } => run_status(root, *json, env),
+        Command::Status {
+            root,
+            json,
+            filters,
+            color,
+        } => run_status(root, *json, filters, *color, stdout_is_tty, env),
         Command::Scan { root } => with_ctx(&root.flags, env, |ctx| {
             let started = Instant::now();
             let outcome = scan::scan(&ctx, &root.root(), scan_mode(&root.flags));
@@ -239,9 +293,31 @@ fn run_command(command: &Command, env: EnvPaths) -> ExitCode {
     }
 }
 
-fn run_status(root: &RootArgs, json: bool, env: EnvPaths) -> ExitCode {
-    with_ctx(&root.flags, env, |ctx| {
+fn run_status(
+    root: &RootArgs,
+    json: bool,
+    filters: &StatusFilters,
+    color: ColorMode,
+    stdout_is_tty: bool,
+    env: EnvPaths,
+) -> ExitCode {
+    with_ctx(&root.flags, env, |mut ctx| {
+        ctx.status_filters = filters.clone();
         let outcome = scan::scan(&ctx, &root.root(), scan_mode(&root.flags));
+        ctx.render = Render {
+            color: match color {
+                ColorMode::Always => true,
+                ColorMode::Never => false,
+                ColorMode::Auto => stdout_is_tty && !ctx.env.no_color,
+            },
+            // Read after the scan, which outlasts a resize, from stdout's own terminal (§8.2).
+            width: if stdout_is_tty {
+                rustix::termios::tcgetwinsize(std::io::stdout())
+                    .map_or(0, |ws| usize::from(ws.ws_col))
+            } else {
+                0
+            },
+        };
         output::status(
             &ctx,
             &outcome,
@@ -334,7 +410,7 @@ mod tests {
             "some/dir",
         ])
         .unwrap();
-        let Some(Command::Status { root, json }) = cli.command else {
+        let Some(Command::Status { root, json, .. }) = cli.command else {
             panic!("expected status");
         };
         assert!(json);
@@ -350,6 +426,29 @@ mod tests {
                 no_scan: true,
             }
         );
+    }
+
+    #[test]
+    fn color_defaults_to_auto_takes_three_values_and_rejects_the_rest() {
+        let color_of = |args: &[&str]| match parse(args).unwrap().command {
+            Some(Command::Status { color, .. }) => color,
+            other => panic!("expected status: {other:?}"),
+        };
+        assert_eq!(color_of(&["status"]), ColorMode::Auto);
+        assert_eq!(
+            color_of(&["status", "--color", "always"]),
+            ColorMode::Always
+        );
+        assert_eq!(color_of(&["status", "--color", "never"]), ColorMode::Never);
+        assert_eq!(
+            color_of(&["status", "--json", "--color=auto"]),
+            ColorMode::Auto
+        );
+        let e = parse(&["status", "--color", "bogus"]).expect_err("must fail");
+        assert_eq!(e.kind(), ErrorKind::InvalidValue);
+        assert_eq!(e.exit_code(), 2);
+        // Not a flag of the other commands.
+        assert!(parse(&["scan", "--color", "always"]).is_err());
     }
 
     #[test]

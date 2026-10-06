@@ -122,6 +122,7 @@ mod tests {
             missing: false,
             merged: false,
             error: None,
+            locked: false,
         }
     }
 

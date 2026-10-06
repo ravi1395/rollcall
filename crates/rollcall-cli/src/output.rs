@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
@@ -5,7 +7,10 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use rollcall_core::text::{render_text, sanitise, shell_quote};
+use ratatui::text::Span;
+use rollcall_core::text::{
+    decode_entities, filter_prompt_block, graphemes, render_text, sanitise, shell_quote,
+};
 use rollcall_core::{
     Backing, DoctorDoc, Index, Repo, RepoKind, RepoRow, SCHEMA_VERSION, Session, SourceKind,
     StaleReason, StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
@@ -13,6 +18,7 @@ use rollcall_core::{
 use rollcall_sessions::codex_db;
 use rollcall_sessions::{Claude, Codex, SessionSource};
 
+use crate::cli::StatusFilters;
 use crate::config::Ctx;
 use crate::scan::{self, ScanOutcome};
 
@@ -28,6 +34,15 @@ pub struct TextPolicy {
     pub prompts: bool,
     /// `redact_prompts`: hide all title and prompt text; overrides `prompts`.
     pub redact: bool,
+}
+
+/// What plain `status` adds for a terminal (§8.2); `Default` is a pipe: plain text, every line whole.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Render {
+    /// Paint badges with SGR sequences.
+    pub color: bool,
+    /// Terminal width in columns; 0 when stdout is not a terminal or its width is unreadable.
+    pub width: usize,
 }
 
 /// What `R` and the `rc` function resume.
@@ -67,8 +82,39 @@ pub(crate) fn render_with(
     policy: TextPolicy,
     redact_emails: bool,
 ) -> rollcall_core::SessionOut {
-    let scrub = |t: String| render_text(&t, redact_emails);
-    let show = |r: &TextRef| source.resolve(r).map(scrub);
+    render_impl(session, source, policy, redact_emails, false)
+}
+
+/// `decode`: plain `status` decodes HTML entities first, so the pipeline is decode → sanitise →
+/// scrub → truncate (§8.2); every other consumer keeps the text as logged.
+fn render_impl(
+    session: &Session,
+    source: &dyn SessionSource,
+    policy: TextPolicy,
+    redact_emails: bool,
+    decode: bool,
+) -> rollcall_core::SessionOut {
+    let scrub = |t: String| {
+        let t = if decode { decode_entities(&t) } else { t };
+        render_text(&t, redact_emails)
+    };
+    // §5.0 again on decoded prompt text (author decision 2026-10-06): an entity-encoded
+    // `<system-reminder>` is dropped or cut like a raw one. Titles of other kinds are not prompts.
+    let prompt = |t: String| {
+        let t = if decode {
+            filter_prompt_block(&decode_entities(&t))?
+        } else {
+            t
+        };
+        Some(render_text(&t, redact_emails))
+    };
+    let text_of = |t: String, kind: TitleKind| {
+        if kind == TitleKind::Prompt {
+            prompt(t)
+        } else {
+            Some(scrub(t))
+        }
+    };
     let title = session
         .title
         .as_ref()
@@ -82,14 +128,19 @@ pub(crate) fn render_with(
                 TextRef::CodexThread { .. },
             ) => codex_db::resolve_thread_title(db_path, thread_id)
                 .filter(|(_, now)| now == kind)
-                .map(|(text, _)| (scrub(text), *kind)),
-            _ => show(r).map(|text| (text, *kind)),
+                .and_then(|(text, _)| text_of(text, *kind))
+                .map(|text| (text, *kind)),
+            _ => source
+                .resolve(r)
+                .and_then(|text| text_of(text, *kind))
+                .map(|text| (text, *kind)),
         });
     let last_prompt = session
         .last_prompt
         .as_ref()
         .filter(|_| policy.prompts && !policy.redact)
-        .and_then(show);
+        .and_then(|r| source.resolve(r))
+        .and_then(prompt);
     let (title, title_kind) = match title {
         Some((text, kind)) => (Some(text), Some(kind)),
         None => (None, None),
@@ -123,13 +174,22 @@ struct Builder<'a> {
     policy: TextPolicy,
     submodules: bool,
     sources: [Box<dyn SessionSource>; 2],
+    decode: bool,
+    /// `(Repo.path, Worktree.path)` of the worktrees whose admin dir is locked, per repo since
+    /// two repos may register the same path: the §7 documents do not carry it, the hint needs it.
+    locked: RefCell<HashSet<(String, String)>>,
 }
 
 impl Builder<'_> {
     fn repo(&self, row: &RepoRow) -> Repo {
         let mut worktrees = Vec::new();
         let mut ended = Vec::new();
+        let path = row.path.to_string_lossy().into_owned();
         for state in &row.state.worktrees {
+            if state.locked {
+                let wt = state.path.to_string_lossy().into_owned();
+                self.locked.borrow_mut().insert((path.clone(), wt));
+            }
             let sessions = self.index.sessions_for(self.root, &state.path);
             ended.extend(sessions.iter().map(|s| s.ended_at));
             worktrees.push(self.worktree(state, &sessions));
@@ -144,7 +204,7 @@ impl Builder<'_> {
         );
         Repo {
             name: row.name.clone(),
-            path: row.path.to_string_lossy().into_owned(),
+            path,
             kind: row.kind,
             contains_root: row.contains_root,
             default_branch: row.state.default_branch.clone(),
@@ -189,11 +249,12 @@ impl Builder<'_> {
             .iter()
             .find(|s| s.kind() == session.source)
             .expect("one source per SourceKind");
-        render_with(
+        render_impl(
             session,
             source.as_ref(),
             self.policy,
             self.ctx.config.redact_emails,
+            self.decode,
         )
     }
 }
@@ -258,6 +319,17 @@ pub fn build_status(
     stale: bool,
     policy: TextPolicy,
 ) -> StatusDoc {
+    build_status_with(ctx, index, root, stale, policy, false).0
+}
+
+fn build_status_with(
+    ctx: &Ctx,
+    index: &dyn Index,
+    root: &Path,
+    stale: bool,
+    policy: TextPolicy,
+    decode: bool,
+) -> (StatusDoc, HashSet<(String, String)>) {
     // The cache is keyed by the realpath of the root (scan.rs).
     let root = scan::canonical_root(root);
     let scanned_submodules = index.scanned_submodules(&root);
@@ -268,14 +340,15 @@ pub fn build_status(
         policy,
         submodules: scanned_submodules == Some(true),
         sources: log_sources(ctx),
+        decode,
+        locked: RefCell::default(),
     };
-    let mut repos: Vec<Repo> = index
-        .repos_for_root(&root)
+    let mut repos: Vec<Repo> = scan::visible_rows(ctx, &root, index.repos_for_root(&root))
         .iter()
         .map(|row| builder.repo(row))
         .collect();
     rank::sort_repos(&mut repos);
-    StatusDoc {
+    let doc = StatusDoc {
         schema_version: SCHEMA_VERSION,
         root: root.to_string_lossy().into_owned(),
         scanned_at: index.scanned_at(&root),
@@ -285,7 +358,8 @@ pub fn build_status(
             .last_diagnostics(&root)
             .is_some_and(|d| d.walk.budget_hit),
         repos,
-    }
+    };
+    (doc, builder.locked.into_inner())
 }
 
 // ---- commands ----
@@ -319,28 +393,209 @@ pub fn status(
         prompts: true,
         redact: ctx.config.redact_prompts,
     };
-    let doc = build_status(ctx, &outcome.index, root, outcome.stale, policy);
+    let (mut doc, locked) =
+        build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
     let text = if json {
         json_line(&doc)
     } else {
-        plain_status(&doc, ctx.now)
+        // The exit code stays that of the whole scan (§3.1), not of the rows kept.
+        filter_repos(&mut doc.repos, &ctx.status_filters);
+        plain_status(&doc, &locked, ctx.now, ctx.render)
     };
     finish(out, &text, outcome.exit)
 }
 
-/// §8.2: a line per repo, then an indented line per worktree. Every text that came from a repo
-/// or a log is sanitised; JSON keeps it exact.
-fn plain_status(doc: &StatusDoc, now: Timestamp) -> String {
-    let mut text = String::new();
+/// §8.2: `--dirty` / `--stale` keep the repos where any worktree matches (either flag: OR), then
+/// `--top N` keeps the first N of the §3.3 order. A kept repo keeps all its worktrees.
+fn filter_repos(repos: &mut Vec<Repo>, f: &StatusFilters) {
+    if f.dirty || f.stale {
+        repos.retain(|r| {
+            r.worktrees.iter().any(|w| {
+                let dirty = w.dirty_count + w.untracked_count > 0 || w.unpushed > Some(0);
+                (f.dirty && dirty) || (f.stale && w.stale_reason.is_some())
+            })
+        });
+    }
+    if let Some(n) = f.top {
+        repos.truncate(n.get());
+    }
+}
+
+/// §8.2: the risk line (if any), a line per repo, then an indented line per worktree, columns
+/// aligned like `ls`. Every text that came from a repo or a log is sanitised; JSON keeps it exact.
+fn plain_status(
+    doc: &StatusDoc,
+    locked: &HashSet<(String, String)>,
+    now: Timestamp,
+    render: Render,
+) -> String {
+    let Render { color, width } = render;
+    let mut rows = Vec::new();
     for repo in &doc.repos {
-        text.push_str(&repo_line(repo, now));
-        text.push('\n');
-        for worktree in &repo.worktrees {
-            text.push_str(&worktree_line(worktree, now));
-            text.push('\n');
+        rows.push(repo_cells(repo, now, color));
+        rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now, color)));
+    }
+    // The risk line and the hints are not rows: they stay out of the column widths.
+    let text = risk_line(&doc.repos, now, color) + &align(&rows) + &prune_hints(&doc.repos, locked);
+    if width == 0 {
+        return text;
+    }
+    text.lines()
+        .map(|line| truncate_cols(line, width, color) + "\n")
+        .collect()
+}
+
+/// §8.2: after every row, `hint: <N> missing worktree(s) — run 'git worktree prune' in <path>`
+/// per repo with a missing worktree, in the order given. A locked one is not counted: `git
+/// worktree prune` skips it. rollcall only suggests the command.
+fn prune_hints(repos: &[Repo], locked: &HashSet<(String, String)>) -> String {
+    let mut text = String::new();
+    for repo in repos {
+        let missing = (repo.worktrees.iter())
+            .filter(|w| w.stale_reason == Some(StaleReason::Missing))
+            .filter(|w| !locked.contains(&(repo.path.clone(), w.path.clone())))
+            .count();
+        if missing > 0 {
+            let s = if missing == 1 { "" } else { "s" };
+            let path = sanitise(&repo.path);
+            text += &format!(
+                "hint: {missing} missing worktree{s} — run 'git worktree prune' in {path}\n"
+            );
         }
     }
     text
+}
+
+/// Most repos the risk line names before it counts the rest.
+const RISK_MAX: usize = 5;
+
+/// §8.2: `at risk: <name> <badges>; …` for the repos with attention 2 or 3 (an error repo has 4)
+/// in the order given, which is §3.3 order, then `; +N more`. Empty when no repo qualifies.
+fn risk_line(repos: &[Repo], now: Timestamp, color: bool) -> String {
+    let mut risky = repos.iter().filter(|r| matches!(r.attention, 2 | 3));
+    let mut entries: Vec<String> = risky
+        .by_ref()
+        .take(RISK_MAX)
+        .map(|r| {
+            let [name, badges, _] = repo_cells(r, now, color);
+            format!("{name} {badges}")
+        })
+        .collect();
+    if entries.is_empty() {
+        return String::new();
+    }
+    match risky.count() {
+        0 => {}
+        more => entries.push(format!("+{more} more")),
+    }
+    format!("at risk: {}\n", entries.join("; "))
+}
+
+/// Widest a column may grow from one cell; wider cells overflow on their own row.
+const COL_CAP: usize = 40;
+
+/// Render `[name, badges, last]` rows on tab stops: the badge column starts 2 past the widest
+/// in-cap name, the last column 2 past the widest in-cap badge cell after that (display columns).
+/// A non-empty cell starts at its stop or 2 past the text before it, whichever is later, so an
+/// over-cap cell shifts only its own line; an empty cell adds nothing.
+fn align(rows: &[[String; 3]]) -> String {
+    let width = cols;
+    let widest = |col: usize| {
+        let fits = rows
+            .iter()
+            .map(|r| width(&r[col]))
+            .filter(|&w| w <= COL_CAP);
+        fits.max().unwrap_or(0)
+    };
+    let stop2 = widest(0) + 2;
+    let stops = [stop2, stop2 + widest(1) + 2];
+    let mut text = String::new();
+    for row in rows {
+        let mut line = row[0].clone();
+        for (cell, stop) in row[1..].iter().zip(stops) {
+            if cell.is_empty() {
+                continue;
+            }
+            line.truncate(line.trim_end().len());
+            let end = width(&line);
+            line.push_str(&" ".repeat(stop.max(end + 2) - end));
+            line.push_str(cell);
+        }
+        text.push_str(line.trim_end());
+        text.push('\n');
+    }
+    text
+}
+
+const RESET: &str = "\x1b[0m";
+// The TUI palette (`tui.rs`: YELLOW, BLUE, RED, DIM) as SGR sequences of the named ANSI colours.
+const YELLOW: &str = "\x1b[33m";
+const BLUE: &str = "\x1b[34m";
+const RED: &str = "\x1b[31m";
+const DIM: &str = "\x1b[2m";
+
+/// `text` in the SGR `style` when `color` is on. Trailing whitespace stays outside the colour, so
+/// trimming a line behaves the same with and without it.
+fn paint(text: impl Into<String>, style: &str, color: bool) -> String {
+    let text = text.into();
+    if !color {
+        return text;
+    }
+    let body = text.trim_end();
+    format!("{style}{body}{RESET}{}", &text[body.len()..])
+}
+
+/// Splits `text` into SGR sequences (`ESC [ … m`, flagged `true`) and the text between them. The
+/// only escapes in plain output are ours: `sanitise` removes every other ESC.
+fn sgr_runs(mut text: &str) -> impl Iterator<Item = (bool, &str)> {
+    std::iter::from_fn(move || {
+        let sgr = text.starts_with("\x1b[");
+        let end = if sgr {
+            text.find('m').map_or(text.len(), |i| i + 1)
+        } else {
+            let mut chars = text.char_indices().skip(1);
+            chars
+                .find(|&(_, c)| c == '\x1b')
+                .map_or(text.len(), |(i, _)| i)
+        };
+        let (run, rest) = text.split_at(end);
+        text = rest;
+        (!run.is_empty()).then_some((sgr, run))
+    })
+}
+
+/// Display columns of `text`, not counting SGR sequences.
+fn cols(text: &str) -> usize {
+    let shown = sgr_runs(text).filter(|&(sgr, _)| !sgr);
+    shown.map(|(_, run)| Span::raw(run).width()).sum()
+}
+
+/// §8.2: `line` cut at a grapheme boundary so that it plus a trailing `…` fits `width` columns,
+/// with a reset after the `…` when `color` is on. A `width` of 0 (none readable) cuts nothing.
+fn truncate_cols(line: &str, width: usize, color: bool) -> String {
+    if width == 0 || cols(line) <= width {
+        return line.to_owned();
+    }
+    let (mut out, mut used) = (String::new(), 0);
+    'runs: for (sgr, run) in sgr_runs(line) {
+        if sgr {
+            out.push_str(run);
+            continue;
+        }
+        for grapheme in graphemes(run) {
+            let w = Span::raw(grapheme).width();
+            if used + w >= width {
+                break 'runs;
+            }
+            out.push_str(grapheme);
+            used += w;
+        }
+    }
+    out.push('…');
+    if color {
+        out.push_str(RESET);
+    }
+    out
 }
 
 fn age(now: Timestamp, then: Timestamp) -> String {
@@ -353,13 +608,13 @@ fn age(now: Timestamp, then: Timestamp) -> String {
     }
 }
 
-fn count_badges(dirty: u32, unpushed: u32) -> Vec<String> {
+fn count_badges(dirty: u32, unpushed: u32, color: bool) -> Vec<String> {
     let mut badges = Vec::new();
     if dirty > 0 {
-        badges.push(format!("●{dirty}"));
+        badges.push(paint(format!("●{dirty}"), BLUE, color));
     }
     if unpushed > 0 {
-        badges.push(format!("↑{unpushed}"));
+        badges.push(paint(format!("↑{unpushed}"), YELLOW, color));
     }
     badges
 }
@@ -369,38 +624,43 @@ fn no_upstream(w: &Worktree) -> bool {
     w.upstream.is_none() && w.unpushed.is_some()
 }
 
-fn repo_line(repo: &Repo, now: Timestamp) -> String {
+/// `[name, badges, last activity]` of a repo row.
+fn repo_cells(repo: &Repo, now: Timestamp, color: bool) -> [String; 3] {
     let wts = &repo.worktrees;
     let mut badges = Vec::new();
     if let Some(error) = &repo.error {
-        badges.push(format!("error: {}", sanitise(error)));
+        badges.push(paint(format!("error: {}", sanitise(error)), RED, color));
     }
     match repo.kind {
-        RepoKind::Nested => badges.push("nested".to_owned()),
-        RepoKind::Bare => badges.push("bare".to_owned()),
-        RepoKind::ExternalMain => badges.push("ext".to_owned()),
+        RepoKind::Nested => badges.push(paint("nested", DIM, color)),
+        RepoKind::Bare => badges.push(paint("bare", DIM, color)),
+        RepoKind::ExternalMain => badges.push(paint("ext", DIM, color)),
         RepoKind::Normal => {}
     }
     badges.extend(count_badges(
         wts.iter().map(|w| w.dirty_count + w.untracked_count).sum(),
         wts.iter().filter_map(|w| w.unpushed).sum(),
+        color,
     ));
     let stale = wts.iter().filter(|w| w.stale_reason.is_some()).count();
     if stale > 0 {
-        badges.push(format!("{stale} stale"));
+        badges.push(paint(format!("{stale} stale"), DIM, color));
     }
     if wts.iter().any(no_upstream) {
-        badges.push("no-upstream".to_owned());
+        badges.push(paint("no-upstream", DIM, color));
     }
-    if repo.attention == 0 {
-        badges.push(rank::quiet(repo.last_activity_at, now));
+    let activity = if repo.attention == 0 {
+        paint(rank::quiet(repo.last_activity_at, now), DIM, color)
     } else {
-        let activity = repo
-            .last_activity_at
-            .map_or("—".to_owned(), |t| age(now, t));
-        badges.push(activity);
-    }
-    format!("{}  {}", sanitise(&repo.name), badges.join(" "))
+        repo.last_activity_at
+            .map_or("—".to_owned(), |t| age(now, t))
+    };
+    // A repo line never starts with whitespace, so it can't pass for a worktree line.
+    let name = match sanitise(&repo.name).trim_start() {
+        "" => sanitise(&repo.path),
+        name => name.to_owned(),
+    };
+    [name, badges.join(" "), activity]
 }
 
 fn worktree_label(w: &Worktree) -> String {
@@ -411,33 +671,40 @@ fn worktree_label(w: &Worktree) -> String {
         }
         _ => w.path.clone(),
     };
-    sanitise(&label)
+    match sanitise(&label) {
+        label if label.trim().is_empty() => sanitise(&w.path),
+        label => label,
+    }
 }
 
-fn state_badges(w: &Worktree) -> Vec<String> {
+fn state_badges(w: &Worktree, color: bool) -> Vec<String> {
     if let Some(error) = &w.error {
-        return vec![format!("error: {}", sanitise(error))];
+        return vec![paint(format!("error: {}", sanitise(error)), RED, color)];
     }
     let mut badges = Vec::new();
     if w.external {
-        badges.push("ext".to_owned());
+        badges.push(paint("ext", DIM, color));
     }
     if w.stale_reason == Some(StaleReason::Missing) {
-        badges.push("missing".to_owned());
+        badges.push(paint("missing", DIM, color));
         return badges;
     }
-    let counts = count_badges(w.dirty_count + w.untracked_count, w.unpushed.unwrap_or(0));
+    let counts = count_badges(
+        w.dirty_count + w.untracked_count,
+        w.unpushed.unwrap_or(0),
+        color,
+    );
     if counts.is_empty() && w.stale_reason.is_none() {
         badges.push("✓ clean".to_owned());
     }
     badges.extend(counts);
     match w.stale_reason {
-        Some(StaleReason::Merged) => badges.push("merged·stale".to_owned()),
-        Some(StaleReason::Inactive) => badges.push("stale".to_owned()),
+        Some(StaleReason::Merged) => badges.push(paint("merged·stale", DIM, color)),
+        Some(StaleReason::Inactive) => badges.push(paint("stale", DIM, color)),
         Some(StaleReason::Missing) | None => {}
     }
     if no_upstream(w) {
-        badges.push("no-upstream".to_owned());
+        badges.push(paint("no-upstream", DIM, color));
     }
     badges
 }
@@ -459,35 +726,41 @@ fn session_text(s: &rollcall_core::SessionOut, now: Timestamp) -> String {
     format!("{} {}{quoted}", agent_name(s.source), age(now, s.ended_at))
 }
 
-fn worktree_line(w: &Worktree, now: Timestamp) -> String {
-    let mut parts = vec![worktree_label(w)];
-    parts.extend(state_badges(w));
-    let mut line = format!("  {}", parts.join("  "));
-    if let Some(s) = &w.last_session {
-        line.push_str("  ");
-        line.push_str(&session_text(s, now));
-    }
-    line
+/// `[indented branch, state badges, last session]` of a worktree row.
+fn worktree_cells(w: &Worktree, now: Timestamp, color: bool) -> [String; 3] {
+    [
+        format!("  {}", worktree_label(w)),
+        state_badges(w, color).join(" "),
+        w.last_session
+            .as_ref()
+            .map_or(String::new(), |s| session_text(s, now)),
+    ]
 }
 
 pub fn doctor(
-    _ctx: &Ctx,
+    ctx: &Ctx,
     outcome: &ScanOutcome,
     root: &Path,
     json: bool,
     out: &mut dyn Write,
 ) -> ExitCode {
     let root = scan::canonical_root(root);
-    let doc = outcome
-        .index
-        .last_diagnostics(&root)
-        .unwrap_or_else(|| empty_doctor(&root));
+    let doc = outcome.index.last_diagnostics(&root).map_or_else(
+        || empty_doctor(&root),
+        |stored| scan::visible_diagnostics(ctx, &root, stored, outcome.index.repos_for_root(&root)),
+    );
     let text = if json {
         json_line(&doc)
     } else {
         plain_doctor(&doc)
     };
-    finish(out, &text, outcome.exit)
+    // §3.1: error rows are exit 4 for `status` and `scan` only; `doctor` keeps 1.
+    let exit = if outcome.exit == ExitCode::from(scan::EXIT_ERROR_ROWS) {
+        ExitCode::FAILURE
+    } else {
+        outcome.exit
+    };
+    finish(out, &text, exit)
 }
 
 /// No scan ever completed for the root: the §7 shape with nothing in it.
@@ -588,14 +861,14 @@ fn flatten<'a>(rows: &'a [RepoRow], out: &mut Vec<&'a RepoRow>) {
 
 /// Prints the one-line `scanned <root>: …` summary (§3.1) to `err`.
 pub fn scan_summary(
-    _ctx: &Ctx,
+    ctx: &Ctx,
     outcome: &ScanOutcome,
     root: &Path,
     elapsed: Duration,
     err: &mut dyn Write,
 ) -> ExitCode {
     let root = scan::canonical_root(root);
-    let rows = outcome.index.repos_for_root(&root);
+    let rows = scan::visible_rows(ctx, &root, outcome.index.repos_for_root(&root));
     let mut all = Vec::new();
     flatten(&rows, &mut all);
     let worktrees: usize = all.iter().map(|r| r.state.worktrees.len()).sum();
@@ -699,6 +972,8 @@ mod tests {
                 ..EnvPaths::default()
             },
             cache_dir: home.join("cache"),
+            status_filters: StatusFilters::default(),
+            render: Render::default(),
         };
         World {
             _dir: dir,
@@ -750,6 +1025,18 @@ mod tests {
         let mut out = Vec::new();
         status(&w.ctx, outcome, &w.root, json, &mut out);
         String::from_utf8(out).unwrap()
+    }
+
+    /// `status` without its risk line (I5c) and trailing prune hints (I5e): the repo and
+    /// worktree rows alone. Asserts the risk line is there and strips only trailing hints, so a
+    /// repo row named `at risk: …` or `hint: …` (§8.2 prints names as written) is never dropped.
+    fn rows_only(text: String) -> String {
+        assert!(text.starts_with("at risk: "), "no risk line: {text}");
+        let mut rows: Vec<&str> = text.split_inclusive('\n').skip(1).collect();
+        while rows.last().is_some_and(|l| l.starts_with("hint: ")) {
+            rows.pop();
+        }
+        rows.concat()
     }
 
     fn run_doctor(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
@@ -843,6 +1130,7 @@ mod tests {
             missing: false,
             merged: false,
             error: None,
+            locked: false,
         };
         RepoRow {
             path,
@@ -900,7 +1188,7 @@ mod tests {
         write_claude_session(&w, &w.root.join("a"), "hello there");
         let outcome = scan_root(&w, ScanMode::Fresh);
 
-        let text = run_status(&w, &outcome, false);
+        let text = rows_only(run_status(&w, &outcome, false));
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 4, "{text}");
         assert!(
@@ -920,6 +1208,267 @@ mod tests {
             "{text}"
         );
         assert!(lines[3].contains("\"hello there\""), "{text}");
+    }
+
+    fn cells(rows: &[[&str; 3]]) -> Vec<[String; 3]> {
+        rows.iter().map(|r| r.map(str::to_owned)).collect()
+    }
+
+    fn no_trailing_space(text: &str) {
+        for line in text.lines() {
+            assert_eq!(line, line.trim_end(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn align_pads_columns_one_and_two_to_the_widest_cell() {
+        let text = align(&cells(&[["alpha", "a b", "1m"], ["be", "●1", "2h"]]));
+        assert_eq!(text, "alpha  a b  1m\nbe     ●1   2h\n");
+    }
+
+    #[test]
+    fn align_keeps_col3_aligned_over_empty_cells_without_trailing_space() {
+        let text = align(&cells(&[
+            ["a", "", "3m"],
+            ["bb", "xx", "1m"],
+            ["bb", "xx", ""],
+            ["c", "", ""],
+        ]));
+        assert_eq!(text, "a       3m\nbb  xx  1m\nbb  xx\nc\n");
+        no_trailing_space(&text);
+    }
+
+    #[test]
+    fn align_lets_an_over_cap_cell_overflow_without_widening_the_column() {
+        let long1 = "x".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            [&long1, "b", "c"],
+            ["a", "b", "c"],
+            ["bb", "b", "c"],
+        ]));
+        assert_eq!(text, format!("{long1}  b  c\na   b  c\nbb  b  c\n"));
+
+        let long2 = "y".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            ["a", &long2, "c"],
+            ["bb", "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        assert_eq!(text, format!("a   {long2}  c\nbb  b   c\na   bb  c\n"));
+    }
+
+    #[test]
+    fn align_counts_a_cell_of_exactly_the_cap_toward_the_width() {
+        let edge = "x".repeat(COL_CAP);
+        let text = align(&cells(&[[&edge, "b", "c"], ["a", "b", "c"]]));
+        assert_eq!(
+            text,
+            format!("{edge}  b  c\na{}  b  c\n", " ".repeat(COL_CAP - 1))
+        );
+    }
+
+    #[test]
+    fn align_measures_display_columns_not_chars_or_bytes() {
+        let text = align(&cells(&[["漢字", "b", "c"], ["ab", "b", "c"]]));
+        assert_eq!(text, "漢字  b  c\nab    b  c\n");
+        // at the cap boundary: 20 CJK chars = 40 columns fit, 21 = 42 overflow.
+        let fits = "漢".repeat(COL_CAP / 2);
+        let over = "漢".repeat(COL_CAP / 2 + 1);
+        let text = align(&cells(&[
+            [&fits, "b", "c"],
+            [&over, "b", "c"],
+            ["a", "b", "c"],
+        ]));
+        assert_eq!(
+            text,
+            format!(
+                "{fits}  b  c\n{over}  b  c\na{}  b  c\n",
+                " ".repeat(COL_CAP - 1)
+            )
+        );
+    }
+
+    #[test]
+    fn align_places_col3_after_an_over_cap_col1_with_empty_col2_at_stop_or_end_plus_two() {
+        // w1 = 2, w2 = 2: stops at 4 and 8; the over-cap name ends at 45, so col3 is at 47.
+        let long = "x".repeat(COL_CAP + 5);
+        let text = align(&cells(&[
+            ["a", "bb", "c"],
+            ["bb", "x", "c"],
+            [&long, "", "q"],
+        ]));
+        assert_eq!(text, format!("a   bb  c\nbb  x   c\n{long}  q\n"));
+
+        // w1 = 1, w2 = 40: stops at 3 and 45; a 41-column name ends at 41, so col3 rejoins 45.
+        let short = "x".repeat(COL_CAP + 1);
+        let text = align(&cells(&[
+            ["a", &"w".repeat(COL_CAP), "1"],
+            [&short, "", "q"],
+        ]));
+        let wide = "w".repeat(COL_CAP);
+        assert_eq!(text, format!("a  {wide}  1\n{short}    q\n"));
+    }
+
+    #[test]
+    fn align_rejoins_col3_when_an_over_cap_col1_leaves_room() {
+        // w1 = 40, w2 = 10: stops at 42 and 54. The 41-column name pushes col2 to 43 (end 44),
+        // and col3 is back on its stop at 54.
+        let edge = "x".repeat(COL_CAP);
+        let over = "y".repeat(COL_CAP + 1);
+        let text = align(&cells(&[[&edge, "0123456789", "1"], [&over, "b", "c"]]));
+        assert_eq!(
+            text,
+            format!("{edge}  0123456789  1\n{over}  b{}c\n", " ".repeat(10))
+        );
+    }
+
+    #[test]
+    fn align_trims_trailing_spaces_before_measuring_where_a_line_ends() {
+        // "x…x " is 42 columns wide, over the cap; its end without the space is 41, so col2 is
+        // at 43, not 45.
+        let over = format!("{} ", "x".repeat(COL_CAP + 1));
+        let text = align(&cells(&[
+            ["a", "bb", "c"],
+            ["bb", "x", "c"],
+            [&over, "b", "c"],
+        ]));
+        let name = over.trim_end();
+        assert_eq!(text, format!("a   bb  c\nbb  x   c\n{name}  b  c\n"));
+    }
+
+    #[test]
+    fn align_measures_an_over_cap_cell_in_display_columns_when_placing_the_next_one() {
+        // 21 × 漢 = 42 columns (over the cap), 21 chars, 63 bytes; col3 goes at 44, not at the
+        // stop (35) and not at a char- or byte-based end.
+        let over = "漢".repeat(COL_CAP / 2 + 1);
+        let text = align(&cells(&[["a", &"x".repeat(30), "1"], [&over, "", "q"]]));
+        assert_eq!(text, format!("a  {}  1\n{over}  q\n", "x".repeat(30)));
+    }
+
+    /// Display column where each non-empty col2/col3 cell of `line` starts, found by walking the
+    /// rendered text rather than by re-deriving the layout.
+    fn starts(row: &[String; 3], line: &str) -> [Option<usize>; 2] {
+        let mut rest = line.strip_prefix(row[0].trim_end()).expect("col1 first");
+        let mut at = breaker_width(row[0].trim_end());
+        let mut out = [None, None];
+        for (slot, cell) in out.iter_mut().zip(&row[1..]) {
+            if cell.is_empty() {
+                continue;
+            }
+            let gap = rest.len() - rest.trim_start_matches(' ').len();
+            rest = rest[gap..].strip_prefix(cell.as_str()).expect("cell next");
+            at += gap;
+            *slot = Some(at);
+            at += breaker_width(cell);
+        }
+        assert!(rest.is_empty(), "{line:?} has text past the last cell");
+        out
+    }
+
+    #[test]
+    fn align_starts_every_cell_at_its_stop_or_two_past_the_text_before_it() {
+        let x = |n: usize| "x".repeat(n);
+        let han = |n: usize| "漢".repeat(n);
+        let table: Vec<[String; 3]> = vec![
+            [x(5), "●1".into(), "3h".into()],
+            [x(40), x(10), "c".into()],
+            [x(41), String::new(), "q".into()],
+            [x(41), "b".into(), "c".into()],
+            [x(41), x(40), "c".into()],
+            [x(50), x(41), "c".into()],
+            [han(20), String::new(), "c".into()],
+            [han(21), "b".into(), String::new()],
+            [han(21), String::new(), "q".into()],
+            ["  wt".into(), "✓ clean".into(), "claude 1d".into()],
+            [String::new(), "b".into(), "c".into()],
+            ["only".into(), String::new(), String::new()],
+        ];
+        let text = align(&table);
+        let width = breaker_width;
+        // w1 = 40 (x(40), han(20)); w2 = 40 (x(40)).
+        let (s2, s3) = (42, 42 + 40 + 2);
+        for (row, line) in table.iter().zip(text.lines()) {
+            assert_eq!(line, line.trim_end(), "trailing space: {line:?}");
+            let [at2, at3] = starts(row, line);
+            let mut end = width(row[0].trim_end());
+            if let Some(at) = at2 {
+                assert_eq!(at, s2.max(end + 2), "col2: {line:?}");
+                end = at + width(&row[1]);
+            }
+            if let Some(at) = at3 {
+                assert_eq!(at, s3.max(end + 2), "col3: {line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn plain_status_columns_line_up_across_repos_and_worktrees() {
+        let w = world();
+        init_repo(&w.root.join("b"));
+        init_repo(&w.root.join("longer-name"));
+        std::fs::write(w.root.join("b/new"), "u").unwrap();
+        write_claude_session(&w, &w.root.join("longer-name"), "hello there");
+        let outcome = scan_root(&w, ScanMode::Fresh);
+
+        let text = rows_only(run_status(&w, &outcome, false));
+        no_trailing_space(&text);
+        let lines: Vec<Vec<char>> = text.lines().map(|l| l.chars().collect()).collect();
+        assert_eq!(lines.len(), 4, "{text}");
+        // col1 = "longer-name" (11), col2 = "✓ clean" (7): col2 starts at column 13, col3 at 22.
+        let at = |line: usize, col: usize| lines[line].get(col).copied().unwrap_or(' ');
+        for i in [0, 1, 3] {
+            assert_eq!([at(i, 11), at(i, 12)], [' ', ' '], "{text}");
+            assert_ne!(at(i, 13), ' ', "{text}");
+        }
+        for i in [0, 2, 3] {
+            assert_eq!([at(i, 20), at(i, 21)], [' ', ' '], "{text}");
+            assert_ne!(at(i, 22), ' ', "{text}");
+        }
+        eprintln!("{text}");
+    }
+
+    #[test]
+    fn a_repo_whose_name_sanitises_to_empty_shows_its_sanitised_path() {
+        let w = world();
+        let mut rows = Vec::new();
+        for (name, dir) in [
+            ("", "blank"),
+            ("\u{200b}\u{7}", "invisible"),
+            ("ok", "named"),
+        ] {
+            let mut r = repo_row(&w, "main");
+            r.name = name.to_owned();
+            r.path = w.root.join(dir);
+            r.state.worktrees[0].path = r.path.clone();
+            rows.push(r);
+        }
+        let outcome = commit(&w, rows, empty_doctor(&w));
+        let text = run_status(&w, &outcome, false);
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 6, "{text}");
+        for repo in &doc.repos {
+            let shown = if repo.name == "ok" {
+                "ok".to_owned()
+            } else {
+                sanitise(&repo.path)
+            };
+            let line = lines
+                .iter()
+                .find(|l| !l.starts_with(' ') && l.starts_with(shown.as_str()))
+                .unwrap_or_else(|| panic!("no line for {shown:?}: {text}"));
+            assert!(
+                shown == "ok" || shown.starts_with('/') && shown.len() > 1,
+                "{shown:?}"
+            );
+            assert_eq!(repo_cells(repo, w.ctx.now, false)[0], shown, "{text}");
+            assert!(!line.starts_with(' '), "{line:?}");
+        }
+        assert!(
+            lines.iter().filter(|l| !l.starts_with(' ')).count() == 3,
+            "{text}"
+        );
     }
 
     #[test]
@@ -1335,5 +1884,754 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- breaker: column alignment (§8.2) ----
+
+    fn breaker_width(s: &str) -> usize {
+        Span::raw(s).width()
+    }
+
+    /// Checks AC1/AC2/AC4 of `align` output against its rows, measuring each cell's start as
+    /// the display width of the rendered line before it.
+    fn breaker_check(rows: &[[String; 3]], text: &str) {
+        let lines: Vec<&str> = text.split_terminator('\n').collect();
+        assert_eq!(lines.len(), rows.len(), "{text:?}");
+        let (mut col2, mut col3) = (Vec::new(), Vec::new());
+        for (row, line) in rows.iter().zip(&lines) {
+            assert_eq!(*line, line.trim_end(), "trailing space: {line:?}");
+            let [c1, c2, c3] = row;
+            assert!(line.starts_with(c1.trim_end()), "{line:?} / {row:?}");
+            let (w1, w2) = (breaker_width(c1), breaker_width(c2));
+            let mut gap_after = c1.len();
+            if !c2.is_empty() {
+                let at = c1.len() + line[c1.len()..].len() - line[c1.len()..].trim_start().len();
+                assert!(line[at..].starts_with(c2.as_str()), "{line:?} / {row:?}");
+                assert!(at - c1.len() >= 2, "col1->col2 gap < 2: {line:?}");
+                if w1 <= COL_CAP {
+                    col2.push((breaker_width(&line[..at]), line.to_owned()));
+                } else {
+                    assert_eq!(&line[c1.len()..at], "  ", "AC2 col1 overflow: {line:?}");
+                }
+                gap_after = at + c2.len();
+            }
+            if !c3.is_empty() {
+                assert!(line.ends_with(c3.as_str()), "{line:?} / {row:?}");
+                let at = line.len() - c3.len();
+                let gap = &line[gap_after..at];
+                assert!(
+                    gap.len() >= 2 && gap.trim().is_empty(),
+                    "gap {gap:?}: {line:?}"
+                );
+                if w1 <= COL_CAP && w2 <= COL_CAP {
+                    col3.push((breaker_width(&line[..at]), line.to_owned()));
+                } else if w2 > COL_CAP {
+                    assert_eq!(gap, "  ", "AC2 col2 overflow: {line:?}");
+                }
+            }
+        }
+        for col in [col2, col3] {
+            if let Some((first, _)) = col.first() {
+                assert!(col.iter().all(|(w, _)| w == first), "misaligned: {col:#?}");
+            }
+        }
+    }
+
+    #[test]
+    fn breaker_align_holds_ac1_ac2_ac4_over_an_adversarial_table() {
+        let x = |n: usize| "x".repeat(n);
+        let han = |n: usize| "漢".repeat(n);
+        let table: Vec<[String; 3]> = vec![
+            [x(39), "b".into(), "c".into()],
+            [x(40), "bb".into(), "c".into()],
+            [x(41), "b".into(), "c".into()],
+            [format!("  {}", x(38)), "✓ clean".into(), String::new()],
+            [
+                format!("  {}", x(39)),
+                "✓ clean".into(),
+                "claude 1d \"t\"".into(),
+            ],
+            [han(20), "●1 ↑2".into(), "3h".into()],
+            [han(21), "●1".into(), "3h".into()],
+            [format!("{}x", han(19)), "merged·stale".into(), "—".into()],
+            [format!("{}x", han(20)), "b".into(), "c".into()],
+            ["e\u{301}".into(), x(40), "c".into()],
+            ["a".into(), x(41), "c".into()],
+            ["a".into(), han(21), "c".into()],
+            [x(50), x(50), "c".into()],
+            [
+                "😀👍🏽".into(),
+                "❤\u{fe0f}".into(),
+                "1\u{fe0f}\u{20e3}".into(),
+            ],
+            ["🇯🇵 flag".into(), "\u{644}\u{627}".into(), "c".into()],
+            ["a\u{a0}".into(), "b".into(), "c".into()],
+            ["a\u{3000}".into(), String::new(), "quiet 3d".into()],
+            ["\u{301}lead".into(), "b".into(), "c".into()],
+            [String::new(), String::new(), "c".into()],
+            ["only".into(), String::new(), String::new()],
+            [x(41), String::new(), "quiet 1d".into()],
+            ["  wt".into(), "b".into(), String::new()],
+        ];
+        let text = align(&table);
+        breaker_check(&table, &text);
+        // every row over the cap: widths fall to 0, cells still two spaces apart
+        let over = vec![
+            [x(41), x(41), "c".into()],
+            [han(21), "b".into(), "c".into()],
+        ];
+        let text = align(&over);
+        breaker_check(&over, &text);
+        assert_eq!(align(&[]), "");
+    }
+
+    /// A doc of hostile/odd rows planted through the index, rendered by the real `status`.
+    #[test]
+    fn breaker_plain_status_aligns_hostile_rows_end_to_end() {
+        let w = world();
+        let mut rows = Vec::new();
+        let named = |name: &str, branch: &str| {
+            let mut r = repo_row(&w, branch);
+            r.name = name.to_owned();
+            r.path = w.root.join(format!("r{}", name.len()));
+            r.state.worktrees[0].path = r.path.clone();
+            r
+        };
+        rows.push(named("ok", "main"));
+        rows.push(named("tab\there\u{200b}", &"b".repeat(38)));
+        rows.push(named(&"n".repeat(40), &"b".repeat(39)));
+        rows.push(named(&"漢".repeat(21), "feature/漢字"));
+        let mut err = named("errored", "main");
+        err.state.error = Some(format!("gix: {}", "e".repeat(60)));
+        err.state.worktrees[0].error = Some("worktree\nbroken\twide".to_owned());
+        rows.push(err);
+        let mut det = named("detached-one", "x");
+        det.state.worktrees[0].branch = None;
+        det.state.worktrees[0].detached = true;
+        det.state.worktrees[0].head = Some("0123456789abcdef0123456789abcdef01234567".into());
+        let mut ext = det.state.worktrees[0].clone();
+        ext.detached = false;
+        ext.head = None;
+        ext.is_main = false;
+        ext.path = PathBuf::from(format!("/elsewhere/{}/wt", "deep".repeat(12)));
+        let mut missing = ext.clone();
+        missing.path = w.root.join("gone");
+        missing.branch = Some("gone-branch".into());
+        missing.missing = true;
+        det.state.worktrees.extend([ext, missing]);
+        det.state.worktrees[0].dirty_count = 3;
+        rows.push(det);
+        let n = rows.len();
+        let outcome = commit(&w, rows, empty_doctor(&w));
+
+        let text = rows_only(run_status(&w, &outcome, false));
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), n, "{text}");
+        let mut cells = Vec::new();
+        let mut is_repo = Vec::new();
+        for repo in &doc.repos {
+            cells.push(repo_cells(repo, w.ctx.now, false));
+            is_repo.push(true);
+            cells.extend(
+                repo.worktrees
+                    .iter()
+                    .map(|t| worktree_cells(t, w.ctx.now, false)),
+            );
+            is_repo.extend(repo.worktrees.iter().map(|_| false));
+        }
+        assert_eq!(text, align(&cells));
+        breaker_check(&cells, &text);
+        // AC4: one unindented line per repo, then one indented line per worktree.
+        for (line, repo) in text.lines().zip(is_repo) {
+            let indented = line.starts_with("  ") && !line[2..].starts_with(' ');
+            let shaped = if repo {
+                !line.starts_with(' ')
+            } else {
+                indented
+            };
+            assert!(shaped, "{line:?}\n{text}");
+        }
+    }
+
+    // ---- breaker2: tab stops, empty-name fallback, U+2028/U+2029 (§8.2, §9 revision 15) ----
+
+    /// Trailing spaces count toward a cell's width and the cap but not toward where its text
+    /// ends; a blank-but-non-empty cell adds no visible text.
+    #[test]
+    fn breaker2_align_trailing_and_blank_cells_follow_the_stop_formula() {
+        let x = |n: usize| "x".repeat(n);
+        // w1 = 40 (39 x + a space), w2 = 2: S2 = 42, S3 = 46.
+        let text = align(&cells(&[
+            [&format!("{} ", x(39)), "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        let want = format!("{}   b   c\na{}bb  c\n", x(39), " ".repeat(41));
+        assert_eq!(text, want);
+        // 41 x + a space is over the cap (42): w1 = 1, w2 = 2, S2 = 3, S3 = 7. E = 41.
+        let text = align(&cells(&[
+            [&format!("{} ", x(41)), "", "q"],
+            [&format!("{} ", x(41)), "b", "c"],
+            ["a", "bb", "c"],
+        ]));
+        let want = format!("{0}  q\n{0}  b  c\na  bb  c\n", x(41));
+        assert_eq!(text, want);
+        // A col2 of only spaces: w2 = 3 (S3 = 9) but nothing visible before col3.
+        let text = align(&cells(&[
+            ["a", "   ", "c"],
+            ["bb", "x", "c"],
+            ["c", "   ", ""],
+        ]));
+        assert_eq!(text, "a        c\nbb  x    c\nc\n");
+        // A col2 with a trailing space: col3 still on its stop.
+        let text = align(&cells(&[["a", "b ", "c"], ["a", "bb", "c"]]));
+        assert_eq!(text, "a  b   c\na  bb  c\n");
+        no_trailing_space(&text);
+    }
+
+    /// AC6 for repos that also carry badges: an errored, nested and bare repo whose names
+    /// sanitise to empty, with hostile path segments, render their sanitised path as col1,
+    /// stay aligned, and `--json` keeps name and path exact.
+    #[test]
+    fn breaker2_empty_name_fallback_for_nested_bare_and_errored_repos() {
+        let w = world();
+        let mut rows = Vec::new();
+        for (i, (name, kind)) in [
+            ("", RepoKind::Nested),
+            ("\u{200b}\x1b[2J", RepoKind::Bare),
+            ("\u{7f}", RepoKind::Normal),
+            ("ok", RepoKind::Normal),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut r = repo_row(&w, "main");
+            r.name = name.to_owned();
+            r.kind = kind;
+            r.path = w.root.join(format!("p{i}\u{2028}\n\x1b[31m\u{202e}x"));
+            r.state.worktrees[0].path = r.path.clone();
+            if i == 2 {
+                r.state.error = Some("bad\u{2029}thing".into());
+            }
+            rows.push(r);
+        }
+        let outcome = commit(&w, rows, empty_doctor(&w));
+        let text = run_status(&w, &outcome, false);
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), 4, "{text}");
+        assert!(
+            !text.contains(['\u{2028}', '\u{2029}', '\x1b', '\u{202e}']),
+            "{text:?}"
+        );
+
+        let mut rows = Vec::new();
+        for repo in &doc.repos {
+            rows.push(repo_cells(repo, w.ctx.now, false));
+            rows.extend(
+                repo.worktrees
+                    .iter()
+                    .map(|t| worktree_cells(t, w.ctx.now, false)),
+            );
+        }
+        assert_eq!(text, align(&rows));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 8, "{text}");
+        let mut i = 0;
+        for repo in &doc.repos {
+            let line = lines[i];
+            let shown = if repo.name == "ok" {
+                "ok".to_owned()
+            } else {
+                sanitise(&repo.path)
+            };
+            assert!(
+                shown.starts_with("ok") || shown.starts_with('/'),
+                "{shown:?}"
+            );
+            assert!(
+                !line.starts_with(' ') && line.starts_with(&shown),
+                "{line:?}"
+            );
+            let badge = match (repo.kind, &repo.error) {
+                (_, Some(_)) => "error: bad thing",
+                (RepoKind::Nested, _) => "nested",
+                (RepoKind::Bare, _) => "bare",
+                _ => "",
+            };
+            assert!(line.contains(badge), "{line:?}");
+            // An over-cap path: the badge sits two past it.
+            if !badge.is_empty() {
+                assert_eq!(
+                    &line[shown.len()..shown.len() + 2 + badge.len()],
+                    format!("  {badge}")
+                );
+            }
+            assert!(lines[i + 1].starts_with("  main"), "{text}");
+            i += 2;
+        }
+
+        let json = status_json(&w, &outcome);
+        validate("status", &json);
+        let mut names: Vec<&str> = json["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["", "ok", "\u{7f}", "\u{200b}\x1b[2J"]);
+        for r in json["repos"].as_array().unwrap() {
+            assert!(
+                r["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("\u{2028}\n\x1b[31m\u{202e}x"),
+                "{r}"
+            );
+        }
+        let errors: Vec<&Value> = json["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| &r["error"])
+            .filter(|e| !e.is_null())
+            .collect();
+        assert_eq!(errors, [&Value::from("bad\u{2029}thing")]);
+    }
+
+    /// U+2028 through the real git and Claude-log parsers: plain output never carries it (branch
+    /// and title become a space); JSON keeps the branch exact and sanitises the title and prompt.
+    #[test]
+    fn breaker2_separators_flow_through_plain_and_json_from_a_real_scan() {
+        let w = world();
+        let repo = w.root.join("sep");
+        init_repo(&repo);
+        git(&repo, &["checkout", "-q", "-b", "feat\u{2028}x\u{2029}y"]);
+        write_claude_session(&w, &repo, "hello\u{2028}there\u{2029}now");
+        let outcome = scan_root(&w, ScanMode::Fresh);
+
+        let text = run_status(&w, &outcome, false);
+        assert!(!text.contains(['\u{2028}', '\u{2029}']), "{text:?}");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].starts_with("sep  "), "{text}");
+        assert!(lines[1].starts_with("  feat x y  "), "{text}");
+        assert!(lines[1].ends_with("\"hello there now\""), "{text}");
+
+        let json = status_json(&w, &outcome);
+        let wt = &json["repos"][0]["worktrees"][0];
+        assert_eq!(wt["branch"], "feat\u{2028}x\u{2029}y");
+        let s = &wt["last_session"];
+        assert_eq!(s["title"], "hello there now", "{s}");
+        assert_eq!(s["last_prompt"], "hello there now", "{s}");
+    }
+
+    // ---- HTML entities in plain-status session text (§8.2, I5a) ----
+
+    /// A one-repo world whose only Claude session has `title` (a `custom-title` record) and `prompt`.
+    fn entity_world(title: Option<&str>, prompt: &str) -> (World, scan::ScanOutcome) {
+        let w = world();
+        init_repo(&w.root.join("ent"));
+        write_claude_session(&w, &w.root.join("ent"), prompt);
+        if let Some(title) = title {
+            let record = serde_json::json!(
+                {"type": "custom-title", "sessionId": ID, "customTitle": title}
+            );
+            let log = w.home.join(format!("claude/projects/p/{ID}.jsonl"));
+            let mut text = std::fs::read_to_string(&log).unwrap();
+            text.push_str(&format!("{record}\n"));
+            std::fs::write(&log, text).unwrap();
+        }
+        let outcome = scan_root(&w, ScanMode::Fresh);
+        (w, outcome)
+    }
+
+    /// The worktree line of the single repo.
+    fn worktree_line(text: &str) -> &str {
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        lines[1]
+    }
+
+    const ENTITY_TITLE: &str = "&lt;command-name&gt;/clear&lt;/command-name&gt;";
+
+    #[test]
+    fn plain_status_decodes_entities_and_json_keeps_them() {
+        let (w, outcome) = entity_world(Some(ENTITY_TITLE), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(
+            worktree_line(&text).ends_with("\"<command-name>/clear</command-name>\""),
+            "{text}"
+        );
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            ENTITY_TITLE
+        );
+    }
+
+    #[test]
+    fn a_decoded_secret_is_scrubbed_in_plain_status() {
+        let (w, outcome) = entity_world(Some("deploy token&#61;abc123def"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(text.contains("[redacted]"), "{text}");
+        assert!(!text.contains("abc123def"), "{text}");
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            "deploy token&#61;abc123def"
+        );
+    }
+
+    #[test]
+    fn a_decoded_escape_sequence_is_removed_from_plain_status() {
+        let (w, outcome) = entity_world(Some("x&#27;[2Jy"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(worktree_line(&text).ends_with("\"xy\""), "{text:?}");
+    }
+
+    #[test]
+    fn plain_status_truncates_after_decoding() {
+        let (w, outcome) = entity_world(Some(&"&amp;".repeat(300)), "p");
+        let text = run_status(&w, &outcome, false);
+        let want = format!("\"{}…\"", "&".repeat(199));
+        assert!(worktree_line(&text).ends_with(&want), "{text}");
+    }
+
+    #[test]
+    fn plain_status_decodes_the_prompt_of_an_untitled_session() {
+        let (w, outcome) = entity_world(None, "a &amp; b");
+        let text = run_status(&w, &outcome, false);
+        assert!(worktree_line(&text).ends_with("\"a & b\""), "{text}");
+    }
+
+    /// Author decision 2026-10-06: decoded prompt text goes through the §5.0 filter again, so an
+    /// entity-encoded injected section is dropped or cut like a raw one; JSON keeps the raw text.
+    #[test]
+    fn plain_status_filters_decoded_prompt_text_again() {
+        let (w, outcome) = entity_world(None, "&lt;system-reminder&gt;x");
+        let text = run_status(&w, &outcome, false);
+        assert!(!worktree_line(&text).contains('"'), "{text}");
+        let json = status_json(&w, &outcome);
+        assert_eq!(
+            json["repos"][0]["worktrees"][0]["last_session"]["title"],
+            "&lt;system-reminder&gt;x"
+        );
+
+        let (w, outcome) = entity_world(None, "fix it &lt;system-reminder&gt;be careful");
+        let text = run_status(&w, &outcome, false);
+        assert!(worktree_line(&text).ends_with("\"fix it\""), "{text}");
+    }
+
+    #[test]
+    fn a_decoded_custom_title_starting_with_lt_is_not_prompt_filtered() {
+        let (w, outcome) = entity_world(Some("&lt;system-reminder&gt;x"), "p");
+        let text = run_status(&w, &outcome, false);
+        assert!(
+            worktree_line(&text).ends_with("\"<system-reminder>x\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_doc_behind_the_tui_and_mcp_keeps_entities_undecoded() {
+        let (w, outcome) = entity_world(Some(ENTITY_TITLE), "p");
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        let session = doc.repos[0].worktrees[0].last_session.as_ref().unwrap();
+        assert_eq!(session.title.as_deref(), Some(ENTITY_TITLE));
+    }
+
+    // ---- blank names fall back to the path; every Unicode space is trimmed before a stop (§8.2) ----
+
+    /// One real `hostile` repo (one worktree) as a status doc, for rewriting its name and branch.
+    fn blank_doc() -> (World, StatusDoc) {
+        let w = world();
+        let outcome = commit(&w, vec![repo_row(&w, "main")], empty_doctor(&w));
+        let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+        assert_eq!(doc.repos.len(), 1);
+        (w, doc)
+    }
+
+    /// `text` without its SGR sequences.
+    fn unpainted(text: &str) -> String {
+        sgr_runs(text)
+            .filter(|&(sgr, _)| !sgr)
+            .map(|(_, run)| run)
+            .collect()
+    }
+
+    #[test]
+    fn a_repo_error_badge_is_red_and_its_trailing_space_stays_outside_the_colour() {
+        let (w, mut doc) = blank_doc();
+        doc.repos[0].error = Some("boom  ".to_owned());
+        let on = Render {
+            color: true,
+            width: 0,
+        };
+        let cells = repo_cells(&doc.repos[0], w.ctx.now, true);
+        assert!(
+            cells[1].starts_with("\x1b[31merror: boom\x1b[0m"),
+            "{cells:?}"
+        );
+        let colour = plain_status(&doc, &HashSet::new(), w.ctx.now, on);
+        let plain = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+        assert!(colour.contains(RED), "{colour:?}");
+        assert_eq!(unpainted(&colour), plain);
+    }
+
+    #[test]
+    fn a_width_cuts_every_line_and_keeps_one_line_per_row() {
+        let (w, doc) = blank_doc();
+        let plain = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+        let widest = plain.lines().map(cols).max().unwrap();
+        assert!(widest > 12, "{plain}");
+        for color in [false, true] {
+            let render = Render { color, width: 12 };
+            let cut = plain_status(&doc, &HashSet::new(), w.ctx.now, render);
+            assert_eq!(cut.lines().count(), plain.lines().count(), "{cut}");
+            assert!(cut.lines().all(|l| cols(l) <= 12), "{cut}");
+            assert!(cut.lines().any(|l| unpainted(l).ends_with('…')), "{cut}");
+        }
+        // A width at least as wide as the widest line changes nothing.
+        let render = Render {
+            color: false,
+            width: widest,
+        };
+        assert_eq!(
+            plain_status(&doc, &HashSet::new(), w.ctx.now, render),
+            plain
+        );
+    }
+
+    #[test]
+    fn a_repo_name_that_sanitises_to_whitespace_shows_the_sanitised_path() {
+        let (w, mut doc) = blank_doc();
+        for name in [" ", "\t", "\n", "\u{2028}", "\u{200b}"] {
+            doc.repos[0].name = name.to_owned();
+            let want = sanitise(&doc.repos[0].path);
+            assert!(want.starts_with('/'), "{want:?}");
+            let cells = repo_cells(&doc.repos[0], w.ctx.now, false);
+            assert_eq!(cells[0], want, "{name:?}");
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+            let first = text.lines().next().unwrap();
+            assert!(first.starts_with(&want), "{name:?}: {text:?}");
+            assert!(
+                !first.starts_with(char::is_whitespace),
+                "{name:?}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_name_with_leading_whitespace_starts_its_line_with_the_name() {
+        let (w, mut doc) = blank_doc();
+        for name in ["\tfoo", " foo", "\u{2028}foo", "\n \u{200b}foo"] {
+            doc.repos[0].name = name.to_owned();
+            assert_eq!(
+                repo_cells(&doc.repos[0], w.ctx.now, false)[0],
+                "foo",
+                "{name:?}"
+            );
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+            assert!(text.starts_with("foo  "), "{name:?}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_worktree_branch_that_sanitises_to_whitespace_shows_the_indented_sanitised_path() {
+        let (w, mut doc) = blank_doc();
+        let want = format!("  {}", sanitise(&doc.repos[0].worktrees[0].path));
+        for branch in [" ", "\u{2029}", "\t", "\u{200b}", ""] {
+            doc.repos[0].worktrees[0].branch = Some(branch.to_owned());
+            let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
+            assert_eq!(cells[0], want, "{branch:?}");
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+            assert!(
+                text.lines().nth(1).unwrap().starts_with(&want),
+                "{branch:?}: {text:?}"
+            );
+        }
+        // Not blank once sanitised: U+2028 becomes a space but `feat` keeps the label.
+        doc.repos[0].worktrees[0].branch = Some("\u{2028}feat".to_owned());
+        let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
+        assert_eq!(cells[0], "   feat");
+        let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+        assert!(
+            text.lines().nth(1).unwrap().starts_with("   feat  "),
+            "{text:?}"
+        );
+    }
+
+    /// I5c-6: the risk line describes only the repos in the doc it renders, so a filter that
+    /// trims `doc.repos` (I5d's `--top N`) trims the line too. §3.3 order: r3 (4), r1 (3), r2 (2), r4 (0).
+    #[test]
+    fn the_risk_line_describes_only_the_repos_shown() {
+        let (w, doc) = blank_doc();
+        let repo = |name: &str, attention: u8, dirty: u32, unpushed: u32, error: bool| {
+            let mut r = doc.repos[0].clone();
+            r.name = name.to_owned();
+            r.attention = attention;
+            r.worktrees[0].dirty_count = dirty;
+            r.worktrees[0].untracked_count = 0;
+            r.worktrees[0].upstream = (unpushed > 0).then(|| "origin/main".to_owned());
+            r.worktrees[0].unpushed = (unpushed > 0).then_some(unpushed);
+            r.worktrees[0].error = error.then(|| "git error: unsafe tracked file".to_owned());
+            r
+        };
+        let repos = [
+            repo("r3", 4, 1, 0, true),
+            repo("r1", 3, 0, 2, false),
+            repo("r2", 2, 1, 0, false),
+            repo("r4", 0, 0, 0, false),
+        ];
+        let first = |n: usize| {
+            let doc = StatusDoc {
+                repos: repos[..n].to_vec(),
+                ..doc.clone()
+            };
+            plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default())
+                .lines()
+                .next()
+                .map(str::to_owned)
+        };
+        assert_eq!(first(4).as_deref(), Some("at risk: r1 ↑2; r2 ●1"));
+        assert_eq!(first(3).as_deref(), Some("at risk: r1 ↑2; r2 ●1"));
+        assert_eq!(first(2).as_deref(), Some("at risk: r1 ↑2"));
+        let only_r3 = first(1).unwrap();
+        assert!(!only_r3.starts_with("at risk:"), "{only_r3}");
+    }
+
+    /// I5e-6: the hint describes only the repos in the doc it renders, so a filter that trims
+    /// `doc.repos` (I5d's `--dirty`) trims the hint too. A path is sanitised.
+    #[test]
+    fn the_prune_hint_describes_only_the_repos_shown() {
+        let (w, doc) = blank_doc();
+        let mut clean = doc.repos[0].clone();
+        clean.path = "/clean".to_owned();
+        let mut gone = doc.repos[0].clone();
+        gone.path = "/gone\u{1b}[2Jx".to_owned();
+        gone.worktrees[0].stale_reason = Some(StaleReason::Missing);
+        let show = |repos: &[Repo]| {
+            let doc = StatusDoc {
+                repos: repos.to_vec(),
+                ..doc.clone()
+            };
+            plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default())
+        };
+        let both = show(&[clean.clone(), gone.clone()]);
+        let hint = both.lines().last().unwrap();
+        assert!(
+            hint.starts_with("hint: 1 missing worktree — run 'git worktree prune' in /gone"),
+            "{both:?}"
+        );
+        assert!(!both.contains('\u{1b}'), "{both:?}");
+        assert!(!show(&[clean]).contains("hint:"));
+    }
+
+    /// I3-6 (and I3-7 for the TUI's first paint, which answers from the cache): the snapshot of
+    /// a root whose cached scan holds six repos lists only the two that `ignore` leaves.
+    #[test]
+    fn the_tui_snapshot_lists_only_the_repos_that_ignore_leaves() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut w = world();
+        for name in ["a", "app", "app2", "grp/x", "grp/y", "z"] {
+            init_repo(&w.root.join(name));
+        }
+        let render = |w: &World, outcome: &scan::ScanOutcome| -> Vec<String> {
+            let doc = build_status(&w.ctx, &outcome.index, &w.root, outcome.stale, POLICY);
+            let model = crate::tui::Model::new(doc, w.ctx.now, true);
+            let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+            terminal.draw(|f| crate::tui::draw(f, &model)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..buf.area.height)
+                .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+                .collect()
+        };
+        let all = render(&w, &scan_root(&w, ScanMode::Fresh));
+        assert!(all[0].contains("6 repos"), "control: {all:#?}");
+
+        w.ctx.config.ignore = ["grp", "app", "z"].map(|n| w.root.join(n)).to_vec();
+        let shown = render(&w, &scan_root(&w, ScanMode::NoScan));
+        assert!(shown[0].contains("2 repos"), "{shown:#?}");
+        // The list pane's first column: one row per visible repo, in §3.3 order.
+        let listed: Vec<&str> = shown[1..]
+            .iter()
+            .filter_map(|line| {
+                line.trim_start_matches(['│', '▶', ' '])
+                    .split_whitespace()
+                    .next()
+            })
+            .filter(|word| ["a", "app", "app2", "x", "y", "z"].contains(word))
+            .collect();
+        assert_eq!(listed, ["a", "app2"], "{shown:#?}");
+    }
+
+    /// E ignores trailing Unicode whitespace of any kind, so the next cell sits two past the
+    /// text, not two past a no-break or ideographic space.
+    #[test]
+    fn align_trims_trailing_unicode_whitespace_before_measuring_where_a_line_ends() {
+        let x41 = "x".repeat(41);
+        for space in ["\u{a0}", "\u{3000}"] {
+            // col1 is over the cap (w >= 42), so stop2 = 3 and only E + 2 matters.
+            let col1 = format!("{x41}{space}");
+            let text = align(&cells(&[[&col1, "b", "c"], ["a", "bb", "c"]]));
+            assert_eq!(text, format!("{x41}  b  c\na  bb  c\n"), "{space:?}");
+            // An empty col2 does not move col3 off E + 2 either.
+            let text = align(&cells(&[[&col1, "", "q"], ["a", "bb", "c"]]));
+            assert_eq!(text, format!("{x41}  q\na  bb  c\n"), "{space:?}");
+        }
+    }
+
+    #[test]
+    fn truncating_cuts_at_a_column_budget_that_leaves_room_for_the_ellipsis() {
+        // `ab漢字` is 6 columns; 3 columns of text fit alongside the `…` in 4.
+        assert_eq!(truncate_cols("ab漢字", 4, false), "ab…");
+        // A wide character that would cross the budget is dropped whole.
+        assert_eq!(truncate_cols("a漢字", 3, false), "a…");
+        assert_eq!(truncate_cols("abcdef", 4, false), "abc…");
+        assert_eq!(truncate_cols("abcdef", 1, false), "…");
+    }
+
+    #[test]
+    fn truncating_never_splits_a_grapheme() {
+        let e = "e\u{301}";
+        let four = format!("{e}{e}{e}{e}");
+        assert_eq!(truncate_cols(&four, 3, false), format!("{e}{e}…"));
+        // A ZWJ family is one cluster: kept whole or not at all.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let cut = truncate_cols(&format!("ab{family}cd"), 3, false);
+        assert!(cut == "ab…" || cut == format!("a{family}…"), "{cut:?}");
+        assert!(!cut.contains('\u{200D}') || cut.contains(family), "{cut:?}");
+    }
+
+    #[test]
+    fn a_line_within_the_width_is_returned_unchanged() {
+        for color in [false, true] {
+            assert_eq!(truncate_cols("abcd", 4, color), "abcd");
+            assert_eq!(truncate_cols("ab漢字", 6, color), "ab漢字");
+            assert_eq!(truncate_cols("", 4, color), "");
+            // Already ends in `…` and fits: not touched.
+            assert_eq!(truncate_cols("abc…", 4, color), "abc…");
+        }
+    }
+
+    #[test]
+    fn width_zero_means_no_readable_width_and_cuts_nothing() {
+        assert_eq!(truncate_cols("abcdef", 0, false), "abcdef");
+        assert_eq!(truncate_cols("abcdef", 0, true), "abcdef");
+    }
+
+    #[test]
+    fn colour_escapes_take_no_columns_and_a_cut_line_ends_in_a_reset_when_colour_is_on() {
+        let line = "ab \x1b[34m●12\x1b[0m cd";
+        // 9 visible columns: nothing to cut at 9, the escapes are untouched.
+        assert_eq!(truncate_cols(line, 9, true), line);
+        // Cut inside the badge: kept escape, ellipsis, then a reset; later escapes are dropped.
+        assert_eq!(truncate_cols(line, 5, true), "ab \x1b[34m●…\x1b[0m");
+        // §8.2: with colour on, the reset follows the `…` wherever the cut falls.
+        assert_eq!(truncate_cols(line, 3, true), "ab…\x1b[0m");
+        assert_eq!(truncate_cols("abcdef", 4, true), "abc…\x1b[0m");
     }
 }

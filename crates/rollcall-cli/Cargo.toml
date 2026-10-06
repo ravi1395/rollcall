@@ -29,6 +29,7 @@ toml = "1"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 shell-words = "1"
 libc = "0.2"
+rustix = { version = "1", features = ["termios"] }
 arboard = { version = "3", default-features = false }
 
 [dev-dependencies]

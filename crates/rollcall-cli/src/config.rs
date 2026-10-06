@@ -1,11 +1,13 @@
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rollcall_core::Timestamp;
 use serde::Deserialize;
 
-use crate::cli::CommonFlags;
+use crate::cli::{CommonFlags, StatusFilters};
+use crate::output::Render;
+use crate::scan::canonical_lenient;
 
 /// Every environment variable rollcall reads, captured once in `run`. Code never reads
 /// the process environment directly, and tests build one of these instead of calling `set_var`.
@@ -63,6 +65,8 @@ pub enum Clipboard {
 pub struct Config {
     pub roots: Vec<PathBuf>,
     pub skip_dirs: Vec<String>,
+    /// §3.2 `ignore`: absolute, realpath'd by `load` (`~` expanded); empty until then.
+    pub ignore: Vec<PathBuf>,
     pub stale_days: u32,
     pub redact_prompts: bool,
     pub redact_emails: bool,
@@ -86,6 +90,7 @@ impl Default for Config {
         Config {
             roots: Vec::new(),
             skip_dirs: Vec::new(),
+            ignore: Vec::new(),
             stale_days: 14,
             redact_prompts: false,
             redact_emails: false,
@@ -106,6 +111,9 @@ pub struct Ctx {
     pub now: Timestamp,
     pub env: EnvPaths,
     pub cache_dir: PathBuf,
+    /// `status` filters and render mode: `load` leaves the defaults, `run_status` fills them.
+    pub status_filters: StatusFilters,
+    pub render: Render,
 }
 
 /// A usage or config error: printed to stderr, exit 2.
@@ -121,9 +129,10 @@ impl fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 /// Every key a config file may set; flag-only fields of `Config` are deliberately absent.
-const CONFIG_KEYS: [&str; 9] = [
+const CONFIG_KEYS: [&str; 10] = [
     "roots",
     "skip_dirs",
+    "ignore",
     "stale_days",
     "redact_prompts",
     "redact_emails",
@@ -159,6 +168,23 @@ fn check_repo_budget(secs: f64) -> Result<(), UsageError> {
     Err(UsageError(format!(
         "config: repo_budget_secs must be a finite number > 0 that fits a duration, got {secs}"
     )))
+}
+
+/// §3.2 `ignore`: `~` or `~/…` is HOME, anything else must already be absolute (`~user` and
+/// relative entries are config errors); then realpath where it exists, else lexically normalised.
+fn resolve_ignore(entries: &[PathBuf], home: &Path) -> Result<Vec<PathBuf>, UsageError> {
+    let resolve = |entry: &PathBuf| {
+        let expanded = entry
+            .strip_prefix("~")
+            .map_or_else(|_| entry.clone(), |rest| home.join(rest));
+        if expanded.is_absolute() {
+            return Ok(canonical_lenient(&expanded));
+        }
+        Err(UsageError(format!(
+            "config: ignore entry {entry:?} must be an absolute path or start with ~/"
+        )))
+    };
+    entries.iter().map(resolve).collect()
 }
 
 fn read_config(env: &EnvPaths) -> Result<Config, UsageError> {
@@ -206,12 +232,15 @@ pub fn load(flags: &CommonFlags, env: EnvPaths) -> Result<Ctx, UsageError> {
         .home
         .as_deref()
         .ok_or_else(|| UsageError("HOME is not set".to_string()))?;
+    config.ignore = resolve_ignore(&config.ignore, home)?;
     let cache_dir = rollcall_store::cache_dir(home, env.xdg_cache_home.as_deref());
     Ok(Ctx {
         config,
         now,
         env,
         cache_dir,
+        status_filters: StatusFilters::default(),
+        render: Render::default(),
     })
 }
 
@@ -246,6 +275,14 @@ mod tests {
     fn load_toml(text: &str) -> Result<Ctx, UsageError> {
         let (_home, env) = env_with(Some(text));
         load(&CommonFlags::default(), env)
+    }
+
+    #[test]
+    fn load_leaves_the_status_filters_and_render_at_default() {
+        let (_home, env) = env_with(None);
+        let ctx = load(&CommonFlags::default(), env).unwrap();
+        assert_eq!(ctx.status_filters, StatusFilters::default());
+        assert_eq!(ctx.render, Render::default());
     }
 
     #[test]
@@ -296,6 +333,58 @@ clipboard = "osc52"
         assert!(
             !ctx.config.submodules,
             "a flag-only field is never read from TOML"
+        );
+    }
+
+    #[test]
+    fn ignore_is_a_known_key() {
+        let table: toml::Table = "ignore = [\"/a\"]\n".parse().unwrap();
+        assert!(unknown_keys(&table).is_empty());
+    }
+
+    #[test]
+    fn ignore_entries_expand_tilde_and_resolve_to_realpaths() {
+        let (home, env) = env_with(None);
+        let real_home = std::fs::canonicalize(home.path()).unwrap();
+        std::fs::create_dir(real_home.join("real")).unwrap();
+        std::os::unix::fs::symlink(real_home.join("real"), real_home.join("link")).unwrap();
+        write_config(
+            &env,
+            &format!(
+                "ignore = [\"~\", \"~/gone\", \"{h}/link\", \"/no-such-rollcall-dir/x/../y\", \"{h}/real/\"]",
+                h = home.path().display()
+            ),
+        );
+        let ignore = load(&CommonFlags::default(), env).unwrap().config.ignore;
+        assert_eq!(
+            ignore,
+            [
+                real_home.clone(),
+                real_home.join("gone"),
+                real_home.join("real"),
+                PathBuf::from("/no-such-rollcall-dir/y"),
+                real_home.join("real"),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_entries_that_are_not_absolute_after_expansion_are_usage_errors() {
+        for bad in [
+            "ignore = \"x\"",
+            "ignore = [1]",
+            "ignore = [\"rel/x\"]",
+            "ignore = [\"\"]",
+            "ignore = [\"~bob/x\"]",
+            "ignore = [\"~bob\"]",
+            "ignore = [\"./x\"]",
+        ] {
+            assert!(load_toml(bad).is_err(), "accepted: {bad}");
+        }
+        let err = load_toml("ignore = [\"~bob/x\"]").unwrap_err();
+        assert!(
+            err.0.contains("ignore") && err.0.contains("~bob/x"),
+            "{err}"
         );
     }
 

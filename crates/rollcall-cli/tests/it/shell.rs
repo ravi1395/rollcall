@@ -28,6 +28,8 @@ const MARKER_PREFIX: &str = "marker-";
 const MAIN_SESSION: (&str, &str) = ("claude", "c1a00006-0000-4000-8000-000000000008");
 /// Records `<name> <cwd> <argv…>` NUL-separated, so a newline in the path cannot blur the fields.
 const STUB: &str = "#!/bin/sh\nprintf '%s\\0' \"${0##*/}\" \"$PWD\" \"$@\" > \"$STUB_RECORD\"\n";
+/// `mktemp` that always lands under `$TMPDIR` (bare macOS `mktemp` ignores it) and records the path it made.
+const MKTEMP_STUB: &str = "#!/bin/sh\nf=$(/usr/bin/mktemp \"$TMPDIR/tmp.XXXXXXXX\") || exit 1\nprintf '%s' \"$f\" > \"$TMPDIR/mktemp-made\"\nprintf '%s\\n' \"$f\"\n";
 const PLANTED: &str = "#!/bin/sh\nprintf 'planted\\0' > \"$STUB_RECORD\"\n";
 
 /// (worktree dir under `$F`, agent of its newest session, that session's id): the six hostile paths. The
@@ -91,6 +93,7 @@ fn rig() -> &'static Rig {
         for name in ["claude", "codex"] {
             write_executable(&stubs.join(name), STUB);
         }
+        write_executable(&stubs.join("mktemp"), MKTEMP_STUB);
         let out = run_rollcall(&w, &["status", w.root.to_str().unwrap(), "--json"]);
         let doc = serde_json::from_str(&out.stdout)
             .unwrap_or_else(|e| panic!("status --json: {e}\n{}", out.stderr));
@@ -417,12 +420,27 @@ fn rc_passes_through(sh: Sh, args: &[&str]) -> crate::support::Run {
     assert_eq!(got.code, expected.code, "{}: {}", sh.name(), got.stderr);
     assert_eq!(got.stdout, expected.stdout, "{} rc {args:?}", sh.name());
     assert_no_marker(r, scratch.path());
+    // `rc` called the `mktemp` stub (it records the file it made) and removed that file on every non-10 exit.
+    let made = std::fs::read_to_string(scratch.path().join("mktemp-made"))
+        .unwrap_or_else(|e| panic!("{}: rc never called the mktemp stub: {e}", sh.name()));
+    assert!(
+        Path::new(&made).starts_with(scratch.path()),
+        "{}: {made}",
+        sh.name()
+    );
+    assert!(
+        !Path::new(&made).exists(),
+        "{}: resume temp file left: {made}",
+        sh.name()
+    );
     got
 }
 
 fn rc_status(sh: Sh) {
     let root = rig().w.root.to_str().unwrap().to_owned();
     let got = rc_passes_through(sh, &["status", &root]);
+    // `F` holds error rows: `rc` returns exit 4 unchanged (only 10 is its own).
+    assert_eq!(got.code, 4, "{}: {}", sh.name(), got.stderr);
     if require_tool(sh.name()).is_some() {
         // The hostile branch was rendered, not run.
         assert!(got.stdout.contains("$(true>marker-rc)"), "{}", got.stdout);

@@ -234,6 +234,11 @@ pub struct WorktreeState {
     pub missing: bool,
     pub merged: bool,
     pub error: Option<String>,
+    /// A missing worktree whose admin dir holds `locked` (`git worktree lock`): `git worktree
+    /// prune` skips it, so the prune hint does not count it (§8.2). Never in a §7 document.
+    // R1 exception, author-approved 2026-10-06; `default` keeps older cache rows readable.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +288,8 @@ pub struct WalkOptions {
     pub follow_symlinks: bool,
     pub submodules: bool,
     pub skip_dirs: Vec<String>,
+    /// §3.2 config `ignore`, canonical paths: the walk never descends into these.
+    pub ignore: Vec<PathBuf>,
     pub budget_entries: u64,
     pub budget: Duration,
 }
@@ -536,6 +543,36 @@ mod tests {
     use super::*;
 
     const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+    /// S11-12: `locked` is `#[serde(default)]` and round-trips.
+    #[test]
+    fn worktree_state_locked_defaults_to_false_and_round_trips() {
+        let state = |locked| WorktreeState {
+            path: PathBuf::from("/r/w"),
+            is_main: false,
+            branch: None,
+            detached: false,
+            head: None,
+            last_commit_at: None,
+            upstream: None,
+            ahead: None,
+            behind: None,
+            unpushed: None,
+            dirty_count: 0,
+            untracked_count: 0,
+            missing: true,
+            merged: false,
+            error: None,
+            locked,
+        };
+        let mut old = serde_json::to_value(state(true)).unwrap();
+        assert_eq!(old["locked"], json!(true));
+        let back: WorktreeState = serde_json::from_value(old.clone()).unwrap();
+        assert!(back.locked);
+        old.as_object_mut().unwrap().remove("locked");
+        let back: WorktreeState = serde_json::from_value(old).unwrap();
+        assert_eq!(back, state(false));
+    }
 
     fn ts(s: &str) -> Timestamp {
         s.parse().unwrap()

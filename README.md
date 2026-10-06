@@ -29,7 +29,7 @@ macOS (arm64, x86_64) and Linux (x86_64, arm64). Windows is not supported.
 
 ```sh
 # Homebrew
-brew install ravi1395/tap/rollcall-cli
+brew install ravi1395/rollcall/rollcall-cli
 
 # Shell installer (release binaries with SHA-256 checksums and GitHub attestations)
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ravi1395/rollcall/releases/latest/download/rollcall-cli-installer.sh | sh

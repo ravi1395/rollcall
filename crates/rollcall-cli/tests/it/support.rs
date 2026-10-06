@@ -122,6 +122,7 @@ pub enum Special {
     PackBomb,
     ObjectsPackFlood,
     TreeDeepBig,
+    DotRef,
 }
 
 #[derive(Debug, Clone, Deserialize)]

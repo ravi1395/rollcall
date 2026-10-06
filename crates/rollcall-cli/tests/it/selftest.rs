@@ -129,7 +129,7 @@ const MIN_FSCK_REPOS: usize = 20;
 const SPARSE_BIG_LEN: u64 = 4 << 30;
 const BIG_TRACKED_LEN: u64 = 1 << 30;
 /// Specials in the manifest's enum; a row for each must have been built.
-const SPECIAL_COUNT: usize = 31;
+const SPECIAL_COUNT: usize = 32;
 
 fn git_in(w: &World, dir: &Path, args: &[&str]) -> std::process::Output {
     let mut cmd = w.sb.command(git_path());
@@ -508,6 +508,22 @@ fn assert_special(w: &World, r: &Repo, special: Special, python: &Path) {
             }
             let bottom = git_ok(w, &path, &["cat-file", "-t", "HEAD:a/a/a/a/a"]);
             assert_eq!(bottom.trim(), "blob");
+        }
+        Special::DotRef => {
+            for entry in r.target.as_deref().unwrap().split(',') {
+                let (file, kind) = entry.split_once('=').unwrap();
+                let file = match file.strip_prefix("admin:") {
+                    Some(rel) => only_admin_dir(&gitdir).join(rel),
+                    None => gitdir.join(file),
+                };
+                let meta = std::fs::symlink_metadata(&file).unwrap();
+                if kind.starts_with("symlink") {
+                    assert!(meta.file_type().is_symlink(), "{}", file.display());
+                    assert_eq!(std::fs::metadata(&file).unwrap().len(), 100);
+                } else {
+                    assert!(meta.is_file() && meta.len() == 6144, "{}", file.display());
+                }
+            }
         }
         Special::EnclosingRoot => assert!(path.join("sub/dir/keep.txt").is_file()),
         Special::Drivers => {

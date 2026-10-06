@@ -304,8 +304,8 @@ fn scan_h_stays_inside_its_time_and_memory_bounds() {
         s.stderr
     );
     assert!(s.rss < SCAN_RSS_LIMIT, "peak RSS {} bytes", s.rss);
-    // Error rows make the scan exit 1 (§3.1); anything else means it did not finish the way §8 needs.
-    assert_eq!(s.code, 1, "stderr: {}", s.stderr);
+    // Error rows make a completed scan exit 4 (§3.1); anything else means it did not finish the way §8 needs.
+    assert_eq!(s.code, 4, "stderr: {}", s.stderr);
 }
 
 #[test]
@@ -433,6 +433,18 @@ fn scan_h_pack_bombs_each_end_in_their_own_way() {
 fn scan_h_refuses_a_flooded_object_pack_directory() {
     let Some(s) = scan_h() else { return };
     assert_carries(s, "h-objects-pack-flood", UNTRUSTED_GIT_DIR);
+}
+
+#[test]
+fn scan_h_dot_named_refs_are_exempt_from_the_size_cap_and_nothing_else_is() {
+    let Some(s) = scan_h() else { return };
+    // (i) a 6 KiB `refs/heads/.DS_Store`; (ii) the same under refs/remotes/origin and in a linked worktree's admin refs.
+    assert_no_error(s, "h-dot-ref-heads");
+    assert_no_error(s, "h-dot-ref-remote-and-admin");
+    // (iii) the control without the dot, (iv) a dot-named symlink, (v) a file inside a dot-named directory.
+    assert_carries(s, "h-dot-ref-junk", UNTRUSTED_GIT_DIR);
+    assert_carries(s, "h-dot-ref-symlink", UNTRUSTED_GIT_DIR);
+    assert_carries(s, "h-dot-ref-dot-dir", UNTRUSTED_GIT_DIR);
 }
 
 #[test]

@@ -25,6 +25,7 @@
 #   no new keys: their parameters ride in `target` and `config`, grammar under "Revision 12 hostile specials" below)
 #   gitoxide_keys pack_bomb objects_pack_flood tree_deep_big   (added by P07c, spec rev 13; no new keys: parameters in
 #   `target` and `config`, grammar under "Revision 13 hostile specials" below)
+#   dot_ref   (added for spec rev 16; no new keys: `target` lists the files, grammar under "Revision 16 hostile special" below)
 #
 # ---- Conventions the schema left open (fixed by P07; P27b builds to these) ----
 # Build order per repo: init (initial branch = first commit's branch), commits, branches, worktrees, state and edit, then
@@ -139,6 +140,12 @@
 #   is `tree_bytes` (27,262,976) bytes, its first entry by name the next level's tree (a name of `next_name` bytes: "a"), the rest
 #   blob entries with `blob_name`-byte names (about 145,000 entries, 22 MiB of path bytes per tree). The builder writes loose
 #   tree objects directly and points the initial commit at the top one; `commits` holds README.md only (replaced by the chain).
+
+# ---- Revision 16 hostile special (I1; in root H, in_clean = false by root) ----
+# dot_ref: built like any special repo; `target` is a comma-separated list of "<where><path>=<kind>:<bytes>" entries, written last
+#   (no git command afterwards), parents created as needed. <where> is empty (relative to the git dir) or "admin:" (relative to the
+#   only linked worktree's admin dir <git dir>/worktrees/<name>/). <kind> is `file` (a regular file of <bytes> bytes, each byte
+#   (i * 131) % 251) or `symlink` (a symlink to a regular <bytes>-byte file the builder writes at <git dir>/dot-ref-target).
 
 # ---- Session-fixture conventions (fixed by P08; P28 builds to these, P10 / P33 / P35 / P39 judge against them) ----
 # Rows. [[claude]]: id (the session id rollcall must report), project_dir (directory name under $CLAUDE_PROJECTS; opaque, rollcall
@@ -1459,6 +1466,77 @@ covers = ["hostile: tree-deep-big"]
 head = "main"
 commits = [
   { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# tree-deep-big\n" } },
+]
+
+[[repo]]
+id = "h-dot-ref-heads"
+root = "H"
+path = "dot-ref-heads"
+kind = "special"
+special = "dot_ref"
+in_clean = false
+target = "refs/heads/.DS_Store=file:6144"
+covers = ["hostile: dot-ref"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# dot-ref-heads\n" } },
+]
+
+[[repo]]
+id = "h-dot-ref-remote-and-admin"
+root = "H"
+path = "dot-ref-remote-and-admin"
+kind = "special"
+special = "dot_ref"
+in_clean = false
+target = "refs/remotes/origin/.DS_Store=file:6144,admin:refs/.DS_Store=file:6144"
+covers = ["hostile: dot-ref"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# dot-ref-remote-and-admin\n" } },
+]
+worktrees = [ { path = "linked-wt", branch = "feat-dot-ref" } ]
+
+[[repo]]
+id = "h-dot-ref-junk"
+root = "H"
+path = "dot-ref-junk"
+kind = "special"
+special = "dot_ref"
+in_clean = false
+target = "refs/heads/junk=file:6144"
+covers = ["hostile: dot-ref"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# dot-ref-junk\n" } },
+]
+
+[[repo]]
+id = "h-dot-ref-symlink"
+root = "H"
+path = "dot-ref-symlink"
+kind = "special"
+special = "dot_ref"
+in_clean = false
+target = "refs/heads/.x=symlink:100"
+covers = ["hostile: dot-ref"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# dot-ref-symlink\n" } },
+]
+
+[[repo]]
+id = "h-dot-ref-dot-dir"
+root = "H"
+path = "dot-ref-dot-dir"
+kind = "special"
+special = "dot_ref"
+in_clean = false
+target = "refs/heads/.d/junk=file:6144"
+covers = ["hostile: dot-ref"]
+head = "main"
+commits = [
+  { branch = "main", message = "init", date = "2026-09-10T09:00:00Z", files = { "README.md" = "# dot-ref-dot-dir\n" } },
 ]
 
 # ============================== root home (refused-root suggestions; 7 repos at depth 1-3 + one under a skip dir) ==============================
