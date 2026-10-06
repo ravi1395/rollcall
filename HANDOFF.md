@@ -1,48 +1,44 @@
-# HANDOFF — 2026-10-06 main (~/Projects/rollcall), end of session 13
+# HANDOFF — 2026-10-07 impl/v0 → impl/copilot (~/Projects/rollcall), end of session 14
 
-**Status: ACTIVE.** Supersedes the session 12 handoff (byte copy: `.handoffs/20261006-235942-superseded-HANDOFF.md`, which holds every author decision from v1, sessions 8–12). v1 is finished: spec rev 16 `docs/superpowers/specs/2026-09-29-rollcall-design.md`, criteria `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`.
+**Status: ACTIVE.** Supersedes session 13 (byte copy: `.handoffs/20261007-001525-superseded-HANDOFF.md`; v1 author decisions live in `.handoffs/20261006-235942-superseded-HANDOFF.md`).
 
-**Next session: Copilot integration (author roadmap, 2026-10-06).** Nothing is designed yet. Start with `superpowers:brainstorming`, then a spec revision (rev 17) for author review, then `/phases`. Branch from `origin/main`, not `impl/v0`.
+**Next session: Copilot CLI session source.** Plan (DRAFT, awaiting author approval): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`.
+1. Get the author's answers to the plan's open questions Q1–Q7 and approval of the R1 items (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). **No code before that.** The v1 autonomy grant (2026-10-04) does not cover this work.
+2. Create the branch: `git switch -c impl/copilot origin/main`, then `git cherry-pick` this session's commits from `impl/v0` (handoff + plan + research; see Done). In session 14, `switch -c` + `cherry-pick` was blocked by the auto-mode classifier, so the author or the next session must run them with approval.
+3. Run Phase 0 (spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md`) and stop for author review. Then P1–P3 under the full loop (`/executor-grade-plan-audit` → `/pchunker` + `/pexec` → breaker → Fable skeptic). P4/P5 only per Q1/Q2/Q6.
 
 ## Done (verified)
-- **PR https://github.com/ravi1395/rollcall/pull/6 merged by the author** (`gh pr view 6` → `MERGED`, 2026-10-06T22:54:47Z, merge commit `4f102a7`). `impl/v0` is fully merged. Do not add new work to it.
-- **Dependabot PRs #2–#5 merged by the author after #6.** `origin/main` = `474cf23`. Diff `4f102a7..474cf23`: `Cargo.lock` (jsonschema 0.58.2→0.58.5, libc 0.2.189→0.2.190, insta 1.48.0→1.49.0) and `.github/workflows/ci.yml` (taiki-e/install-action 2.87.22→2.87.23).
-- **Local gate on `origin/main` (`474cf23`): green**, see Test state.
+- **PR https://github.com/ravi1395/rollcall/pull/6 merged** by the author (merge `4f102a7`); Dependabot #2–#5 merged after it; `origin/main` = `474cf23`.
+- **Gate on `origin/main` `474cf23`** (session 13, macOS, detached worktree): fmt + clippy + test → exit 0, **973 passed / 0 failed / 4 ignored**.
+- **Copilot CLI research** (session 14, public sources only; nothing installed; `~/.copilot` contents not read). Store `$COPILOT_HOME|~/.copilot/session-state/<id>/events.jsonl`; cwd/branch in `session.start/resume.data.context` and `session.context_changed.data`; title and idle state are ephemeral (not on disk); `workspace.yaml` holds `name`. Confidence and unknowns per section in the research doc.
+- **Plan written** (phases skill format: P0 spec, P1 enum + arms inert, P2 parser dark, P3 wiring, P4 gated title/liveness, P5 gated real-data check).
+- Commit state: session 13 handoff `9b3f8c5` on `impl/v0` (local, unpushed). Session 14 files (this handoff, plan, research, archive) are committed on `impl/v0` (local, unpushed) in the commit after `9b3f8c5`.
 
 ## In progress
-- Nothing. `git status --short` (on `impl/v0`, before this handoff's commit) → `?? .handoffs/20261006-235942-superseded-HANDOFF.md`, `?? graphify-out/` (untracked; never commit `graphify-out/`).
+- Nothing half-edited. `git status --short` before this session's commit: `?? .handoffs/20261007-001525-superseded-HANDOFF.md`, `?? docs/research/`, `?? docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`, `?? graphify-out/` (never commit `graphify-out/`).
 
 ## Decisions + why
-- This handoff is committed on `impl/v0` (local only, not pushed), the same way earlier handoffs were. The next session reads the file from the working tree. Copy or carry it into the new branch when you branch from `main`.
+- **Copilot CLI only** (author, 2026-10-07). Not VS Code Copilot Chat (18 local `chatSessions` files exist but were not chosen), not the cloud agent.
+- **Plan reuses `Backing::LogFile` / `TextRef::LogLine` / `SourceMode::Jsonl`.** `events.jsonl` is one append-only JSONL per session, the same shape as Claude logs, so no new core types unless Q1=(b).
+- **Phase cut keeps each merge green:** adding the enum variant forces every exhaustive match at once (P1, arms tagged mech); the source stays unregistered until P3, so user output is unchanged through P2.
 
 ## Test state
-- `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked` on a detached worktree at `origin/main` `474cf23` (macOS) → exit 0. The 28 `test result:` lines sum to **973 passed / 0 failed / 4 ignored**, identical to the `1147a53` baseline, so the Dependabot bumps changed nothing. Ignored by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`.
-- CI: never run on `main`. Every job in runs `37543476409` (PR), `37543647682` and `37543667177` (main) is `failure` with 0 steps. Annotation: "The job was not started because recent account payments have failed…". Linux is still untested.
+- Last gate: `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (ignored by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`). No code changed since.
+- CI: still billing-blocked (every job 0 steps; "recent account payments have failed"). Linux untested.
 
 ## Gotchas
-- **CI is billing-blocked, not red.** Check annotations with `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations` before debugging. Once billing is fixed, re-run CI on `main`; use `ci-divergence-triage` if it goes red.
-- **`ubuntu-latest` becomes Ubuntu 26 from 2026-10-19** (runner annotation). If CI is still blocked by then, the first Linux run tests a new OS too. Option: pin `ubuntu-24.04` (author decision; not asked).
-- **R1 and new crates.** Copilot support probably means a new module in `crates/rollcall-sessions/src/` (today: `claude.rs`, `codex_db.rs`, `codex_rollout.rs`, `jsonl.rs`). That edits a `mod` list and maybe a `Cargo.toml`. R1 forbids that after P01/P04 of a plan, so the new plan's first phase must own those edits, with the author's approval.
-- **Autonomy from 2026-10-04 covered v1 only.** It does not carry over to Copilot. Spec rev 17 needs author review before any code.
-- Carried over: never print prompt text from `~/.claude` / `~/.codex` (and the same goes for Copilot logs); use a scratch `HOME` for manual runs; `git config handoff.auto false`; concurrent sessions may edit branches (stage explicit paths); Python `re.sub` replacement strings turn `\n` into real newlines.
+- **No real Copilot session on this machine** (`~/.copilot` = `config.json ide logs mcp-config.json`). All format criteria are *(assumption)* until Q6 gets a sample. Never print prompt text from `~/.copilot` (plaintext prompts, tool args and output; research §6). `~/.config/github-copilot/apps.json` likely holds tokens: never read it.
+- **`"copilot"` is 7 chars**, one more than `"claude"`: P1 checks TUI/plain column budgets.
+- **Two source lists** must stay in sync: `scan.rs` `scan_sources` and `output.rs` resolver list.
+- **Test sandbox** (`tests/it/support.rs:591-630`) must set `COPILOT_HOME` in P3, or a test could read the real store.
+- `ubuntu-latest` → Ubuntu 26 from 2026-10-19 (runner annotation); consider pinning `ubuntu-24.04` (author decision, not asked).
+- Carried: CI annotations via `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations`; scratch `HOME` for manual runs; `git config handoff.auto false`; stage explicit paths; Python `re.sub` replacement turns `\n` into newlines.
 
 ## Suggested skills
-- `brief` (vault context), `superpowers:brainstorming` → spec rev 17 → `/phases` → `/executor-grade-plan-audit` → `/pchunker` + `/pexec`.
-- `ci-divergence-triage` once CI runs.
-
-## Copilot: what's on this machine (session 13; names and counts only, no contents read)
-- **VS Code Copilot Chat:** `~/Library/Application Support/Code/User/workspaceStorage/<hash>/chatSessions/` exists in 5 of 7 workspaces (2+2+2+2+10 = 18 files), plus `chatEditingSessions/` (43). Each `<hash>/workspace.json` should name the workspace folder, which is how a session would map to a repo (§6.5). Formats are unverified.
-- **Copilot CLI:** `~/.copilot/` holds only `config.json`, `ide/`, `logs/`, `mcp-config.json`. There is no session store and no `copilot` binary on PATH; VS Code bundles a shim under `globalStorage/github.copilot-chat/copilotCli/`. So there is no local CLI session data to test against.
-- `~/.config/github-copilot/apps.json` likely holds auth tokens. Never read or print it.
-
-## Copilot: open questions for brainstorming (none answered)
-- Which Copilot: GitHub Copilot CLI sessions, VS Code Copilot Chat / agent mode, Copilot coding agent (cloud PR sessions), or several?
-- Where each one stores session data on disk, in what format, and whether it records the cwd/repo (needed for the spec §6.5 session → worktree match).
-- Same treatment as Claude/Codex (spec §5.0 common rules, §6.3 incremental reads, prompt redaction), or a reduced one?
-- Read-only local files only (as today), or does it need the network/GitHub API? The latter changes the §4.4 security posture.
+- `brief`, then the author Q&A; `/executor-grade-plan-audit` before `/pchunker`; `/pexec`; `gate-record-audit` before the skeptic; `verify-ledger` for P5; `ci-divergence-triage` once CI runs.
 
 ## Not started
-- Copilot integration (above).
-- Re-run CI on `main` after billing is fixed (author action first).
-- Release: create `ravi1395/homebrew-rollcall`, add the `HOMEBREW_TAP_TOKEN` secret, tag (author actions).
-- Optional carry-overs: the `lock_when_free` fork-race window; the full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; a non-UTF-8 missing-worktree lock key collides with its twin; on macOS the cache ignores `XDG_CACHE_HOME`.
+- Everything in the Copilot plan (P0–P5).
+- Re-run CI on `main` after the author fixes billing.
+- Release: create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag (author actions).
+- Optional carry-overs: `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
