@@ -3,9 +3,11 @@
 **Status: ACTIVE.** Supersedes session 13 (byte copy: `.handoffs/20261007-001525-superseded-HANDOFF.md`; v1 author decisions live in `.handoffs/20261006-235942-superseded-HANDOFF.md`).
 
 **Next session: Copilot CLI session source.** Plan (DRAFT, awaiting author approval): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`.
-1. Get the author's answers to the plan's open questions Q1–Q7 and approval of the R1 items (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). **No code before that.** The v1 autonomy grant (2026-10-04) does not cover this work.
-2. Create the branch: `git switch -c impl/copilot origin/main`, then `git cherry-pick` this session's commits from `impl/v0` (handoff + plan + research; see Done). In session 14, `switch -c` + `cherry-pick` was blocked by the auto-mode classifier, so the author or the next session must run them with approval.
-3. Run Phase 0 (spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md`) and stop for author review. Then P1–P3 under the full loop (`/executor-grade-plan-audit` → `/pchunker` + `/pexec` → breaker → Fable skeptic). P4/P5 only per Q1/Q2/Q6.
+1. Get the author's answers to the plan's open questions Q1–Q7 and approval of the R1 items (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). Record them verbatim in the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom of this file: the workflow's preflight reads that exact heading and stops if any Q is unanswered or R1 is not approved. **No code before that.** The v1 autonomy grant (2026-10-04) does not cover this work.
+2. Create the branch: `git switch -c impl/copilot origin/main`, then `git cherry-pick 9b3f8c5 d98ec05` plus this handoff's own commit (on `impl/v0`). In session 14, `switch -c` + `cherry-pick` was blocked by the auto-mode classifier, so the author or the next session must run them with approval. The workflow's preflight refuses any other branch.
+3. Run workflow **`rollcall-copilot`** (`.claude/workflows/rollcall-copilot.js`; local, `.claude/` is not tracked) with `args: {stage: "spec"}`: Opus drafts spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md` + the CLAUDE.md Safety line, an Opus skeptic reviews (≤ 2 rounds), it commits, then **stop for author review**.
+4. After the author approves the spec: run `rollcall-copilot` with `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: Sonnet implements tests-first → gate → commit → Opus `breaker` (if has_logic) → guard keeps test code only → Sonnet fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Models are the author's choice (2026-10-07): Sonnet implementers, Opus breaker and skeptic (overrides the global Fable-skeptic default for this run).
+5. Then, in the main loop: audit `git log`/`git status`, P5 real-data check only if the author supplied a sample (Q6; counts only, never prompt text), update this handoff, and **ask before pushing** `impl/copilot`.
 
 ## Done (verified)
 - **PR https://github.com/ravi1395/rollcall/pull/6 merged** by the author (merge `4f102a7`); Dependabot #2–#5 merged after it; `origin/main` = `474cf23`.
@@ -42,3 +44,14 @@
 - Re-run CI on `main` after the author fixes billing.
 - Release: create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag (author actions).
 - Optional carry-overs: `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
+
+## Author answers 2026-10-07 (Copilot plan)
+<!-- Filled in by the next session with the author's verbatim answers. The rollcall-copilot workflow preflight parses this section. -->
+- Q1 (title):
+- Q2 (liveness):
+- Q3 (legacy stores):
+- Q4 (sub-agent / autopilot):
+- Q5 (non-UUID ids):
+- Q6 (real sample):
+- Q7 (schema_version):
+- R1 approval (SourceKind::Copilot, pub mod copilot, EnvPaths.copilot_home):
