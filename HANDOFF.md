@@ -25,7 +25,7 @@
 ## Gotchas
 - **CI is billing-blocked, not red.** Check annotations with `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations` before debugging any failure.
 - The workflow can't run S11-style sections: `ORDER` in `rollcall-v1.js` is fixed, and editing the script is blocked. Use direct Agent calls.
-- The permission-prompt fix was never applied: `grep -c '"Bash(rm \*)"' ~/.claude/settings.json` → 1. The proposal from the session 11 scratchpad is the author's to apply.
+- The permission-prompt fix is applied (author, 2026-10-06 23:47): `grep -c '"Bash(rm \*)"' ~/.claude/settings.json` → 0. Backup: `~/.claude/settings.json.bak-20261005-231034`.
 - Carried over: Python `re.sub` replacement strings turn `\n` into real newlines (use `str.replace`); hostile `scan_h*` tests are slow in debug; concurrent sessions may edit this branch (stage explicit paths); `git config handoff.auto false`; use a scratch `HOME` for manual runs; never print prompt text from `~/.claude` / `~/.codex`.
 - Skeptic observations (non-blocking): a missing worktree with a non-UTF-8 path shares its lossy lock key with a twin (no test; §4.4 says such paths fail as `git error: worker failed` anyway). On macOS the cache follows `$HOME/Library/Caches`, not `XDG_CACHE_HOME`.
 
