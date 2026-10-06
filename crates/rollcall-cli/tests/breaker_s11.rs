@@ -316,14 +316,14 @@ fn two_repos() -> Sb {
     sb
 }
 
-/// §3.1: repeated `status` flags take the last value; `--json` is a `status` flag.
+/// Author decision 2026-10-06 (session 12): only the filters and `--color` take their last
+/// value, so a repeated `--json` stays a usage error.
 #[test]
-fn breaker_a_repeated_json_is_json() {
+fn breaker_a_repeated_json_is_a_usage_error() {
     let sb = two_repos();
-    let once = sb.status(&["--json"]);
     let twice = sb.status(&["--json", "--json"]);
-    assert_eq!(twice.code, Some(0), "{}", twice.stderr);
-    assert_eq!(twice.stdout, once.stdout);
+    assert_eq!(twice.code, Some(2), "{}", twice.stderr);
+    assert!(twice.stdout.is_empty(), "{}", twice.stdout);
 }
 
 /// §8.2: filters are validated then ignored with `--json`; the last `--top` is what is
@@ -392,34 +392,36 @@ fn breaker_top_with_a_plus_sign_is_that_integer() {
     assert_ne!(one.stdout, sb.status(&[]).stdout);
 }
 
-/// §3.1 rev 16: "a `status` flag given more than once takes its last value instead of exiting
-/// `2`". Read literally, `--top 0 --top 2` is `--top 2`; the code validates every occurrence
-/// and exits 2 (likewise `--color bogus --color never`).
+/// Author decision 2026-10-06 (session 12): every occurrence is still validated, so an invalid
+/// earlier value is a usage error although a later valid one would override it.
 #[test]
-#[ignore = "AMBIGUOUS: spec silent on whether an overridden earlier value is still validated (`--top 0 --top 2` exits 2)"]
-fn breaker_an_overridden_invalid_top_is_not_validated() {
+fn breaker_an_overridden_invalid_value_is_still_a_usage_error() {
     let sb = two_repos();
-    let last = sb.status(&["--top", "2"]);
-    let run = sb.status(&["--top", "0", "--top", "2"]);
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    assert_eq!(run.stdout, last.stdout);
+    for args in [
+        &["--top", "0", "--top", "2"][..],
+        &["--color", "bogus", "--color", "always"],
+    ] {
+        let run = sb.status(args);
+        assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+        assert!(run.stdout.is_empty(), "{args:?}: {}", run.stdout);
+    }
 }
 
-/// `args_override_self` covers the shared flags flattened into `status` too: `status --yes
-/// --yes` / `--no-scan --no-scan` now exit 0 while `scan --yes --yes` and the piped
-/// `rollcall <root> --no-scan --no-scan` (which "behaves as status", §3.1) still exit 2.
+/// Author decision 2026-10-06 (session 12): only the filters and `--color` take their last
+/// value; a repeated shared flag stays a usage error in `status`, the piped `rollcall <root>`
+/// form and `scan` alike.
 #[test]
-#[ignore = "AMBIGUOUS: are --yes/--no-scan/--submodules `status` flags under rev 16? status accepts repeats, scan and piped `rollcall <root>` reject them"]
 fn breaker_repeated_shared_flags_behave_alike_across_status_forms() {
     let sb = two_repos();
     let root = sb.root.to_str().unwrap();
-    let status = sb
-        .rollcall(&["status", root, "--no-scan", "--no-scan"])
-        .code;
-    let piped = sb.rollcall(&[root, "--no-scan", "--no-scan"]).code;
-    let scan = sb.rollcall(&["scan", root, "--yes", "--yes"]).code;
-    assert_eq!(status, piped, "status vs piped `rollcall <root>`");
-    assert_eq!(status, scan, "status vs scan");
+    for flag in ["--no-scan", "--yes", "--submodules", "--follow-symlinks"] {
+        let status = sb.rollcall(&["status", root, flag, flag]).code;
+        let piped = sb.rollcall(&[root, flag, flag]).code;
+        let scan = sb.rollcall(&["scan", root, flag, flag]).code;
+        assert_eq!(status, Some(2), "status {flag} {flag}");
+        assert_eq!(piped, Some(2), "piped `rollcall <root>` {flag} {flag}");
+        assert_eq!(scan, Some(2), "scan {flag} {flag}");
+    }
 }
 
 // ---- B. width ------------------------------------------------------------------------------------

@@ -69,13 +69,14 @@ pub enum ColorMode {
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusFilters {
     /// Only repos with a dirty, untracked or unpushed worktree.
-    #[arg(long)]
+    // A repeated filter or `--color` takes its last value (§3.1); other flags stay single.
+    #[arg(long, overrides_with = "dirty")]
     pub dirty: bool,
     /// Only repos with a stale worktree.
-    #[arg(long)]
+    #[arg(long, overrides_with = "stale")]
     pub stale: bool,
     /// Only the first N repos, after the other filters.
-    #[arg(long, value_name = "N", value_parser = parse_top)]
+    #[arg(long, value_name = "N", value_parser = parse_top, overrides_with = "top")]
     pub top: Option<NonZeroUsize>,
 }
 
@@ -108,8 +109,6 @@ impl RootArgs {
 #[derive(Subcommand, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Print repos, worktrees and their last sessions.
-    // A repeated `status` flag takes its last value; scoped here so `mcp --root` still collects.
-    #[command(args_override_self = true)]
     Status {
         #[command(flatten)]
         root: RootArgs,
@@ -119,7 +118,7 @@ pub enum Command {
         #[command(flatten)]
         filters: StatusFilters,
         /// Colour the badges (accepted and ignored with `--json`).
-        #[arg(long, value_enum, default_value_t)]
+        #[arg(long, value_enum, default_value_t, overrides_with = "color")]
         color: ColorMode,
     },
     /// Scan and print one summary line to stderr.

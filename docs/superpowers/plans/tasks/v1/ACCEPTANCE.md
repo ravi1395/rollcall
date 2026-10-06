@@ -185,7 +185,9 @@ C. Lenient flags
 S11-7: `rollcall status <root> --top 18446744073709551616` and `--top 99999999999999999999999999` each exit with the code of `rollcall status <root>` and print output byte-identical to it (all repos).
 S11-8: `--top 0`, `--top x` and `--top -1` each still exit `2` (I5d-5 unchanged).
 S11-9: On the I5d fixture: `--dirty --dirty` prints exactly what `--dirty` prints, `--stale --stale` exactly what `--stale` prints, `--top 1 --top 2` exactly what `--top 2` prints (two repos) and `--top 2 --top 1` exactly what `--top 1` prints; none exits `2`.
-S11-10 (assumption): A repeated `--color` takes the last value: `--color always --color never` contains no `0x1B` byte and `--color never --color always` contains `ESC[`.
+S11-10: A repeated `--color` takes the last value (author confirmed 2026-10-06, session 12): `--color always --color never` contains no `0x1B` byte and `--color never --color always` contains `ESC[`.
+S11-11a (author decision 2026-10-06, session 12): A repeat of any flag other than `--dirty`, `--stale`, `--top`, `--color` exits `2`: `status --json --json`, and each of `--no-scan`, `--yes`, `--submodules`, `--follow-symlinks` given twice to `status`, to the piped `rollcall <root>` form and to `scan`.
+S11-11b (author decision 2026-10-06, session 12): Every occurrence is validated: `--top 0 --top 2` and `--color bogus --color always` each exit `2` with empty stdout.
 S11-11: Repeatable arguments elsewhere keep accumulating: `rollcall mcp --root A --root B` still serves both roots (the existing MCP tests for repeated `--root` pass unchanged).
 
 D. Locked missing worktrees
