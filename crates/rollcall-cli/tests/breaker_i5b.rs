@@ -328,11 +328,10 @@ fn breaker_no_color_never_beats_always_on_a_pipe_and_never_stays_plain() {
     assert!(!auto.contains(ESC), "{auto:?}");
 }
 
-/// AMBIGUOUS (spec §8.2 names `crossterm::terminal::size()`, which reads the controlling
-/// terminal `/dev/tty` first): stdout is terminal A (40 columns), the controlling terminal is B
-/// (60 columns). "Every output line wider than the terminal's width" is read here as stdout's.
+/// Regression test for the author decision of 2026-10-06 (spec §8.2 names `tcgetwinsize` on
+/// stdout): stdout is terminal A (40 columns), the controlling terminal is B (60 columns), and
+/// "every output line wider than the terminal's width" is stdout's, not `/dev/tty`'s.
 #[test]
-#[ignore = "AMBIGUOUS: which terminal's width when stdout is not the controlling terminal"]
 fn breaker_width_is_that_of_the_stdout_terminal_not_the_controlling_one() {
     let sb = Sb::wide();
     let mut a = Session::spawn({

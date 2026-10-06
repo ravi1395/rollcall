@@ -174,7 +174,7 @@ Item base: `9cb5a77`. Author decisions 2026-10-06 A–D (handoff of session 11),
 A. Filters and render mode in `Ctx`
 S11-1: `crates/rollcall-cli/src/output.rs` declares `pub fn status(ctx: &Ctx, outcome: &ScanOutcome, root: &Path, json: bool, out: &mut dyn Write) -> ExitCode` (no other parameters), and `Ctx` has the fields `status_filters: StatusFilters` and `render: Render` in addition to the pinned four.
 S11-2: Unit: the `Ctx` returned by `config::load` has `status_filters == StatusFilters::default()` and `render == Render::default()`.
-S11-3: Behaviour is unchanged: `git diff 9cb5a77 -- crates/rollcall-cli/tests/` changes no existing assertion; the only change to an existing line in that directory is the removed `#[ignore …]` of S11-6 (and its doc comment). The full R2 gate passes, which re-runs every I5b, I5c, I5d and I5e test.
+S11-3: Behaviour is unchanged: `git diff 9cb5a77 -- crates/rollcall-cli/tests/` changes no existing assertion; the only changes to existing lines in that directory are the removed `#[ignore …]` of S11-6 (and its doc comment) and the inversion of `breaker_i5e.rs` `breaker_probe_locked_missing_worktree_is_counted` (renamed `…_is_not_counted`), which recorded the AMBIGUOUS behaviour that author decision D of 2026-10-06 reversed. The full R2 gate passes, which re-runs every I5b, I5c, I5d and I5e test.
 
 B. Width from stdout's own terminal
 S11-4: `git diff 9cb5a77 -- crates/rollcall-cli/Cargo.toml` adds exactly one line, a `rustix` dependency whose features include `termios`; `git diff 9cb5a77 -- Cargo.lock` adds exactly one line, `"rustix",`, inside the `name = "rollcall-cli"` package's `dependencies`, and removes none; the number of `[[package]]` entries in `Cargo.lock` is unchanged.

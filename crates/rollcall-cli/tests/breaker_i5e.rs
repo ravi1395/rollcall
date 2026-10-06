@@ -240,10 +240,10 @@ fn breaker_external_main_repo_with_a_missing_worktree() {
     );
 }
 
-/// Probe: a locked missing worktree. `git worktree prune` leaves it, yet §8.2 counts every
-/// `missing` worktree. Records current behaviour (AMBIGUOUS, see the report).
+/// A locked missing worktree, which `git worktree prune` leaves, gets no hint (author decision
+/// 2026-10-06, spec §8.2; this probe recorded the earlier AMBIGUOUS behaviour of counting it).
 #[test]
-fn breaker_probe_locked_missing_worktree_is_counted() {
+fn breaker_probe_locked_missing_worktree_is_not_counted() {
     let sb = Sb::new();
     let repo = sb.repo_at(&sb.root.join("r"));
     let linked = sb.base.join("linked/x");
@@ -255,9 +255,8 @@ fn breaker_probe_locked_missing_worktree_is_counted() {
     sb.git(&repo, &["worktree", "lock", linked.to_str().unwrap()]);
     fs::remove_dir_all(&linked).unwrap();
     let run = sb.plain(&[]);
-    assert_eq!(
-        last(&run.stdout),
-        hint(1, repo.to_str().unwrap()),
+    assert!(
+        !run.stdout.lines().any(|l| l.starts_with("hint:")),
         "{}",
         run.stdout
     );

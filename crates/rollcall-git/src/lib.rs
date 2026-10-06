@@ -130,6 +130,7 @@ fn error_row(path: &Path, is_main: bool, error: String) -> WorktreeState {
         missing: false,
         merged: false,
         error: Some(error),
+        locked: false,
     }
 }
 

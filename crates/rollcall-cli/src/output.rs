@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
@@ -173,6 +175,9 @@ struct Builder<'a> {
     submodules: bool,
     sources: [Box<dyn SessionSource>; 2],
     decode: bool,
+    /// Paths (as `Worktree.path` prints them) of the worktrees whose admin dir is locked: the
+    /// §7 documents do not carry it, the prune hint needs it.
+    locked: RefCell<HashSet<String>>,
 }
 
 impl Builder<'_> {
@@ -211,8 +216,12 @@ impl Builder<'_> {
 
     fn worktree(&self, state: &WorktreeState, sessions: &[Session]) -> Worktree {
         let stale = rank::stale_reason(state, self.ctx.now, self.ctx.config.stale_days);
+        let path = state.path.to_string_lossy().into_owned();
+        if state.locked {
+            self.locked.borrow_mut().insert(path.clone());
+        }
         Worktree {
-            path: state.path.to_string_lossy().into_owned(),
+            path,
             is_main: state.is_main,
             external: !canonical_lenient(&state.path).starts_with(self.root),
             branch: state.branch.clone(),
@@ -309,7 +318,7 @@ pub fn build_status(
     stale: bool,
     policy: TextPolicy,
 ) -> StatusDoc {
-    build_status_with(ctx, index, root, stale, policy, false)
+    build_status_with(ctx, index, root, stale, policy, false).0
 }
 
 fn build_status_with(
@@ -319,7 +328,7 @@ fn build_status_with(
     stale: bool,
     policy: TextPolicy,
     decode: bool,
-) -> StatusDoc {
+) -> (StatusDoc, HashSet<String>) {
     // The cache is keyed by the realpath of the root (scan.rs).
     let root = scan::canonical_root(root);
     let scanned_submodules = index.scanned_submodules(&root);
@@ -331,13 +340,14 @@ fn build_status_with(
         submodules: scanned_submodules == Some(true),
         sources: log_sources(ctx),
         decode,
+        locked: RefCell::default(),
     };
     let mut repos: Vec<Repo> = scan::visible_rows(ctx, &root, index.repos_for_root(&root))
         .iter()
         .map(|row| builder.repo(row))
         .collect();
     rank::sort_repos(&mut repos);
-    StatusDoc {
+    let doc = StatusDoc {
         schema_version: SCHEMA_VERSION,
         root: root.to_string_lossy().into_owned(),
         scanned_at: index.scanned_at(&root),
@@ -347,7 +357,8 @@ fn build_status_with(
             .last_diagnostics(&root)
             .is_some_and(|d| d.walk.budget_hit),
         repos,
-    }
+    };
+    (doc, builder.locked.into_inner())
 }
 
 // ---- commands ----
@@ -375,21 +386,20 @@ pub fn status(
     outcome: &ScanOutcome,
     root: &Path,
     json: bool,
-    filters: &StatusFilters,
-    render: Render,
     out: &mut dyn Write,
 ) -> ExitCode {
     let policy = TextPolicy {
         prompts: true,
         redact: ctx.config.redact_prompts,
     };
-    let mut doc = build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
+    let (mut doc, locked) =
+        build_status_with(ctx, &outcome.index, root, outcome.stale, policy, !json);
     let text = if json {
         json_line(&doc)
     } else {
         // The exit code stays that of the whole scan (§3.1), not of the rows kept.
-        filter_repos(&mut doc.repos, filters);
-        plain_status(&doc, ctx.now, render)
+        filter_repos(&mut doc.repos, &ctx.status_filters);
+        plain_status(&doc, &locked, ctx.now, ctx.render)
     };
     finish(out, &text, outcome.exit)
 }
@@ -412,7 +422,12 @@ fn filter_repos(repos: &mut Vec<Repo>, f: &StatusFilters) {
 
 /// §8.2: the risk line (if any), a line per repo, then an indented line per worktree, columns
 /// aligned like `ls`. Every text that came from a repo or a log is sanitised; JSON keeps it exact.
-fn plain_status(doc: &StatusDoc, now: Timestamp, render: Render) -> String {
+fn plain_status(
+    doc: &StatusDoc,
+    locked: &HashSet<String>,
+    now: Timestamp,
+    render: Render,
+) -> String {
     let Render { color, width } = render;
     let mut rows = Vec::new();
     for repo in &doc.repos {
@@ -420,7 +435,7 @@ fn plain_status(doc: &StatusDoc, now: Timestamp, render: Render) -> String {
         rows.extend(repo.worktrees.iter().map(|w| worktree_cells(w, now, color)));
     }
     // The risk line and the hints are not rows: they stay out of the column widths.
-    let text = risk_line(&doc.repos, now, color) + &align(&rows) + &prune_hints(&doc.repos);
+    let text = risk_line(&doc.repos, now, color) + &align(&rows) + &prune_hints(&doc.repos, locked);
     if width == 0 {
         return text;
     }
@@ -430,12 +445,13 @@ fn plain_status(doc: &StatusDoc, now: Timestamp, render: Render) -> String {
 }
 
 /// §8.2: after every row, `hint: <N> missing worktree(s) — run 'git worktree prune' in <path>`
-/// per repo with a missing worktree, in the order given. rollcall only suggests the command.
-fn prune_hints(repos: &[Repo]) -> String {
+/// per repo with a missing worktree, in the order given. A locked one is not counted: `git
+/// worktree prune` skips it. rollcall only suggests the command.
+fn prune_hints(repos: &[Repo], locked: &HashSet<String>) -> String {
     let mut text = String::new();
     for repo in repos {
         let missing = (repo.worktrees.iter())
-            .filter(|w| w.stale_reason == Some(StaleReason::Missing))
+            .filter(|w| w.stale_reason == Some(StaleReason::Missing) && !locked.contains(&w.path))
             .count();
         if missing > 0 {
             let s = if missing == 1 { "" } else { "s" };
@@ -954,6 +970,8 @@ mod tests {
                 ..EnvPaths::default()
             },
             cache_dir: home.join("cache"),
+            status_filters: StatusFilters::default(),
+            render: Render::default(),
         };
         World {
             _dir: dir,
@@ -1003,15 +1021,7 @@ mod tests {
 
     fn run_status(w: &World, outcome: &scan::ScanOutcome, json: bool) -> String {
         let mut out = Vec::new();
-        status(
-            &w.ctx,
-            outcome,
-            &w.root,
-            json,
-            &StatusFilters::default(),
-            Render::default(),
-            &mut out,
-        );
+        status(&w.ctx, outcome, &w.root, json, &mut out);
         String::from_utf8(out).unwrap()
     }
 
@@ -1118,6 +1128,7 @@ mod tests {
             missing: false,
             merged: false,
             error: None,
+            locked: false,
         };
         RepoRow {
             path,
@@ -1692,8 +1703,6 @@ mod tests {
             &outcome,
             &w.root,
             true,
-            &StatusFilters::default(),
-            Render::default(),
             &mut Broken
         )));
     }
@@ -2362,8 +2371,8 @@ mod tests {
             cells[1].starts_with("\x1b[31merror: boom\x1b[0m"),
             "{cells:?}"
         );
-        let colour = plain_status(&doc, w.ctx.now, on);
-        let plain = plain_status(&doc, w.ctx.now, Render::default());
+        let colour = plain_status(&doc, &HashSet::new(), w.ctx.now, on);
+        let plain = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
         assert!(colour.contains(RED), "{colour:?}");
         assert_eq!(unpainted(&colour), plain);
     }
@@ -2371,12 +2380,12 @@ mod tests {
     #[test]
     fn a_width_cuts_every_line_and_keeps_one_line_per_row() {
         let (w, doc) = blank_doc();
-        let plain = plain_status(&doc, w.ctx.now, Render::default());
+        let plain = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
         let widest = plain.lines().map(cols).max().unwrap();
         assert!(widest > 12, "{plain}");
         for color in [false, true] {
             let render = Render { color, width: 12 };
-            let cut = plain_status(&doc, w.ctx.now, render);
+            let cut = plain_status(&doc, &HashSet::new(), w.ctx.now, render);
             assert_eq!(cut.lines().count(), plain.lines().count(), "{cut}");
             assert!(cut.lines().all(|l| cols(l) <= 12), "{cut}");
             assert!(cut.lines().any(|l| unpainted(l).ends_with('…')), "{cut}");
@@ -2386,7 +2395,10 @@ mod tests {
             color: false,
             width: widest,
         };
-        assert_eq!(plain_status(&doc, w.ctx.now, render), plain);
+        assert_eq!(
+            plain_status(&doc, &HashSet::new(), w.ctx.now, render),
+            plain
+        );
     }
 
     #[test]
@@ -2398,7 +2410,7 @@ mod tests {
             assert!(want.starts_with('/'), "{want:?}");
             let cells = repo_cells(&doc.repos[0], w.ctx.now, false);
             assert_eq!(cells[0], want, "{name:?}");
-            let text = plain_status(&doc, w.ctx.now, Render::default());
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
             let first = text.lines().next().unwrap();
             assert!(first.starts_with(&want), "{name:?}: {text:?}");
             assert!(
@@ -2418,7 +2430,7 @@ mod tests {
                 "foo",
                 "{name:?}"
             );
-            let text = plain_status(&doc, w.ctx.now, Render::default());
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
             assert!(text.starts_with("foo  "), "{name:?}: {text:?}");
         }
     }
@@ -2431,7 +2443,7 @@ mod tests {
             doc.repos[0].worktrees[0].branch = Some(branch.to_owned());
             let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
             assert_eq!(cells[0], want, "{branch:?}");
-            let text = plain_status(&doc, w.ctx.now, Render::default());
+            let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
             assert!(
                 text.lines().nth(1).unwrap().starts_with(&want),
                 "{branch:?}: {text:?}"
@@ -2441,7 +2453,7 @@ mod tests {
         doc.repos[0].worktrees[0].branch = Some("\u{2028}feat".to_owned());
         let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
         assert_eq!(cells[0], "   feat");
-        let text = plain_status(&doc, w.ctx.now, Render::default());
+        let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
         assert!(
             text.lines().nth(1).unwrap().starts_with("   feat  "),
             "{text:?}"
@@ -2475,7 +2487,7 @@ mod tests {
                 repos: repos[..n].to_vec(),
                 ..doc.clone()
             };
-            plain_status(&doc, w.ctx.now, Render::default())
+            plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default())
                 .lines()
                 .next()
                 .map(str::to_owned)
@@ -2502,7 +2514,7 @@ mod tests {
                 repos: repos.to_vec(),
                 ..doc.clone()
             };
-            plain_status(&doc, w.ctx.now, Render::default())
+            plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default())
         };
         let both = show(&[clean.clone(), gone.clone()]);
         let hint = both.lines().last().unwrap();

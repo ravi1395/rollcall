@@ -1101,6 +1101,8 @@ mod tests {
                 ..EnvPaths::default()
             },
             cache_dir: home.join("cache"),
+            status_filters: Default::default(),
+            render: Default::default(),
         };
         World {
             _dir: dir,

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use rollcall_core::Timestamp;
 use serde::Deserialize;
 
-use crate::cli::CommonFlags;
+use crate::cli::{CommonFlags, StatusFilters};
+use crate::output::Render;
 use crate::scan::canonical_lenient;
 
 /// Every environment variable rollcall reads, captured once in `run`. Code never reads
@@ -110,6 +111,9 @@ pub struct Ctx {
     pub now: Timestamp,
     pub env: EnvPaths,
     pub cache_dir: PathBuf,
+    /// `status` filters and render mode: `load` leaves the defaults, `run_status` fills them.
+    pub status_filters: StatusFilters,
+    pub render: Render,
 }
 
 /// A usage or config error: printed to stderr, exit 2.
@@ -235,6 +239,8 @@ pub fn load(flags: &CommonFlags, env: EnvPaths) -> Result<Ctx, UsageError> {
         now,
         env,
         cache_dir,
+        status_filters: StatusFilters::default(),
+        render: Render::default(),
     })
 }
 
@@ -269,6 +275,14 @@ mod tests {
     fn load_toml(text: &str) -> Result<Ctx, UsageError> {
         let (_home, env) = env_with(Some(text));
         load(&CommonFlags::default(), env)
+    }
+
+    #[test]
+    fn load_leaves_the_status_filters_and_render_at_default() {
+        let (_home, env) = env_with(None);
+        let ctx = load(&CommonFlags::default(), env).unwrap();
+        assert_eq!(ctx.status_filters, StatusFilters::default());
+        assert_eq!(ctx.render, Render::default());
     }
 
     #[test]

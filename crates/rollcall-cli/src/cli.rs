@@ -1,12 +1,11 @@
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
-use std::num::NonZeroUsize;
+use std::num::{IntErrorKind, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use ratatui::crossterm::terminal;
 
 use crate::config::{self, Ctx, EnvPaths};
 use crate::output::Render;
@@ -76,8 +75,17 @@ pub struct StatusFilters {
     #[arg(long)]
     pub stale: bool,
     /// Only the first N repos, after the other filters.
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = parse_top)]
     pub top: Option<NonZeroUsize>,
+}
+
+/// `--top N` past the largest count keeps every repo; `0`, a sign or a non-number is an error.
+fn parse_top(s: &str) -> Result<NonZeroUsize, String> {
+    match s.parse::<NonZeroUsize>() {
+        Ok(n) => Ok(n),
+        Err(e) if *e.kind() == IntErrorKind::PosOverflow => Ok(NonZeroUsize::MAX),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -99,6 +107,8 @@ impl RootArgs {
 #[derive(Subcommand, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Print repos, worktrees and their last sessions.
+    // A repeated `status` flag takes its last value; scoped here so `mcp --root` still collects.
+    #[command(args_override_self = true)]
     Status {
         #[command(flatten)]
         root: RootArgs,
@@ -291,18 +301,19 @@ fn run_status(
     stdout_is_tty: bool,
     env: EnvPaths,
 ) -> ExitCode {
-    with_ctx(&root.flags, env, |ctx| {
+    with_ctx(&root.flags, env, |mut ctx| {
+        ctx.status_filters = filters.clone();
         let outcome = scan::scan(&ctx, &root.root(), scan_mode(&root.flags));
-        let render = Render {
+        ctx.render = Render {
             color: match color {
                 ColorMode::Always => true,
                 ColorMode::Never => false,
                 ColorMode::Auto => stdout_is_tty && !ctx.env.no_color,
             },
-            // Read after the scan, which outlasts a resize. Gated on the tty test, not on
-            // `size()` failing: crossterm also answers through `/dev/tty`, even with a pipe.
+            // Read after the scan, which outlasts a resize, from stdout's own terminal (§8.2).
             width: if stdout_is_tty {
-                terminal::size().map_or(0, |(cols, _)| usize::from(cols))
+                rustix::termios::tcgetwinsize(std::io::stdout())
+                    .map_or(0, |ws| usize::from(ws.ws_col))
             } else {
                 0
             },
@@ -312,8 +323,6 @@ fn run_status(
             &outcome,
             &root.root(),
             json,
-            filters,
-            render,
             &mut std::io::stdout().lock(),
         )
     })
