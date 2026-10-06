@@ -2,7 +2,7 @@
 
 **Status: ACTIVE.** Supersedes the session 11 handoff (byte copy at ingest: `.handoffs/20261006-223120-consumed-HANDOFF.md`). Spec rev 16: `docs/superpowers/specs/2026-09-29-rollcall-design.md`; fixed criteria: `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md` (items I2, I1, I3, I5a, I5c, I5e, I5d, I5b, I4, S11 Follow-ups); workflow: `.claude/workflows/rollcall-v1.js` (its prompts read the author/autonomy sections at the bottom of this file, so keep those headings).
 
-**Next session: one step is left, and it waits on the author.** CI on `impl/v0` cannot run until GitHub billing is fixed. Once the author says billing is fixed, re-run CI on `1147a53` or later (`gh run rerun <id>` or push), and if it goes green open the PR `impl/v0` → `main` (already authorized; never merge it, never enable auto-merge). Don't open the PR while CI is billing-blocked (author decision of session 10).
+**Next session: PR https://github.com/ravi1395/rollcall/pull/6 (`impl/v0` → `main`) is open (author asked, 2026-10-06, with CI not yet run).** Once the author has fixed GitHub billing, re-run CI on the PR's head. If anything fails, triage with `ci-divergence-triage`, fix it and push. Never merge, never enable auto-merge; the author merges.
 
 ## Done (verified)
 - **S11 follow-ups A–D: accepted.** Commits: `1209b48` (criteria, spec notes, plan R1 annotations), `af84933` (feat), `8c237b1` (breaker fix: the locked set is keyed per (repo path, worktree path)), `c860290` (breaker tests `crates/rollcall-cli/tests/breaker_s11.rs`), `2e70a2d` (repeat scope per the author's answers), `f2c11a5` (docs). Fable skeptic at `f2c11a5` found S11-1..17, 11a and 11b all met, and re-ran two mutations itself: S11-6 (width reverted to crossterm `terminal::size()` → `widest line 60 columns on a 40-column stdout (controlling terminal 60)`) and S11-14 (dropping the locked filter → red).
@@ -33,7 +33,7 @@
 - `verify-ledger` before any merge-ready claim, `repo-debt-report` before the PR, `ci-divergence-triage` if CI runs and goes red.
 
 ## Not started
-- PR `impl/v0` → `main`: waits on green CI, which waits on billing.
+- CI on PR #6: waits on the author's billing fix. Linux has not been tested yet.
 - Tap prerequisites (create `ravi1395/homebrew-rollcall`, add the `HOMEBREW_TAP_TOKEN` secret) and any release run: author actions, later.
 - Carried over, optional: the `lock_when_free` fork-race window; the full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`.
 
