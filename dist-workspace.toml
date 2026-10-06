@@ -22,7 +22,7 @@ checksum = "sha256"
 # Whether to enable GitHub Attestations
 github-attestations = true
 # A GitHub repo to push Homebrew formulas to
-tap = "ravi1395/homebrew-tap"
+tap = "ravi1395/homebrew-rollcall"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Actions in the generated workflow are pinned by SHA (spec §11), so dist must not regenerate it
