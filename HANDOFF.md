@@ -5,6 +5,13 @@
 **Next session: run the Copilot CLI source workflow.** Branch `impl/copilot` exists (from `origin/main` `474cf23` + the session 13–15 docs commits). Plan (DRAFT): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`. Workflow: `.claude/workflows/rollcall-copilot.js`.
 
 1. **Author answers recorded** (session 15 interview, 2026-10-07): Q1–Q7 and R1 are filled in the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom, committed. The workflow preflight parses that exact heading; it also stops on a dirty tree (outside `.claude/` and `graphify-out/`). Q1=(a) means P4 is not run; Q6 means P5 waits for the author's throwaway Copilot session.
+1b. **Copilot CLI installed** (author, 2026-10-07): Homebrew cask `copilot-cli` → `/opt/homebrew/bin/copilot`, `GitHub Copilot CLI 1.0.93.` (Session 15 trap: the Homebrew *formula* `copilot` is AWS Copilot, 1.34.1, the same binary name; it had taken the symlink, so it was uninstalled and the cask reinstalled. Check with `copilot --version`.) As of session 15 `~/.copilot` still has no `session-state/` (`config.json ide logs mcp-config.json`), so no real session exists yet. The research's fixture shapes come from a 1.0.68 capture; 1.0.93 is close, but expect some drift. **Once the author has run one throwaway session, and before the spec stage**, run this key-set probe so spec rev 17 states confirmed shapes instead of *(assumption)*. It prints key names and event types only, never values or prompt text:
+   ```bash
+   for f in ~/.copilot/session-state/*/events.jsonl; do jq -cR 'fromjson? | [.type, (if (.data|type)=="object" then (.data|keys) else (.data|type) end)]' "$f"; done | sort | uniq -c
+   for f in ~/.copilot/session-state/*/events.jsonl; do jq -cR 'fromjson? | keys' "$f"; done | sort | uniq -c
+   ls ~/.copilot/session-state/*/ | sort | uniq -c
+   ```
+   Record the output in this handoff and pass it to the spec stage (it covers research R§9 unknowns 1, 2, 5 and 6). P5 still runs after implementation for the `rollcall doctor` counts.
 2. Confirm `git branch --show-current` = `impl/copilot` (preflight refuses any other branch).
 3. Run workflow `rollcall-copilot` with `args: {stage: "spec"}`: Opus drafts spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md` + the CLAUDE.md Safety line, Opus skeptic (≤ 2 rounds), commits, then **stops for author review**.
 4. After the author approves the spec: `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: tiered implementer tests-first → full gate → commit → Opus `breaker` (if `Has logic: yes`) → guard keeps test code only → tiered fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Stops at the first phase not accepted.
@@ -43,7 +50,7 @@
 
 ## Not started
 - Copilot plan P0–P5 (all of it).
-- Author actions: install Copilot CLI and run one throwaway session (Q6; unblocks P5); fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
+- Author actions: run one throwaway Copilot CLI session (GitHub Copilot CLI 1.0.93 installed; ideally in a scratch git repo, `cd` to a second dir mid-session, then `copilot --resume` it once so `session.resume` and `context_changed` get exercised; Q6, unblocks the key-set probe and P5); fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
 - Optional carry-overs (non-blocking): `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
 
 ## Author answers 2026-10-07 (Copilot plan)
