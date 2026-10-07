@@ -4,7 +4,7 @@
 
 **Next session: run the Copilot CLI source workflow.** Branch `impl/copilot` exists (from `origin/main` `474cf23` + the session 13–15 docs commits). Plan (DRAFT): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`. Workflow: `.claude/workflows/rollcall-copilot.js`.
 
-1. **Blocker first:** fill the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom of this file with the author's verbatim answers to plan Q1–Q7 and an explicit R1 approval (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). The workflow preflight parses that exact heading and **stops immediately** if any Q is blank or R1 is not approved. No code before that; the v1 autonomy grant (2026-10-04) does not cover this work. Commit the answers (explicit path) so the tree is clean: preflight also stops on a dirty tree (outside `.claude/` and `graphify-out/`).
+1. **Author answers recorded** (session 15 interview, 2026-10-07): Q1–Q7 and R1 are filled in the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom, committed. The workflow preflight parses that exact heading; it also stops on a dirty tree (outside `.claude/` and `graphify-out/`). Q1=(a) means P4 is not run; Q6 means P5 waits for the author's throwaway Copilot session.
 2. Confirm `git branch --show-current` = `impl/copilot` (preflight refuses any other branch).
 3. Run workflow `rollcall-copilot` with `args: {stage: "spec"}`: Opus drafts spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md` + the CLAUDE.md Safety line, Opus skeptic (≤ 2 rounds), commits, then **stops for author review**.
 4. After the author approves the spec: `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: tiered implementer tests-first → full gate → commit → Opus `breaker` (if `Has logic: yes`) → guard keeps test code only → tiered fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Stops at the first phase not accepted.
@@ -43,16 +43,16 @@
 
 ## Not started
 - Copilot plan P0–P5 (all of it).
-- Author actions: fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
+- Author actions: install Copilot CLI and run one throwaway session (Q6; unblocks P5); fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
 - Optional carry-overs (non-blocking): `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
 
 ## Author answers 2026-10-07 (Copilot plan)
-<!-- Filled in by the next session with the author's verbatim answers. The rollcall-copilot workflow preflight parses this section. -->
-- Q1 (title):
-- Q2 (liveness):
-- Q3 (legacy stores):
-- Q4 (sub-agent / autopilot):
-- Q5 (non-UUID ids):
-- Q6 (real sample):
-- Q7 (schema_version):
-- R1 approval (SourceKind::Copilot, pub mod copilot, EnvPaths.copilot_home):
+<!-- Filled in session 15 (2026-10-07) from the author's interview choices; quoted labels are the options the author picked. The rollcall-copilot workflow preflight parses this section. -->
+- Q1 (title): "(a) First prompt" — first human prompt, `TitleKind::Prompt`; zero new machinery. Phase 4 not run.
+- Q2 (liveness): "Never / later" — out of scope; matches Claude/Codex (no live state).
+- Q3 (legacy stores): "Skip silently" — ignore `history-session-state/` and flat `session-state/<id>.jsonl`; no doctor count.
+- Q4 (sub-agent / autopilot): "Exclude both" — envelope-`agentId` events and `user.message` with `isAutopilotContinuation: true` are not human prompts and not in `message_count`; `subagent.started` → `excluded_children`.
+- Q5 (non-UUID ids): "Keep §5.0 rule" — skip non-UUID session dirs, count `non_uuid`.
+- Q6 (real sample): "I'll install + run one" — author installs Copilot CLI and runs one throwaway session; P5 runs in the main loop on it (read-only, counts only, never prompt text).
+- Q7 (schema_version): "Additive = compatible" — keep `schema_version` 1; spec note that new enum values are compatible and consumers must tolerate unknown sources.
+- R1 approval (SourceKind::Copilot, pub mod copilot, EnvPaths.copilot_home): "Approve all three" — approved. Any other structural edit still stops and reports.
