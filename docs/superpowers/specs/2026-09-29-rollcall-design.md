@@ -1,6 +1,6 @@
 # rollcall — every repo, every worktree, and the agent session that left it dirty
 
-**Status:** Revision 16 (drafted 2026-10-04 from the author's decisions of 2026-10-03 and design answers of 2026-10-04: dot-named files under `refs/` are exempt from the loose-ref size cap, §4.4; exit code `4` for a completed scan with error rows, §3.1; config `ignore` paths, §3.2 and §4.2; plain `status` decodes HTML entities, colours badges and truncates lines on a terminal (`--color`), prints a risk summary line, takes `--dirty` / `--stale` / `--top N`, and prints a `git worktree prune` hint, §3.1 and §8.2; Homebrew tap `ravi1395/homebrew-rollcall`, §11; author decisions 2026-10-06 (session 11 follow-ups): the terminal width is stdout's own, lenient `--top` and repeated filter and `--color` flags, locked missing worktrees left out of the prune hint, §3.1, §4.4 and §8.2; details marked *assumption* are the planner's and need the author's confirmation; v1 acceptance criteria in `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`) — Revision 15 (plain `status` column layout in §8.2 and a path fallback for empty or blank names; U+2028 and U+2029 become a space when sanitising, §9; approved by the author 2026-10-02; the author confirmed on 2026-10-02 that the 40-column cap applies to the badge column as well as the name column and that an over-cap cell never wraps its line) — Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
+**Status:** Revision 17 (drafted 2026-10-07 from the author's answers Q1–Q7 and R1 approval of 2026-10-07 to the Copilot plan `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`, and the session-15 key-set probe of real GitHub Copilot CLI 1.0.93 sessions recorded in `HANDOFF.md` step 1b: a third session source, §5.3 Copilot CLI, read from `$COPILOT_HOME/session-state/<id>/events.jsonl`; `"copilot"` joins the `source` enums with `schema_version` kept at 1, §3.4 and §7; `COPILOT_HOME`, §3.1 and §10.1; resume via `copilot --resume <id>`, §8.1; details marked *assumption* in §5.3 are neither probe-confirmed nor documented and need the author's confirmation; acceptance criteria in `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md`) — Revision 16 (drafted 2026-10-04 from the author's decisions of 2026-10-03 and design answers of 2026-10-04: dot-named files under `refs/` are exempt from the loose-ref size cap, §4.4; exit code `4` for a completed scan with error rows, §3.1; config `ignore` paths, §3.2 and §4.2; plain `status` decodes HTML entities, colours badges and truncates lines on a terminal (`--color`), prints a risk summary line, takes `--dirty` / `--stale` / `--top N`, and prints a `git worktree prune` hint, §3.1 and §8.2; Homebrew tap `ravi1395/homebrew-rollcall`, §11; author decisions 2026-10-06 (session 11 follow-ups): the terminal width is stdout's own, lenient `--top` and repeated filter and `--color` flags, locked missing worktrees left out of the prune hint, §3.1, §4.4 and §8.2; details marked *assumption* are the planner's and need the author's confirmation; v1 acceptance criteria in `docs/superpowers/plans/tasks/v1/ACCEPTANCE.md`) — Revision 15 (plain `status` column layout in §8.2 and a path fallback for empty or blank names; U+2028 and U+2029 become a space when sanitising, §9; approved by the author 2026-10-02; the author confirmed on 2026-10-02 that the 40-column cap applies to the badge column as well as the name column and that an over-cap cell never wraps its line) — Revision 14 (the §4.4 worker memory cap is 256 MiB, chosen by the author after the final gate measured the revision 13 cap over §10.2's bound) — Revision 13 after red-team rounds 1–4, plan red-team rounds 1–3, and the P14 / P15a / P15b gix read-site audits (`2026-09-29-rollcall-redteam.md`). Awaiting author review.
 **Date:** 2026-09-29
 **Name:** `rollcall` — takes attendance of every repo and agent session. crates.io, Homebrew, npm and PyPI names free on 2026-09-29; only GitHub code collision is `withtally/rollcall` (unrelated).
 
@@ -8,14 +8,14 @@
 
 ### Pitch
 
-> **rollcall: every repo, every worktree, and the Claude Code or Codex session that left it dirty — one screen, one key to resume.**
+> **rollcall: every repo, every worktree, and the Claude Code, Codex or Copilot CLI session that left it dirty — one screen, one key to resume.**
 
 ### Problem
 
 People running AI coding agents across many repos and worktrees lose track of:
 
 - **Repo state** — dirty trees, unpushed commits, branches without upstreams, stale or deleted worktrees.
-- **Agent context** — which Claude Code / Codex session last touched which worktree, what it was doing, how to get back into it.
+- **Agent context** — which Claude Code / Codex / Copilot CLI session last touched which worktree, what it was doing, how to get back into it.
 
 ### Differentiator
 
@@ -30,6 +30,8 @@ Each piece exists separately; the combination does not:
 | xlaude (184★, dormant since 2025-11) | — | — | last prompt per worktree | opens agent |
 | **rollcall** | **yes** | **yes** | **yes** | **yes** |
 
+Revision 17: rollcall also reads GitHub Copilot CLI history (§5.3); the other rows were surveyed for Claude and Codex only.
+
 The README must carry this table as its "How is this different?" section (sources and URLs in `2026-09-29-rollcall-redteam.md`).
 
 ### Generic by default
@@ -39,7 +41,7 @@ The README must carry this table as its "How is this different?" section (source
 
 ### Audience
 
-People running Claude Code and/or Codex across many repos and worktrees. Developers without agents are a side benefit.
+People running Claude Code, Codex and/or GitHub Copilot CLI across many repos and worktrees. Developers without agents are a side benefit.
 
 ### What makes it fun (author goals)
 
@@ -60,7 +62,7 @@ Delightful TUI, a hard technical core (safe discovery over hostile repos, increm
 | Interfaces | TUI + CLI (`status --json`) + stdio MCP server, one shared core |
 | Root | Positional `[PATH]`, default = current directory; MCP: `--root` required |
 | Discovery | Any git repo at any depth under the root, with safety guards (§4) |
-| Agent sessions | Optional; Claude Code + Codex behind `SessionSource` |
+| Agent sessions | Optional; Claude Code + Codex behind `SessionSource` (revision 17: + GitHub Copilot CLI, §5.3) |
 | Scope | Full scope in v0 (MCP, Homebrew, GIF included); estimate **5–7 weeks** solo (revised from 3–5 after round 2) |
 | Pitch | Agent-first |
 | Architecture | Approach A: scan on demand + incremental cache (no daemon) |
@@ -69,7 +71,7 @@ Delightful TUI, a hard technical core (safe discovery over hostile repos, increm
 
 ### Assumptions
 
-- Claude Code and Codex log/database formats are internal and change between versions. Every source detects unrecognised shapes, degrades to partial data, and reports it in `doctor`.
+- Claude Code, Codex and (revision 17) Copilot CLI log/database formats are internal and change between versions. Every source detects unrecognised shapes, degrades to partial data, and reports it in `doctor`.
 - APIs named in §4.4 were checked against gitoxide source at `5708de4` (gix 0.86) and the gix 0.88.0 crate source. If any named API differs in the pinned version, the implementer stops and reports; the safety rule is never weakened to fit.
 
 ## 2. Approaches considered
@@ -101,7 +103,7 @@ Exit codes: `0` success (and TUI `q`); `1` the walk was partial, or no scan has 
 
 Revision 16, author decisions 2026-10-06: `--top N` with N above the largest machine integer means all repos (`0`, non-integers and negatives stay exit `2`); a repeated `--dirty`, `--stale`, `--top` or `--color` takes its last value instead of exiting `2` (`--dirty --dirty`, `--top 1 --top 2` is `--top 2`). Author decisions 2026-10-06 (session 12): only those four; any other repeated flag (`--json`, and the shared `--yes`, `--no-scan`, `--submodules`, `--follow-symlinks`) stays exit `2` in `status`, the non-TTY `rollcall [PATH]` form and every other command alike; and every occurrence is validated, so an invalid earlier value is a usage error although a later one overrides it (`--top 0 --top 2`, `--color bogus --color always` exit `2`). Repeatable arguments of other commands (`mcp --root`) keep accumulating. Implementation note (plan R1 exceptions approved 2026-10-06): the filters and the render mode travel in the context (`Ctx`), so `output::status` keeps its pinned signature.
 
-Environment: `NO_COLOR` honoured (revision 16: by the TUI and plain `status`, §8.2); `ROLLCALL_NOW` (RFC 3339) overrides "now" for every time computation (tests, demos); `CLAUDE_CONFIG_DIR`, `CODEX_HOME` honoured (§5); `ROLLCALL_RESUME_FILE` (§8.1).
+Environment: `NO_COLOR` honoured (revision 16: by the TUI and plain `status`, §8.2); `ROLLCALL_NOW` (RFC 3339) overrides "now" for every time computation (tests, demos); `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME` (revision 17) honoured (§5); `ROLLCALL_RESUME_FILE` (§8.1).
 
 Colours: the 16 named ANSI colours only.
 
@@ -151,7 +153,7 @@ Unknown keys → warning on stderr. Invalid TOML or wrong types → exit 2.
 |---|---|---|
 | `rollcall-core` | — | Domain types, `Index` trait, pure functions: attention, stale, sort, matching, sanitising, scrubbing, truncation. No I/O. In-memory `Index` for tests. |
 | `rollcall-git` | core | Discovery walk (§4.1–4.3) and per-worktree git state (§4.4). |
-| `rollcall-sessions` | core | `SessionSource` impls for Claude and Codex (§5), including incremental merge and text resolution. |
+| `rollcall-sessions` | core | `SessionSource` impls for Claude, Codex and (revision 17) Copilot CLI (§5), including incremental merge and text resolution. |
 | `rollcall-store` | core | SQLite `Index` implementation (§6). |
 | `rollcall-cli` | all | Commands, scan orchestration, TUI, MCP, shell init. Integration tests in `rollcall-cli/tests/`. |
 
@@ -159,7 +161,7 @@ Unknown keys → warning on stderr. Invalid TOML or wrong types → exit 2.
 
 ```rust
 // rollcall-core
-enum SourceKind { Claude, Codex }
+enum SourceKind { Claude, Codex, Copilot }           // Copilot: revision 17 (author-approved R1 exception 2026-10-07)
 enum TextRef {
     LogLine { dev: u64, inode: u64, size_at_scan: u64, offset: u64, len: u32, field: TextField },
     CodexThread { thread_id: Uuid, field: TextField },
@@ -335,6 +337,49 @@ Sources are read-only on agent data: they never modify agent files or databases 
 - **Human prompt (rollouts):** an `event_msg` with `payload.type == "user_message"` → `payload.message`. Only in files with **no** `user_message` events: `response_item` with `payload.type == "message"` and `payload.role == "user"` → `input_text` blocks through the §5.0 filter, kept blocks joined with a space. `message_count` counts human prompts. An incremental read yields exactly what a full re-read of the file would (revision 14 clarification): when an appended range holds the file's first `user_message` event, the file is re-read from the start.
 - `doctor` reports the mode and database version.
 
+### 5.3 GitHub Copilot CLI (revision 17)
+
+The terminal agent `copilot` (GitHub Copilot CLI), not VS Code Copilot Chat or the cloud agent. The log format is undocumented (GitHub issue copilot-cli#3551); the shapes below are the key sets of real GitHub Copilot CLI 1.0.93 sessions (author's probe, session 15, 2026-10-07: three sessions, one of them resumed and moved with `/cd`; key names and enum values only, never prompt text) checked against GitHub's own SDK event types (`docs/research/2026-10-07-copilot-cli-sessions.md`, R§3). Author answers Q1–Q7 of 2026-10-07 are quoted in `HANDOFF.md`. Only the details marked *assumption* are confirmed by neither the probe nor GitHub's docs or source.
+
+- **Root:** `$COPILOT_HOME` if set and non-empty, else `~/.copilot` (`$HOME/.copilot`); an empty `COPILOT_HOME` counts as unset, as `CODEX_HOME` does. XDG locations are not read (GitHub's docs: Copilot migrates them to `~/.copilot`). Sessions written with the deprecated `copilot --config-dir` elsewhere are not found (documented limitation).
+- **Files:** `<root>/session-state/<id>/events.jsonl`, one session per directory, read under §5.0. Discovery lists the entries of `session-state/` with `symlink_metadata` (never followed):
+  - an entry whose name starts with `.` is skipped and **not counted** (the probe found `session-state/.session-operation-locks/`, which holds one `<id>.lock` per session; counting it would give every user a permanent `non_uuid`);
+  - an entry that is not a directory is skipped: a flat legacy `session-state/<id>.jsonl` is not counted (Q3: "Skip silently", no doctor count); a symlink or any other non-directory entry is not counted either (*assumption*: the plan skips a symlinked session directory but does not say whether it is counted);
+  - a directory whose name does not match the §5.0 UUID regex is skipped, not entered, and counted in `skipped.non_uuid` (Q5: "Keep §5.0 rule"; SDK clients may name sessions freely);
+  - a UUID-named directory without an `events.jsonl` is ignored and not counted (it may be a session being created); one whose `events.jsonl` is not a regular file (opened `O_NOFOLLOW | O_NONBLOCK`, §5.0: a symlink or a FIFO) gives no session and is not counted either (*assumption*: the plan skips such a log but does not say whether it is counted).
+  - Nothing else under the root is read: not `workspace.yaml`, `session-store.db`, `checkpoints/`, `files/`, `research/`, `rewind-file-snapshots/`, lock files, or the legacy `history-session-state/` (Q3). There is no liveness probe (Q2: "Never / later"), so no §4.4 audit item is added.
+- **Envelope** (every line; probe-confirmed): `{"type", "data", "id", "timestamp", "parentId"}`; `timestamp` is RFC 3339 UTC with milliseconds. *Assumption:* sub-agent events carry an extra envelope key `agentId` (SDK types; no sub-agent ran in the probe). The SDK's `ephemeral` key was not seen on disk and is ignored.
+- **Worked records** (values illustrative, `…` elided; key sets as probed at 1.0.93 unless marked):
+
+```json
+{"type":"session.start","data":{"sessionId":"<uuid>","version":1,"producer":"copilot-agent","copilotVersion":"1.0.93","startTime":"2026-10-07T18:04:11.500Z","contextTier":null,"context":{"cwd":"/home/u/p/app","gitRoot":"/home/u/p/app","branch":"main"},"alreadyInUse":false,"remoteSteerable":false},"id":"<uuid>","timestamp":"2026-10-07T18:04:11.532Z","parentId":null}
+{"type":"session.model_change","data":{…},"id":"<uuid>","timestamp":"2026-10-07T18:04:12.004Z","parentId":"<uuid>"}
+{"type":"user.message","data":{"content":"fix the flaky test","transformedContent":"…","delivery":"idle","interactionId":"<uuid>","messageId":"<uuid>","parentAgentTaskId":"<uuid>","supportedNativeDocumentMimeTypes":[…],"turnId":"…"},"id":"<uuid>","timestamp":"2026-10-07T18:04:20.001Z","parentId":"<uuid>"}
+{"type":"assistant.turn_start","data":{…},"id":"<uuid>","timestamp":"…","parentId":"<uuid>"}
+{"type":"assistant.message","data":{…},"id":"<uuid>","timestamp":"…","parentId":"<uuid>"}
+{"type":"session.shutdown","data":{"shutdownType":"routine",…},"id":"<uuid>","timestamp":"2026-10-07T18:09:00.000Z","parentId":"<uuid>"}
+{"type":"session.resume","data":{"resumeTime":"…","eventCount":22,"eventsFileSizeBytes":…,"alreadyInUse":false,"context":{"cwd":"/home/u/p/app","gitRoot":"/home/u/p/app","branch":"main"},"contextTier":null,"reasoningEffort":…,"selectedModel":"…","sessionLimits":…},"id":"<uuid>","timestamp":"2026-10-07T19:00:00.000Z","parentId":"<uuid>"}
+{"type":"session.context_changed","data":{"cwd":"/home/u/p/lib","pendingGitContext":true},"id":"<uuid>","timestamp":"…","parentId":"<uuid>"}
+{"type":"session.context_changed","data":{"cwd":"/home/u/p/lib","gitRoot":"/home/u/p/lib","branch":"dev"},"id":"<uuid>","timestamp":"…","parentId":"<uuid>"}
+{"type":"subagent.started","agentId":"…","data":{"toolCallId":"…","agentName":"…","agentDisplayName":"…","model":"…"},"id":"<uuid>","timestamp":"…","parentId":"<uuid>"}
+```
+
+  The last line's shape is the SDK's (*assumption*, not seen on disk). A `/cd` writes the pending-then-settled context-changed pair shown (probe-confirmed: the pending event's data keys are `cwd, pendingGitContext` with no `branch` key, the settled event's are `branch, cwd, gitRoot`). *Assumption:* its on-disk `type` string is the SDK's `session.context_changed`; the probe record writes it bare as `context_changed` while writing `session.shutdown` and `session.resume` in full, so the `session.` prefix is not confirmed. If the on-disk string differs, every `/cd` line counts `skipped.unknown_type` and `cwd` never follows a `/cd`; the main-loop real-data check (plan P5) must therefore show `skipped.unknown_type` 0 on the probed `/cd` session. `copilot --resume` **appends** to the same `events.jsonl` after its `session.shutdown` (probe-confirmed), so one log can hold several `session.shutdown` and `session.resume` records; `session.shutdown` does not end the session for rollcall.
+- **Known types:** a line is of known type when its `type` is `abort` or its first dotted component is one of `session`, `user`, `assistant`, `tool`, `subagent`, `hook`, `skill`, `permission`, `system`, `model`. This covers every type the probe saw (`session.start`, `session.resume`, `session.context_changed` (prefix *assumption*, above), `session.model_change`, `session.shutdown`, `session.info`, `session.error`, `session.usage_checkpoint`, `system.message`, `assistant.message`, `assistant.turn_start`, `assistant.turn_end`, `user.message`, and eight `model.*` kinds). Any other `type`, or a missing or non-string `type`, is counted `skipped.unknown_type`; a line of known type whose `data` is not an object is counted `skipped.unknown_type` too (*assumption*: the plan does not say whether it is `unknown_type` or `malformed`); a line that is not a JSON object is `malformed`; lines over 1 MiB are `oversize` (§5.0; `system.message` is about 56 KB). Known types that no rule below reads are skipped without being counted.
+- **id:** the directory name (it equals `session.start.data.sessionId` on every probed session; `sessionId` is not read).
+- **cwd / branch:** taken together from the latest *context object*, in file order, among `session.start.data.context`, `session.resume.data.context`, and `session.context_changed.data` (type prefix *assumption*, see the worked records) when its `pendingGitContext` is not `true`; a lone pending event never moves either (probe-confirmed pending/settled pair). `cwd` is the object's `cwd` string; `branch` is its `branch` string, missing → `null` (plan; a non-repo directory records `cwd` only). An object without a string `cwd` is not a context object: it moves neither `cwd` nor `branch` and is not counted (*assumption*: the plan does not say; as §5.1 takes `cwd` only from a record that has one). Lines with an envelope `agentId` never supply a context object (Q4, *assumption* on the key).
+- **started_at / ended_at:** min / max envelope `timestamp` over the lines not counted in `skipped` (§5.0 skips malformed, oversize and unknown-type lines; *assumption*: the plan says only "min/max envelope `timestamp`", and the Claude reader likewise takes no timestamp from an unknown-type record). A resumed session's `ended_at` is therefore its last appended line, whatever `session.shutdown` records precede it.
+- **Human prompt record:** `type == "user.message"`, no envelope `agentId` (Q4, *assumption*), `data.isAutopilotContinuation` not `true` (Q4, *assumption*: an SDK field, not seen in the probe), and `data.content` a string; the content is one §5.0 text block. `data.parentAgentTaskId` is **not** a sub-agent marker (the probe found a non-empty id on real human prompts) and is ignored. `transformedContent` is never read.
+- **title:** first human prompt (`TitleKind::Prompt`); else `null` (Q1: "(a) First prompt"). `session.title_changed` is ephemeral and never on disk, and `workspace.yaml` is not read.
+- **last_prompt:** latest human prompt; else `null`.
+- **message_count:** number of human prompt records (a record the §5.0 filter empties is not one).
+- **Session with no human prompt** (the probe found a three-line session holding `session.start` and `session.model_change` and no `user.message`; `HANDOFF.md` Q6 leaves the rule to this section): it is a session row with `message_count` 0, `title` and `last_prompt` `null`, provided the log yields a `cwd` and a timestamp (a zero `message_count` row is valid, as in §5.1). A log with no context object or no timestamp (an empty `events.jsonl` included) gives no session and is counted in the `doctor` note `copilot: <N> session file(s) skipped: no cwd or timestamp recorded`. The Claude reader behaves the same in code (`crates/rollcall-sessions/src/claude.rs`, note `claude: <N> session file(s) skipped: …`); §5.1 states no such rule.
+- **Children** (Q4: "Exclude both"): sub-agent work is lines inside the parent log, never a separate session. Lines with an envelope `agentId` are neither prompts nor context objects; each `subagent.started` line read counts once in `excluded_children`. *Assumption:* like the §5.0 skip counts, `excluded_children` counts the lines read by this scan, so an incremental scan reports only newly appended `subagent.started` lines.
+- **Text references:** `title` and `last_prompt` are `TextRef::LogLine` pointers into `events.jsonl` (`Backing::LogFile`); `resolve` re-parses the line and re-applies the human-prompt rule and §5.0 filter (§6.2). No prompt text reaches notes, diagnostics or the cache.
+- **Incremental reads:** §6.3 with the shared JSONL helpers (`plan_read`, `head_fp`, `tail_fp`). On a merge, `cwd` and `branch` are replaced together when the appended range holds a context object, else kept; `title` keeps the prior first-prompt ref, or takes the first new prompt when the prior had none; `last_prompt` is the latest new prompt, else the prior one; `message_count` adds the new prompts; `started_at` / `ended_at` take min / max. An incremental read yields the same `Session` as a full re-read of the file.
+- **Rewind** (*assumption*): GitHub's docs say a rewind removes the history after the chosen point; whether `events.jsonl` is physically truncated or rewritten is unknown. A shorter file (size < offset) or a changed tail (`tail_fp`) triggers a full re-read (§6.3); if a rewind is only logical, prompts it removed stay counted.
+- **doctor:** mode `jsonl` when at least one session `events.jsonl` was read, else `absent` (no root, no `session-state/`, or no session directory); `files` and `records` as for §5.1; `db_version` `null`; `skipped.bad_rollout_path` 0.
+
 ## 6. Store, freshness, concurrency
 
 ### 6.1 Location and permissions
@@ -378,7 +423,7 @@ For each log file, compare with the prior `FileState` of the same `(dev, inode)`
 
 ## 7. Output schemas
 
-Timestamps are RFC 3339 UTC. JSON Schemas for every document below are committed under `schema/` and validated in tests with the `jsonschema` crate. `schema_version` is bumped on incompatible change.
+Timestamps are RFC 3339 UTC. JSON Schemas for every document below are committed under `schema/` and validated in tests with the `jsonschema` crate. `schema_version` is bumped on incompatible change. Revision 17 (Q7: "Additive = compatible"): a new value in an enum, such as `source: "copilot"`, is a compatible change and keeps `schema_version` 1; consumers must tolerate `source` values they do not know.
 
 ```
 StatusDoc {
@@ -414,7 +459,7 @@ Worktree {
 }
 
 Session {
-  source: "claude" | "codex", id: string, branch: string | null, cwd: string,
+  source: "claude" | "codex" | "copilot", id: string, branch: string | null, cwd: string,
   started_at: string, ended_at: string,
   title: string | null,
   title_kind: "custom" | "ai" | "thread" | "prompt" | null,   // null iff title is null
@@ -444,8 +489,8 @@ DoctorDoc {
   submodules: int, repo_errors: int, untrusted_git_dirs: int,
   repo_timeouts: int, repo_timeouts_abandoned: int,
   notes: string[],                              // e.g. why a source fell back or is absent; unusual repo layouts (§4.1)
-  sources: [{
-    source: "claude" | "codex",
+  sources: [{                                   // one per source, in the order claude, codex, copilot
+    source: "claude" | "codex" | "copilot",
     mode: "jsonl" | "db" | "rollouts" | "absent",   // absent: source root missing or contains no session files/DB
     db_version: int | null,
     files: int, records: int,
@@ -476,10 +521,10 @@ DoctorDoc {
 
 - **Each worktree row shows its `last_session` inline** (agent, age, title). The lower pane lists older sessions of the selected worktree.
 - Keys: `j`/`k`/arrows move; `enter` expands/collapses; `tab` switches pane; `/` filters repos and branches by case-insensitive substring (Esc clears); `r` rescans; `?` help; `q` quits (exit 0).
-- **`R` (resume, default):** **before** changing directory, resolves the agent binary (`claude` or `codex`) to an absolute path by searching only the **absolute** entries of `PATH` (empty and relative entries are ignored). Then it restores the terminal, `chdir`s to the session cwd, and `execv`s that absolute path with `--resume <id>` (Claude) or `resume <id>` (Codex), argv built from the validated id; no shell. The user's shell stays in its original directory after the agent exits (documented; `rc` changes that). Refused with a status message if the cwd no longer exists or no absolute agent path is found. The README notes that the resumed agent's own workspace-trust prompts still apply inside untrusted repos.
-- **`R` with `rc`:** `rollcall init <shell>` prints a function `rc` that creates a private temp file (`mktemp`, mode 0600), runs `ROLLCALL_RESUME_FILE=<file> command rollcall "$@"`, and only if the exit code is 10: reads three NUL-separated fields (`cwd`, `source`, `id`) from the file (bash/zsh `read -r -d ''`, fish `read -z`); checks `source ∈ {claude, codex}` and `id` against the UUID regex; resolves the agent with `command -v` and requires an absolute result (`/*`) **before** `cd`; then runs `cd -- "$cwd" && "$bin" --resume "$id"` (or `"$bin" resume "$id"`) from those variables. The file is always removed. **No `eval` anywhere.**
+- **`R` (resume, default):** **before** changing directory, resolves the agent binary (`claude`, `codex` or, revision 17, `copilot`) to an absolute path by searching only the **absolute** entries of `PATH` (empty and relative entries are ignored). Then it restores the terminal, `chdir`s to the session cwd, and `execv`s that absolute path with `--resume <id>` (Claude, and Copilot: `copilot --resume <id>`, GitHub's command reference) or `resume <id>` (Codex), argv built from the validated id; no shell. The user's shell stays in its original directory after the agent exits (documented; `rc` changes that). Refused with a status message if the cwd no longer exists or no absolute agent path is found. The README notes that the resumed agent's own workspace-trust prompts still apply inside untrusted repos.
+- **`R` with `rc`:** `rollcall init <shell>` prints a function `rc` that creates a private temp file (`mktemp`, mode 0600), runs `ROLLCALL_RESUME_FILE=<file> command rollcall "$@"`, and only if the exit code is 10: reads three NUL-separated fields (`cwd`, `source`, `id`) from the file (bash/zsh `read -r -d ''`, fish `read -z`); checks `source ∈ {claude, codex, copilot}` (`copilot`: revision 17) and `id` against the UUID regex; resolves the agent with `command -v` and requires an absolute result (`/*`) **before** `cd`; then runs `cd -- "$cwd" && "$bin" --resume "$id"` (Claude and Copilot) or `"$bin" resume "$id"` (Codex) from those variables. The file is always removed. **No `eval` anywhere.**
 - When `ROLLCALL_RESUME_FILE` is set and `R` is pressed, a session whose cwd no longer exists is refused with the same status message as the default `R` and the file is neither opened nor written (revision 14 clarification); otherwise rollcall opens that path with `O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC` (no `O_TRUNC`; `O_NONBLOCK` so a FIFO fails instead of blocking), verifies on the open fd that it is a regular file, owned by the effective uid, with one link and mode `0600`, then truncates through the fd, writes the three fields, and exits 10. Any check failing → status message; the file is neither truncated nor written.
-- **`Y`** copies the display resume line `cd -- '<cwd>' && claude --resume <id>` (path shell-quoted) to the clipboard. When the session's `resume` is `null` (its cwd no longer exists, §7), `Y` copies nothing and shows a status message (revision 14 clarification).
+- **`Y`** copies the display resume line `cd -- '<cwd>' && claude --resume <id>` (path shell-quoted; `copilot --resume <id>` and `codex resume <id>` for those sources) to the clipboard. When the session's `resume` is `null` (its cwd no longer exists, §7), `Y` copies nothing and shows a status message (revision 14 clarification).
 - **`c`** copies `cd -- '<worktree path>'` (shell-quoted). Clipboard per config `clipboard`; failure → status message.
 - **`o`** opens the worktree in `$VISUAL` or `$EDITOR`, split with shell-words rules, executed without a shell, path as its own argument; unset → status message.
 - Agent columns, the older-sessions pane, `R`, and `Y` are absent when no source has data.
@@ -536,7 +581,7 @@ Revision 16 (author decisions 2026-10-03, design answers 2026-10-04). JSON outpu
 - A generator (test-only code in `rollcall-cli/tests/it/support.rs`, independent of rollcall's own logic) builds fixture roots from the manifest in temp directories: `F` (full), `F_clean` (`F` minus every fixture expected to carry an `error` or trigger `partial`: corrupted repo, bad `gitdir`, untrusted git dir, untrusted worktree path, hostile repos, hang probe, unreadable dir), `H` (hostile and hang-probe repos only, §10.2), and `EXT` (outside-root targets).
 - CI installs `zsh` and `fish` on Linux runners so shell tests run on both OSes.
 - Expected outputs `tests/expected/*.json` are **hand-written** from the manifest and the spec, never generated by running rollcall. Paths are written as `$F/…`, `$EXT/…`; the harness canonicalises both sides before substitution and comparison.
-- All tests set `ROLLCALL_NOW` to a fixed instant and `HOME`, `XDG_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` to temp directories.
+- All tests set `ROLLCALL_NOW` to a fixed instant and `HOME`, `XDG_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME` (revision 17) to temp directories. No test reads the real `~/.copilot`.
 
 ### 10.2 Cases
 
@@ -564,13 +609,14 @@ Revision 16 (author decisions 2026-10-03, design answers 2026-10-04). JSON outpu
   - `objects-pack-flood` (revision 13): `objects/pack` holding 10,001 empty regular files.
   - `tree-deep-big` (revision 13): a HEAD tree chain 5 levels deep; each tree is 26 MiB, its first entry by name the next level's tree (a one-byte name), the remaining entries blobs with 160-byte names (about 145,000 entries and 22 MiB of path bytes per tree). Even if every level were walked, entries (≈ 725,000), path bytes (≈ 113 MiB) and depth (5) stay under their caps, while tree bytes reach 130 MiB, so only the tree-bytes counter can trip.
   - `dot-ref` (revision 16): separate repos holding (i) a 6 KiB regular `refs/heads/.DS_Store` of random bytes, (ii) the same at `refs/remotes/origin/.DS_Store` and in a linked worktree's `.git/worktrees/<name>/refs/`, (iii) a 6 KiB regular `refs/heads/junk` (control: no exemption without the dot), (iv) a symlink `refs/heads/.x` to a 100-byte regular file, (v) a 6 KiB regular `refs/heads/.d/junk` (a dot-named directory is still checked inside).
-  - A fake `git`, `git-lfs`, `claude`, `codex` first on `PATH`, each writing `marker-path-<name>`.
+  - A fake `git`, `git-lfs`, `claude`, `codex`, `copilot` (revision 17) first on `PATH`, each writing `marker-path-<name>`.
   - **Positive controls**, each on its own separate build of `H` so their markers never touch the tree under test: (1) the **real** git by absolute path (resolved before the fake is installed) running `status` in `drivers` and `submodule` (sandboxed `HOME`, recursive submodule status) creates `marker-filter-x` and `marker-filter-lfs` respectively; (2) gix opened with default (non-hardened) options running `index_worktree_status` on `drivers` creates `marker-filter-x` — proving rollcall's config stripping, not gix's defaults, is what prevents it.
   - **Assertions:** `rollcall scan H` exits within 10 s with peak RSS < 512 MB (`/usr/bin/time -v` on Linux, `-l` on macOS); no `marker-*` file exists; every `symlinked-files` repo and the `hang-probe` row carry `"untrusted git dir"`; `worktree-escape` and `commondir-escape` rows carry `"untrusted worktree path"`; the `tree-bomb` and `tree-bomb-long` rows carry `"git error: HEAD tree too large"`; every `index-bombs` row carries `"untrusted git dir"` and both `index-deep-ok` rows have no error; the `nested-probe` row has no error and `untracked_count = 3` (the rows §4.1 lists for `a`, `b` and `c` carry `"untrusted git dir"`); both `exec-type` rows carry `"git error: unsafe tracked file"`; the `big-tracked` row has no error and `dirty_count = 1`; both `pattern-blob-bomb` rows carry `"git error: pattern files too large"`; the `rename-bomb` row has no error and `dirty_count = 2` (revision 12); every `gitoxide-keys` row has no error; `pack-bombs` (i) carries `"git error: memory limit"`, (ii) carries `"timed out"`, (iii) carries an error starting `"git error: "`; `objects-pack-flood` carries `"untrusted git dir"`; `tree-deep-big` carries `"git error: HEAD tree too large"` (revision 13); `dot-ref` (i) and (ii) have no error, and (iii), (iv) and (v) carry `"untrusted git dir"` (revision 16).
 - **Ignore** (revision 16): config `ignore` with a `~/…` entry, an absolute entry naming a parent directory of two repos, and an entry naming a repo's own working tree → those repos are absent from `status --json`, plain `status`, `doctor` counts, the TUI snapshot and both MCP tools; a cached row of a repo ignored after its scan is absent under `--no-scan`; an ignored repo with an error row does not change the exit code; a sibling whose path merely shares a string prefix (`app2` beside an ignored `app`) is still shown; no unknown-key warning.
 - **Plain status** (revision 16): entity decoding (each named entity, decimal and hex references, `&amp;lt;`, an invalid reference, an entity-encoded ESC and an entity-encoded secret); colour on and off under `--color`, `NO_COLOR` and a PTY; width truncation under a PTY of a fixed size and none when piped; the risk line (none, fewer than 5, more than 5, an error repo excluded); `--dirty`, `--stale`, both, `--top N` before and after filters, `--top 0`; the prune hint; every new exit-4 path, and `rc` passing `4` through in bash, zsh and fish.
 - **Claude fixtures:** each §5.1 rule, including `tool_result` as the last user record, `isMeta`, `<command-name>`, injected marker after user text, custom/ai/prompt title precedence, pre-truncated `lastPrompt`, `lastPrompt` with zero human prompts, multi-cwd, `"HEAD"`, subagent file, non-UUID id, oversize line, malformed line.
 - **Codex fixtures:** a `state_5.sqlite` with `threads` + `thread_spawn_edges`: spawn-edge child, `source` subagent child, `parent_thread_id` child, archived thread, empty title, title equal to `first_user_message`, empty `git_branch` with rollout branch, `rollout_path` outside `CODEX_HOME`; rollouts with `user_message` events, without them (`response_item` path, `[injection, user]` blocks); database absent → fallback; rollout moved to `archived_sessions`; second `session_meta`.
+- **Copilot fixtures** (revision 17; hand-written in the probed key sets, prompts a marker string): each §5.3 rule, including the pending/settled `context_changed` pair, start → shutdown → resume → `/cd` in one log, `agentId` lines and `subagent.started`, `isAutopilotContinuation`, a human prompt carrying `parentAgentTaskId`, a zero-prompt session, `model.*` and `session.usage_checkpoint` lines, a dot-named and a non-UUID directory, symlinked session directory and log, oversize and malformed lines, truncation (rewind).
 - **Incremental reads:** append 3 lines + a partial → 3 new records, offset before the partial; truncate → re-read; truncate-then-regrow past offset → re-read (fingerprint); inode reuse and `parser_version` bump are **unit tests** that inject a prior `FileState` (different `head_fp`, or older `parser_version`) through the in-memory `Index`; title upgraded from prompt to custom on append; vanished file → session dropped.
 - **Pointer resolution:** log replaced after scan → text `null`; symlink swapped in → `null`.
 - **Matching:** fixture of 20 sessions: 16 matchable (distributed over worktrees so that at least one worktree has `older_sessions ≥ 1`, and one session sits in a hidden submodule and matches the parent), 1 `non_repo`, 1 `path_gone`, 2 `outside_root`.
@@ -607,7 +653,7 @@ Revision 16 (author decisions 2026-10-03, design answers 2026-10-04). JSON outpu
 10. **Privacy:** every scrub pattern redacted; every `title` / `last_prompt` ≤ 200 graphemes; `redact_prompts` → all null; MCP defaults per §8.3; cache modes `0700` / `0600`; with ≥ 16 session rows present, no fixture prompt string in the cache files.
 11. **Sanitising & shell safety:** all §10.2 sanitising, shell-safety, `rc`, and `R` stub tests pass.
 12. **Store:** idempotence, crash-safety, lock (`stale: true`), and rebuild tests pass.
-13. **No-agent mode:** with empty `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, `rollcall status $F_clean --json` exits 0, every `last_session` is null, `doctor` reports both sources `mode: "absent"`, and the TUI snapshot has no agent columns.
+13. **No-agent mode:** with empty `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (revision 17: and `COPILOT_HOME`), `rollcall status $F_clean --json` exits 0, every `last_session` is null, `doctor` reports every source `mode: "absent"`, and the TUI snapshot has no agent columns.
 14. **Schemas & MCP:** `status`, `doctor`, `where_was_i`, `list_stale` outputs validate against `schema/*.json`; MCP integration test (§10.2) passes; ≤ 16 KiB.
 15. **TUI:** snapshots match; every cell's `fg`/`bg` is `Reset` or a named ANSI colour (never `Rgb`/`Indexed`); with `NO_COLOR=1` every cell style is default.
 16. **Build & supply chain:** §11 CI jobs pass; `dist build` succeeds on native runners for macOS arm64 (`macos-14`), macOS x86_64 (`macos-15-intel`), Linux x86_64 (`ubuntu-latest`) and Linux arm64 (`ubuntu-24.04-arm`); `d=$(mktemp -d) && cargo install --path crates/rollcall-cli --locked --root "$d" && "$d/bin/rollcall" --version` succeeds on Linux.
@@ -619,7 +665,7 @@ Revision 16 (author decisions 2026-10-03, design answers 2026-10-04). JSON outpu
 - `rollcall status ~/Projects --json` lists the repos and worktrees `find ~/Projects -name .git` finds outside skipped dirs; dirty / ahead / behind match `git status` on 5 sampled worktrees.
 - `doctor` on real data: unmatched sessions fall into plausible classes; no parser errors beyond `unknown_type`.
 - Cold scan < 5 s, warm < 500 ms on the author's machine. (`~/Projects` has ~2.2 M entries before skips; if the default `walk_budget_entries` of 500,000 is hit, record it and tune the default rather than treating it as a pass.)
-- `R` resumes a real Claude session and a real Codex session, including one whose cwd is under `.claude/worktrees/`.
+- `R` resumes a real Claude session, a real Codex session and (revision 17) a real Copilot CLI session, including one whose cwd is under `.claude/worktrees/`.
 - Claude Code with `rollcall mcp --root ~/Projects` answers "where was I in CRM?" with CRM's worktrees and last sessions.
 - `brew install` from the published tap on a clean macOS user account, then `rollcall` in `~` (refusal with suggestions) and in `~/Projects`.
 

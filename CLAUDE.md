@@ -18,5 +18,5 @@ Adapted from github.com/dietrichgebert/ponytail. Stop at the first rung that hol
 
 ## Safety
 
-- Never print prompt text from real agent logs (`~/.claude`, `~/.codex`).
+- Never print prompt text from real agent logs (`~/.claude`, `~/.codex`, `~/.copilot`).
 - Re-audit gix read and spawn sites on any gix bump (spec §4.4).
