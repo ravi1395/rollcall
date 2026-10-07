@@ -1,7 +1,7 @@
 export const meta = {
   name: 'rollcall-copilot',
   description: 'rollcall Copilot CLI session source: Opus drafts spec rev 17 + ACCEPTANCE.md (stops for author), then serial per-phase implement (Haiku xhigh or Sonnet high by complexity) + Opus breaker/skeptic',
-  whenToUse: 'rollcall impl/copilot after the 2026-10-07 handoff. args.stage = "spec" | "implement" (implement needs args.specApproved = true; optional args.items = ["P1", ...])',
+  whenToUse: 'rollcall impl/copilot after the 2026-10-07 handoff. args.stage = "spec" | "spec-review" (needs args.since = commit before the draft) | "implement" (needs args.specApproved = true; optional args.items = ["P1", ...])',
   phases: [
     { title: 'Preflight', detail: 'Branch, clean tree, author answers Q1-Q7 present in HANDOFF.md' },
     { title: 'Spec', detail: 'Opus drafts spec rev 17 + ACCEPTANCE.md, Opus skeptic review; stops for author', model: 'opus' },
@@ -127,6 +127,38 @@ async function gateUntilGreen(ph, item) {
   return null
 }
 
+// Review -> revise until the skeptic passes; the loop always ends on a review, so the text
+// that gets committed is the text the last verdict judged.
+const SPEC_ROUNDS = 3
+async function reviewSpec(since, draft, reviewLabel, reviseLabel) {
+  let review = null
+  for (let r = 1; r <= SPEC_ROUNDS; r++) {
+    review = await agent(`${COMMON}\nReview spec revision 17: git diff ${since} -- ${SPEC} CLAUDE.md (working tree against ${since}, so committed and uncommitted changes both count), and the whole of ${AC_FILE} (it may be untracked) against ${PLAN} Phase 0, the research ${RESEARCH} and HANDOFF.md "${ANSWERS}". Criteria:\n- S1: every author answer is specified with no change of meaning; nothing beyond plan + answers + the probe results in ${PROBE} is specified unless marked *assumption*.\n- S2: §5.3 states root, files, id, cwd, branch, started/ended, human prompt, title, last_prompt, message_count, children, unknown types and incremental rules, and each matches the probe results (field names, event names, pendingGitContext pair, resume after shutdown), and the research where the probe is silent (ephemeral title).\n- S3: every acceptance criterion is observable, testable and able to fail; P5 is absent; each item names its R1 allowance.\n- S4: no text outside the affected sections changed; no stale cross-references (source enums listing only claude/codex, env lists without COPILOT_HOME).\n- S5: no real prompt text or token appears anywhere in the diff.\n- S6: each probe correction (dot-dir skip uncounted, parentAgentTaskId not a sub-agent marker, model.* and session.usage_checkpoint known, resume after shutdown, zero-prompt session) is specified and has a P2 criterion; only facts the probe did not confirm are marked *assumption*.\nReport each as met, unmet or unverified with evidence; pass = all met.`,
+      { ...SKEPTIC, phase: 'Spec', label: `${reviewLabel}:${r}`, schema: VERDICT_S })
+    if ((review && review.pass) || r === SPEC_ROUNDS) break
+    draft = await agent(`${COMMON}\nRevise spec revision 17 (${SPEC}, ${AC_FILE} and the CLAUDE.md Safety line, as they stand in the working tree; changes since ${since}) to fix exactly these review findings, nothing else:\n${JSON.stringify(unmet(review))}\nDo not commit.`,
+      { model: 'opus', phase: 'Spec', label: `${reviseLabel}:${r}`, schema: SPEC_S }) || draft
+  }
+  return { review, draft }
+}
+
+// ---- stage: spec-review (re-review a committed spec rev 17 draft) ----------------
+async function specReview() {
+  if (!/^[0-9a-f]{7,40}$/.test(String(args.since || ''))) throw new Error('spec-review needs args.since = the commit before the spec rev 17 draft')
+  phase('Preflight')
+  const pre = await preflight('Preflight')
+  if (pre.stopped) return { stage: 'spec-review', ...pre }
+  phase('Spec')
+  const { review, draft } = await reviewSpec(args.since, null, 'rereview:spec', 'rerevise:spec')
+  const c = await commit('Spec', 'commit:spec-review',
+    'docs(spec): revision 17 review fixes, Copilot CLI session source\n\nSkeptic findings on the rev 17 draft fixed in the spec and\ndocs/superpowers/plans/tasks/copilot/ACCEPTANCE.md. Awaiting author review.')
+  return { stage: 'spec-review', since: args.since, commit: c, review_passed: !!(review && review.pass), review,
+    open_questions: draft ? draft.open_questions : [], summary: draft ? draft.summary : 'no revision needed',
+    next: review && review.pass
+      ? 'STOP: author reviews spec rev 17 and ACCEPTANCE.md. Run stage "implement" with specApproved: true only after approval.'
+      : 'STOP: the skeptic still fails rev 17 after ' + SPEC_ROUNDS + ' rounds; the main loop reads the verdict and decides.' }
+}
+
 // ---- stage: spec (plan Phase 0) ------------------------------------------------
 async function spec() {
   phase('Preflight')
@@ -137,18 +169,15 @@ async function spec() {
   let draft = await agent(`${COMMON}\nYou are the planner. Execute Phase 0 of ${PLAN}: write spec revision 17 into ${SPEC} and fixed acceptance criteria into ${AC_FILE} (new file), and add ~/.copilot to the Safety line of the repo CLAUDE.md.\nAuthor answers (binding):\n${answers}\nSpec: add §5.3 Copilot CLI (root, files, id, cwd, branch, started/ended, human prompt, title, last_prompt, message_count, children, unknown types, incremental rules) using the research's worked-record skeletons (shapes only, never prompt text); the source enum (§3.4/§7) and schema_version per Q7; resume in §8.1; COPILOT_HOME in §10.1; a §4.4 audit note only if a new probe is approved. Fold in the probe corrections from ${PROBE}: discovery skips dot-named entries of session-state/ (e.g. .session-operation-locks/) without counting them as non_uuid; parentAgentTaskId is not a sub-agent marker (Q4 excludes on the envelope agentId only); every type the probe saw (model.*, session.usage_checkpoint, session.model_change, session.shutdown, session.info, session.error, system.message, assistant.*) is a known type; session.resume appends to the same log after a session.shutdown, so one log may hold several shutdowns; specify a session with no human user.message the same way §5.0 treats one for Claude/Codex. Facts the probe confirmed are not *assumption*; mark as *assumption* only what neither the probe nor a docs/source-rated research fact confirms (at least agentId, isAutopilotContinuation, rewind truncation). The Status line (line 3) gains a "Revision 17" entry first and keeps "Awaiting author review". Do not touch unrelated text.\nACCEPTANCE.md: copy the Conventions block of docs/superpowers/plans/tasks/v1/ACCEPTANCE.md and add COPILOT_HOME to its env list; then one "## <ID> <title>" section per plan phase to implement (P1, P2, P3, and P4 only if the answers enable it; never P5), each with "Spec sections:", "Has logic: yes|no", "Files (hint):", "R1 allowed:", then numbered criteria "<ID>-<n>: ..." taken from the plan's phase criteria, resolved per the author's answers (drop the per-option text that no longer applies). Each criterion must be observable and able to fail. P2 must include one criterion per probe correction: a dot-named dir is skipped and not counted as non_uuid; a human user.message carrying parentAgentTaskId is counted; model.* and session.usage_checkpoint lines leave unknown_type at 0; start, shutdown, resume, then a /cd pair gives the post-/cd cwd and branch; the zero-prompt session behaves as specified.\nDo not commit. Return files changed, item ids written, any remaining open questions, and a summary.`,
     { model: 'opus', phase: 'Spec', label: 'draft:spec-rev17', schema: SPEC_S })
   if (!draft) return { stage: 'spec', stopped: 'spec author died' }
-  let review = null
-  for (let r = 1; r <= 2; r++) {
-    review = await agent(`${COMMON}\nReview the uncommitted spec revision 17 (git diff ${SPEC}), ${AC_FILE} and the CLAUDE.md Safety line against ${PLAN} Phase 0, the research ${RESEARCH} and HANDOFF.md "${ANSWERS}". Criteria:\n- S1: every author answer is specified with no change of meaning; nothing beyond plan + answers + the probe results in ${PROBE} is specified unless marked *assumption*.\n- S2: §5.3 states root, files, id, cwd, branch, started/ended, human prompt, title, last_prompt, message_count, children, unknown types and incremental rules, and each matches the probe results (field names, event names, pendingGitContext pair, resume after shutdown), and the research where the probe is silent (ephemeral title).\n- S3: every acceptance criterion is observable, testable and able to fail; P5 is absent; each item names its R1 allowance.\n- S4: no text outside the affected sections changed; no stale cross-references (source enums listing only claude/codex, env lists without COPILOT_HOME).\n- S5: no real prompt text or token appears anywhere in the diff.\n- S6: each probe correction (dot-dir skip uncounted, parentAgentTaskId not a sub-agent marker, model.* and session.usage_checkpoint known, resume after shutdown, zero-prompt session) is specified and has a P2 criterion; only facts the probe did not confirm are marked *assumption*.\nReport each as met, unmet or unverified with evidence; pass = all met.`,
-      { ...SKEPTIC, phase: 'Spec', label: `review:spec:${r}`, schema: VERDICT_S })
-    if (review && review.pass) break
-    draft = await agent(`${COMMON}\nRevise the uncommitted spec revision 17, ${AC_FILE} and the CLAUDE.md Safety line to fix exactly these review findings, nothing else:\n${JSON.stringify(unmet(review))}\nDo not commit.`,
-      { model: 'opus', phase: 'Spec', label: `revise:spec:${r}`, schema: SPEC_S }) || draft
-  }
+  const out = await reviewSpec(pre.base.sha, draft, 'review:spec', 'revise:spec')
+  draft = out.draft
+  const review = out.review
   const c = await commit('Spec', 'commit:spec',
     'docs(spec): revision 17 draft, Copilot CLI session source\n\nNew §5.3 for ~/.copilot/session-state/<id>/events.jsonl, the copilot\nsource kind and COPILOT_HOME, per the 2026-10-07 plan and author\nanswers, with fixed acceptance criteria in\ndocs/superpowers/plans/tasks/copilot/ACCEPTANCE.md. Awaiting author review.')
-  return { stage: 'spec', commit: c, review, open_questions: draft.open_questions, summary: draft.summary,
-    next: 'STOP: author reviews spec rev 17 and ACCEPTANCE.md. Run stage "implement" with specApproved: true only after approval.' }
+  return { stage: 'spec', commit: c, review_passed: !!(review && review.pass), review, open_questions: draft.open_questions, summary: draft.summary,
+    next: review && review.pass
+      ? 'STOP: author reviews spec rev 17 and ACCEPTANCE.md. Run stage "implement" with specApproved: true only after approval.'
+      : `STOP: the skeptic did not pass the final text. Fix the record, then run stage "spec-review" with since: "${pre.base.sha}".` }
 }
 
 // ---- stage: implement (plan Phases 1-4) ----------------------------------------
@@ -245,5 +274,6 @@ async function implement() {
 // ---- dispatch ----------------------------------------------------------------
 const stage = args && args.stage
 if (stage === 'spec') return await spec()
+if (stage === 'spec-review') return await specReview()
 if (stage === 'implement') return await implement()
-throw new Error('args.stage must be "spec" or "implement"')
+throw new Error('args.stage must be "spec", "spec-review" or "implement"')
