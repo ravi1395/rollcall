@@ -9,7 +9,7 @@ Fixed acceptance criteria for the Copilot plan `docs/superpowers/plans/2026-10-0
 - Each item ends with the R2 gate passing: `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked`.
 - R1 for every item: `git diff --quiet <item base> -- Cargo.lock '*Cargo.toml'` exits 0, and no `mod` list or pinned interface signature changes except the item's "R1 allowed" line (author-approved 2026-10-07). A needed change is a stop-and-report, not a criterion failure to work around.
 - A criterion tagged **(assumption)** rests on a spec detail marked *assumption*; it stands until the author confirms or changes that detail, and then follows the decision.
-- Context-changed fixtures use the `type` string `session.context_changed`, the SDK's name (spec §5.3 *assumption*: the probe record writes it bare as `context_changed`). Every criterion with such a line rests on that name. The main-loop real-data check (plan P5) must show `skipped.unknown_type` 0 on the probed `/cd` session, which fails if the on-disk string differs.
+- Context-changed fixtures use the `type` string `session.context_changed`, the on-disk name the probe confirmed (spec §5.3).
 - Items are implemented in order P1 → P2 → P3 (P1 adds the enum every later phase matches on; P3 wires what P2 builds). Until P3, the Copilot source is not registered and user-visible output is unchanged.
 
 ## P1 SourceKind::Copilot end-to-end, inert
