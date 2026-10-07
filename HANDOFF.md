@@ -1,49 +1,50 @@
-# HANDOFF — 2026-10-07 impl/v0 → impl/copilot (~/Projects/rollcall), end of session 14
+# HANDOFF — 2026-10-07 impl/copilot (~/Projects/rollcall), end of session 15
 
-**Status: ACTIVE.** Supersedes session 13 (byte copy: `.handoffs/20261007-001525-superseded-HANDOFF.md`; v1 author decisions live in `.handoffs/20261006-235942-superseded-HANDOFF.md`).
+**Status: ACTIVE.** Supersedes session 14 (byte copy: `.handoffs/20261007-231419-superseded-HANDOFF.md`; v1 author decisions live in `.handoffs/20261006-235942-superseded-HANDOFF.md`).
 
-**Next session: Copilot CLI session source.** Plan (DRAFT, awaiting author approval): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`.
-1. Get the author's answers to the plan's open questions Q1–Q7 and approval of the R1 items (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). Record them verbatim in the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom of this file: the workflow's preflight reads that exact heading and stops if any Q is unanswered or R1 is not approved. **No code before that.** The v1 autonomy grant (2026-10-04) does not cover this work.
-2. Create the branch: `git switch -c impl/copilot origin/main`, then `git cherry-pick 91ecc5d..impl/v0` (every session 13–14 commit: handoffs, plan, research, workflow). In session 14, `switch -c` + `cherry-pick` was blocked by the auto-mode classifier, so the author or the next session must run them with approval. The workflow's preflight refuses any other branch.
-3. Run workflow **`rollcall-copilot`** (`.claude/workflows/rollcall-copilot.js`, committed) with `args: {stage: "spec"}`: Opus drafts spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md` + the CLAUDE.md Safety line, an Opus skeptic reviews (≤ 2 rounds), it commits, then **stop for author review**.
-4. After the author approves the spec: run `rollcall-copilot` with `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: Sonnet implements tests-first → gate → commit → Opus `breaker` (if has_logic) → guard keeps test code only → Sonnet fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Models are the author's choice (2026-10-07): Sonnet implementers, Opus breaker and skeptic (overrides the global Fable-skeptic default for this run).
-5. Then, in the main loop: audit `git log`/`git status`, P5 real-data check only if the author supplied a sample (Q6; counts only, never prompt text), update this handoff, and **ask before pushing** `impl/copilot`.
+**Next session: run the Copilot CLI source workflow.** Branch `impl/copilot` exists (from `origin/main` `474cf23` + the session 13–15 docs commits). Plan (DRAFT): `docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`. Research: `docs/research/2026-10-07-copilot-cli-sessions.md`. Workflow: `.claude/workflows/rollcall-copilot.js`.
+
+1. **Blocker first:** fill the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom of this file with the author's verbatim answers to plan Q1–Q7 and an explicit R1 approval (`SourceKind::Copilot`, `pub mod copilot;`, `EnvPaths.copilot_home`). The workflow preflight parses that exact heading and **stops immediately** if any Q is blank or R1 is not approved. No code before that; the v1 autonomy grant (2026-10-04) does not cover this work. Commit the answers (explicit path) so the tree is clean: preflight also stops on a dirty tree (outside `.claude/` and `graphify-out/`).
+2. Confirm `git branch --show-current` = `impl/copilot` (preflight refuses any other branch).
+3. Run workflow `rollcall-copilot` with `args: {stage: "spec"}`: Opus drafts spec rev 17 + `docs/superpowers/plans/tasks/copilot/ACCEPTANCE.md` + the CLAUDE.md Safety line, Opus skeptic (≤ 2 rounds), commits, then **stops for author review**.
+4. After the author approves the spec: `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: tiered implementer tests-first → full gate → commit → Opus `breaker` (if `Has logic: yes`) → guard keeps test code only → tiered fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Stops at the first phase not accepted.
+5. Main loop afterwards: audit `git log`/`git status`, P5 real-data check only if the author supplied a sample (Q6; counts only, never prompt text), update this handoff, answer AMBIGUOUS breaker items with the author, **ask before pushing** `impl/copilot`.
 
 ## Done (verified)
-- **PR https://github.com/ravi1395/rollcall/pull/6 merged** by the author (merge `4f102a7`); Dependabot #2–#5 merged after it; `origin/main` = `474cf23`.
-- **Gate on `origin/main` `474cf23`** (session 13, macOS, detached worktree): fmt + clippy + test → exit 0, **973 passed / 0 failed / 4 ignored**.
-- **Copilot CLI research** (session 14, public sources only; nothing installed; `~/.copilot` contents not read). Store `$COPILOT_HOME|~/.copilot/session-state/<id>/events.jsonl`; cwd/branch in `session.start/resume.data.context` and `session.context_changed.data`; title and idle state are ephemeral (not on disk); `workspace.yaml` holds `name`. Confidence and unknowns per section in the research doc.
-- **Plan written** (phases skill format: P0 spec, P1 enum + arms inert, P2 parser dark, P3 wiring, P4 gated title/liveness, P5 gated real-data check).
-- Commit state: session 13 handoff `9b3f8c5` on `impl/v0` (local, unpushed). Session 14 files (this handoff, plan, research, archive) are committed on `impl/v0` (local, unpushed) in the commit after `9b3f8c5`.
+- **Branch `impl/copilot` created** from `origin/main` `474cf23` (`git fetch` confirmed it is current) with `git cherry-pick origin/main..impl/v0` → `818ddef e99869b 3203a8e b8810bb 22bff5d` (the 5 session 13–14 docs commits, clean picks). **Upstream unset** (`switch -c … origin/main` had set it to track `origin/main`, so a bare `git push` would have targeted main); `git rev-parse impl/copilot@{upstream}` → `fatal: no upstream configured`. Push later with `git push -u origin impl/copilot`.
+- **Workflow tiers** (author request 2026-10-07, committed with this handoff): `TIER = { P1: haiku/xhigh, P2: sonnet/high, P3: sonnet/high, P4: sonnet/high }` drives the implement agent and every fix (gate, breaker, review). A Haiku phase escalates to Sonnet high from fix round 2. Breaker and skeptic stay Opus; spec drafting stays Opus; mechanical agents (head, gate, commit, guard, answers/criteria loaders) stay Sonnet low. Evidence: wrapped `node --check` → exit 0; stubbed-hook run of `{stage:"implement", items:["P1"]}` reaches `implement:P1` as `haiku/xhigh` (the same run on the first draft failed `Cannot access 'impl' before initialization`: a local `const impl` shadowed the helper, so it is now `implOpts`); tier assertion script (`implOpts('P1')`=haiku/xhigh, `implOpts('P1',2)`=sonnet/high, `implOpts('P2')`/`implOpts('P4',3)`/unknown id = sonnet/high) → `tier ok`.
+- Carried: PR https://github.com/ravi1395/rollcall/pull/6 merged (`4f102a7`); gate on `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (session 13).
 
 ## In progress
-- Nothing half-edited. `git status --short` before this session's commit: `?? .handoffs/20261007-001525-superseded-HANDOFF.md`, `?? docs/research/`, `?? docs/superpowers/plans/2026-10-07-rollcall-copilot-plan.md`, `?? graphify-out/` (never commit `graphify-out/`).
+- Nothing half-edited. `git status --short` before this session's commit: ` M .claude/workflows/rollcall-copilot.js`, `?? .handoffs/20261007-231419-superseded-HANDOFF.md`, `?? graphify-out/` (never commit `graphify-out/`). `impl/v0` is untouched (local, its 5 docs commits now live on `impl/copilot`).
 
 ## Decisions + why
-- **Copilot CLI only** (author, 2026-10-07). Not VS Code Copilot Chat (18 local `chatSessions` files exist but were not chosen), not the cloud agent.
-- **Plan reuses `Backing::LogFile` / `TextRef::LogLine` / `SourceMode::Jsonl`.** `events.jsonl` is one append-only JSONL per session, the same shape as Claude logs, so no new core types unless Q1=(b).
-- **Phase cut keeps each merge green:** adding the enum variant forces every exhaustive match at once (P1, arms tagged mech); the source stays unregistered until P3, so user output is unchanged through P2.
+- **Tier by complexity, fixed in the script, not in ACCEPTANCE.md:** P1 is enum arms + schema enums (plan tags them mech) → Haiku xhigh. P2 (events.jsonl parser, incremental reads), P3 (two source lists, env, test sandbox; a miss reads the real `~/.copilot`) and P4 (resolve-time `TextRef`, hand-rolled reader) → Sonnet high. Escalation covers a Haiku phase that stalls.
+- **Edited `rollcall-copilot.js`, no new workflow:** it already had the Opus breaker/skeptic loop, preflight and serial phases; only the implementer model changed.
+- **Optional carry-overs left out of the workflow:** all are non-blocking skeptic observations with no criteria; listed under Not started.
+- Earlier (session 14): Copilot CLI only; reuse `Backing::LogFile`/`TextRef::LogLine`/`SourceMode::Jsonl`; phase cut keeps each merge green.
 
 ## Test state
-- Last gate: `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (ignored by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`). No code changed since.
-- CI: still billing-blocked (every job 0 steps; "recent account payments have failed"). Linux untested.
+- No code changed since `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (ignored by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`). Gate not re-run this session (docs/workflow only).
+- CI: billing-blocked (every job 0 steps). Linux untested.
 
 ## Gotchas
-- **No real Copilot session on this machine** (`~/.copilot` = `config.json ide logs mcp-config.json`). All format criteria are *(assumption)* until Q6 gets a sample. Never print prompt text from `~/.copilot` (plaintext prompts, tool args and output; research §6). `~/.config/github-copilot/apps.json` likely holds tokens: never read it.
-- **`"copilot"` is 7 chars**, one more than `"claude"`: P1 checks TUI/plain column budgets.
-- **Two source lists** must stay in sync: `scan.rs` `scan_sources` and `output.rs` resolver list.
-- **Test sandbox** (`tests/it/support.rs:591-630`) must set `COPILOT_HOME` in P3, or a test could read the real store.
-- `ubuntu-latest` → Ubuntu 26 from 2026-10-19 (runner annotation); consider pinning `ubuntu-24.04` (author decision, not asked).
-- Carried: CI annotations via `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations`; scratch `HOME` for manual runs; `git config handoff.auto false`; stage explicit paths; Python `re.sub` replacement turns `\n` into newlines.
+- **Haiku `xhigh` effort is new for this repo's workflows:** if the runtime rejects it for Haiku, change `HAIKU` to `effort: 'high'` (one line).
+- No real Copilot session on this machine; format criteria are *(assumption)* until Q6. Never print prompt text from `~/.copilot`; never read `~/.config/github-copilot/apps.json` (tokens).
+- `"copilot"` is 7 chars (one more than `"claude"`): P1 checks TUI/plain column budgets.
+- Two source lists must stay in sync: `scan.rs` `scan_sources` and the `output.rs` resolver list.
+- Test sandbox `crates/rollcall-cli/tests/it/support.rs` must set `COPILOT_HOME` in P3.
+- Local `main` is stale (`f7ada95`); always use `origin/main`.
+- `ubuntu-latest` → Ubuntu 26 from 2026-10-19; consider pinning `ubuntu-24.04` (author decision, not asked).
+- Carried: CI annotations via `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations`; scratch `HOME` for manual runs (macOS cache ignores `XDG_CACHE_HOME`); `git config handoff.auto false`; stage explicit paths.
 
 ## Suggested skills
-- `brief`, then the author Q&A; `/executor-grade-plan-audit` before `/pchunker`; `/pexec`; `gate-record-audit` before the skeptic; `verify-ledger` for P5; `ci-divergence-triage` once CI runs.
+- `brief`, then the author Q&A; `gate-record-audit` before approving spec rev 17; `verify-ledger` for P5; `ci-divergence-triage` once CI runs.
 
 ## Not started
-- Everything in the Copilot plan (P0–P5).
-- Re-run CI on `main` after the author fixes billing.
-- Release: create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag (author actions).
-- Optional carry-overs: `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
+- Copilot plan P0–P5 (all of it).
+- Author actions: fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
+- Optional carry-overs (non-blocking): `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
 
 ## Author answers 2026-10-07 (Copilot plan)
 <!-- Filled in by the next session with the author's verbatim answers. The rollcall-copilot workflow preflight parses this section. -->

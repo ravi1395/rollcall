@@ -1,14 +1,14 @@
 export const meta = {
   name: 'rollcall-copilot',
-  description: 'rollcall Copilot CLI session source: Opus drafts spec rev 17 + ACCEPTANCE.md (stops for author), then serial Sonnet implement + Opus breaker/skeptic per phase',
+  description: 'rollcall Copilot CLI session source: Opus drafts spec rev 17 + ACCEPTANCE.md (stops for author), then serial per-phase implement (Haiku xhigh or Sonnet high by complexity) + Opus breaker/skeptic',
   whenToUse: 'rollcall impl/copilot after the 2026-10-07 handoff. args.stage = "spec" | "implement" (implement needs args.specApproved = true; optional args.items = ["P1", ...])',
   phases: [
     { title: 'Preflight', detail: 'Branch, clean tree, author answers Q1-Q7 present in HANDOFF.md' },
     { title: 'Spec', detail: 'Opus drafts spec rev 17 + ACCEPTANCE.md, Opus skeptic review; stops for author', model: 'opus' },
     { title: 'Criteria', detail: 'Load fixed acceptance criteria from ACCEPTANCE.md' },
-    { title: 'Implement', detail: 'Per phase, serial: Sonnet implement, gate, commit', model: 'sonnet' },
-    { title: 'Break', detail: 'Per phase: Opus breaker, guard, Sonnet fixes', model: 'opus' },
-    { title: 'Review', detail: 'Per phase: Opus skeptic, Sonnet fix loop', model: 'opus' },
+    { title: 'Implement', detail: 'Per phase, serial: implement (P1 Haiku xhigh; P2-P4 Sonnet high), gate, commit' },
+    { title: 'Break', detail: 'Per phase: Opus breaker, guard, tiered fixes', model: 'opus' },
+    { title: 'Review', detail: 'Per phase: Opus skeptic, tiered fix loop', model: 'opus' },
     { title: 'Final', detail: 'Opus skeptic over the whole range' },
   ],
 }
@@ -25,7 +25,15 @@ const ANSWERS = 'Author answers 2026-10-07 (Copilot plan)'
 const GATE = 'cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked'
 const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
 const MAX_ROUNDS = 3
-const IMPL = { model: 'sonnet' }
+// Implementer per phase, by complexity (author, 2026-10-07): Haiku xhigh for mechanical work,
+// Sonnet high for parser/wiring logic. P1 is enum arms + schema enums (plan tags them mech);
+// P2 is the events.jsonl parser and incremental reads; P3 is cross-file wiring plus the test
+// sandbox (a miss reads the real ~/.copilot); P4 is a resolve-time TextRef and a hand-rolled reader.
+const HAIKU = { model: 'haiku', effort: 'xhigh' }
+const SONNET = { model: 'sonnet', effort: 'high' }
+const TIER = { P1: HAIKU, P2: SONNET, P3: SONNET, P4: SONNET }
+// A Haiku phase whose first fix attempt did not hold escalates to Sonnet high.
+const implOpts = (id, round = 1) => (TIER[id] === HAIKU && round >= 2 ? SONNET : TIER[id] || SONNET)
 const CHEAP = { model: 'sonnet', effort: 'low' }
 const BREAKER = { agentType: 'breaker', model: 'opus' }
 const SKEPTIC = { agentType: 'skeptical-reviewer', model: 'opus' }
@@ -103,16 +111,16 @@ async function preflight(ph) {
   return { base, answers: ans }
 }
 
-async function fix(ph, item, problem, label) {
+async function fix(ph, item, problem, label, round = 1) {
   return agent(`${COMMON}\nYou fix plan phase ${item.id} (${item.title}). Acceptance criteria (fixed; do not reinterpret):\n${acText(item)}\nProblem to fix:\n${problem}\nFix product code to satisfy the criteria. Never weaken, delete or edit the assertions of an existing test, including breaker tests, unless a criterion above names that exact assertion as changing; if a test itself contradicts the spec, stop and report status "blocked" with the contradiction. ${r1Line(item.id)} Run the scoped tests that cover your change and quote their "test result:" lines. Do not commit.`,
-    { ...IMPL, phase: ph, label, schema: IMPL_S })
+    { ...implOpts(item.id, round), phase: ph, label, schema: IMPL_S })
 }
 
 async function gateUntilGreen(ph, item) {
   for (let r = 1; r <= MAX_ROUNDS; r++) {
     const g = await gate(ph, `gate:${item.id}:${r}`)
     if (g && g.pass) return g
-    const f = await fix(ph, item, `The full gate failed:\n${g ? g.failures.join('\n') : 'gate agent died'}\n${g ? g.test_summary : ''}`, `gatefix:${item.id}:${r}`)
+    const f = await fix(ph, item, `The full gate failed:\n${g ? g.failures.join('\n') : 'gate agent died'}\n${g ? g.test_summary : ''}`, `gatefix:${item.id}:${r}`, r)
     if (!f || f.status === 'blocked') return null
   }
   return null
@@ -149,7 +157,7 @@ async function runItem(item) {
   if (!base || !base.clean) return { id, status: 'stopped', reason: 'working tree not clean', detail: base && base.status }
 
   const impl = await agent(`${COMMON}\nImplement plan phase ${id}: ${item.title}. Spec sections: ${item.spec_sections || 'see ' + AC_FILE}. Files (hint): ${(item.files_hint || []).join(', ')}.\nAcceptance criteria (fixed):\n${acText(item)}\nTests first (R3): write tests for each criterion, run them, quote the red output, then implement until green. Fixtures are hand-written JSONL in the research's shapes with a marker prompt string such as PROMPT-MARKER, never copied from a real store. Ponytail ladder (R4): reuse crates/rollcall-sessions/src/jsonl.rs (open_log, plan_read, head_fp/tail_fp, resolve_log_ref, file_exists_same) and the claude.rs patterns before writing new code. ${r1Line(id)} Verify with scoped clippy/fmt/tests for the crates you touched and quote "test result:" lines. Do not commit. Return every file you changed.`,
-    { ...IMPL, phase: 'Implement', label: `implement:${id}`, schema: IMPL_S })
+    { ...implOpts(id), phase: 'Implement', label: `implement:${id}`, schema: IMPL_S })
   if (!impl || impl.status === 'blocked') return { id, status: 'blocked', impl }
   let g = await gateUntilGreen('Implement', item)
   if (!g) return { id, status: 'stopped', reason: 'gate not green after implement', impl }
@@ -167,7 +175,7 @@ async function runItem(item) {
         { ...CHEAP, phase: 'Break', label: `guard:${id}`, schema: GUARD_S })
       if (brk.broken.length) {
         for (let r = 1; r <= MAX_ROUNDS; r++) {
-          const f = await fix('Break', item, `Breaker tests that must pass (regression tests; fix the code, never the assertions):\n${JSON.stringify(brk.broken)}`, `breakfix:${id}:${r}`)
+          const f = await fix('Break', item, `Breaker tests that must pass (regression tests; fix the code, never the assertions):\n${JSON.stringify(brk.broken)}`, `breakfix:${id}:${r}`, r)
           if (!f || f.status === 'blocked') return { id, status: 'blocked', reason: 'breaker fix blocked', breaker: brk, fix: f }
           g = await gateUntilGreen('Break', item)
           if (g) break
@@ -185,7 +193,7 @@ async function runItem(item) {
     verdict = await agent(`Repo: ${REPO}, branch ${BRANCH}. Adversarially review plan phase ${id} (${item.title}): changes are git diff ${base.sha}..HEAD (plus any uncommitted fixes). Original acceptance criteria (fixed):\n${acText(item)}\n${r1Line(id)} Check git diff ${base.sha}..HEAD -- Cargo.lock '*Cargo.toml' is empty and that structural edits stay within that allowance.\nBreaker report: ${brk ? brk.summary + ' BROKEN: ' + JSON.stringify(brk.broken) : 'skipped (no logic)'}\nGate evidence: ${g ? g.test_summary : 'none'}\nRe-run what you need yourself; treat claims as unverified until you see evidence; mutation-probe at least one criterion's test to prove it can fail (restore and touch the file afterwards; leave no probe). Never read the real ~/.copilot. Report each criterion met, unmet or unverified; unverified is not met. Put optional improvements in optional, not in criteria. pass = all met.`,
       { ...SKEPTIC, phase: 'Review', label: `skeptic:${id}:${r}`, schema: VERDICT_S })
     if (verdict && verdict.pass) break
-    const f = await fix('Review', item, `Skeptic found these criteria not met:\n${JSON.stringify(unmet(verdict))}`, `reviewfix:${id}:${r}`)
+    const f = await fix('Review', item, `Skeptic found these criteria not met:\n${JSON.stringify(unmet(verdict))}`, `reviewfix:${id}:${r}`, r)
     if (!f || f.status === 'blocked') return { id, status: 'blocked', reason: 'review fix blocked', verdict, fix: f }
     g = await gateUntilGreen('Review', item)
     if (!g) return { id, status: 'stopped', reason: 'gate not green after review fix', verdict }
