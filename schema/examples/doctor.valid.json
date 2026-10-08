@@ -78,6 +78,29 @@
         "path_gone": 4,
         "non_repo": 1
       }
+    },
+    {
+      "source": "copilot",
+      "mode": "absent",
+      "db_version": null,
+      "files": 0,
+      "records": 0,
+      "skipped": {
+        "malformed": 0,
+        "unknown_type": 0,
+        "oversize": 0,
+        "non_uuid": 0,
+        "bad_rollout_path": 0
+      },
+      "sessions": 0,
+      "excluded_children": 0,
+      "vanished": 0,
+      "matched": 0,
+      "unmatched": {
+        "outside_root": 0,
+        "path_gone": 0,
+        "non_repo": 0
+      }
     }
   ]
 }

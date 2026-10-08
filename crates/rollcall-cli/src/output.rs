@@ -53,11 +53,13 @@ pub struct ResumeTarget {
     pub cwd: PathBuf,
 }
 
-/// The §8.1 `Y` line: `cd -- '<cwd>' && claude --resume <id>` (`codex resume <id>` for Codex).
+/// The §8.1 `Y` line: `cd -- '<cwd>' && claude --resume <id>` (`codex resume <id>` for Codex,
+/// `copilot --resume <id>` for Copilot).
 pub fn display_line(target: &ResumeTarget) -> String {
     let agent = match target.source {
         SourceKind::Claude => "claude --resume",
         SourceKind::Codex => "codex resume",
+        SourceKind::Copilot => "copilot --resume",
     };
     format!(
         "cd -- {} && {agent} {}",
@@ -713,6 +715,7 @@ fn agent_name(source: SourceKind) -> &'static str {
     match source {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     }
 }
 
@@ -1843,6 +1846,14 @@ mod tests {
     }
 
     #[test]
+    fn display_line_names_the_copilot_resume_verb() {
+        assert_eq!(
+            display_line(&target(Path::new("/r/CRM"), SourceKind::Copilot)),
+            format!("cd -- '/r/CRM' && copilot --resume {ID}")
+        );
+    }
+
+    #[test]
     fn display_line_round_trips_every_shell_hostile_cwd_through_sh() {
         const HOSTILE: [&str; 8] = [
             "a b",
@@ -1858,7 +1869,7 @@ mod tests {
         let base = std::fs::canonicalize(dir.path()).unwrap();
         let bin = base.join("bin");
         std::fs::create_dir(&bin).unwrap();
-        for agent in ["claude", "codex"] {
+        for agent in ["claude", "codex", "copilot"] {
             let script = bin.join(agent);
             std::fs::write(&script, "#!/bin/sh\npwd -P\nprintf '%s\\n' \"$@\"\n").unwrap();
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1866,6 +1877,7 @@ mod tests {
         for (source, args) in [
             (SourceKind::Claude, "--resume"),
             (SourceKind::Codex, "resume"),
+            (SourceKind::Copilot, "--resume"),
         ] {
             for name in HOSTILE {
                 let cwd = base.join(name);
@@ -2435,6 +2447,32 @@ mod tests {
             let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
             assert!(text.starts_with("foo  "), "{name:?}: {text:?}");
         }
+    }
+
+    #[test]
+    fn a_copilot_last_session_cell_starts_with_the_whole_agent_name() {
+        let (w, mut doc) = blank_doc();
+        let wt = &mut doc.repos[0].worktrees[0];
+        wt.last_session = Some(rollcall_core::SessionOut {
+            source: SourceKind::Copilot,
+            id: ID.to_owned(),
+            branch: None,
+            cwd: wt.path.clone(),
+            started_at: w.ctx.now,
+            ended_at: w.ctx.now,
+            title: Some("fix flaky e2e".to_owned()),
+            title_kind: Some(TitleKind::Prompt),
+            last_prompt: None,
+            message_count: 1,
+            resume: None,
+        });
+        let cells = worktree_cells(&doc.repos[0].worktrees[0], w.ctx.now, false);
+        assert!(cells[2].starts_with("copilot "), "{cells:?}");
+        let text = plain_status(&doc, &HashSet::new(), w.ctx.now, Render::default());
+        assert!(
+            text.lines().nth(1).unwrap().contains("copilot "),
+            "{text:?}"
+        );
     }
 
     #[test]

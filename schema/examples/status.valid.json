@@ -78,7 +78,7 @@
           "attention": 3,
           "error": null,
           "last_session": {
-            "source": "claude",
+            "source": "copilot",
             "id": "0b7e9a52-3c1d-4f6e-9a48-5d2f1c7e8b10",
             "branch": "ui-refine/css-consolidation",
             "cwd": "/Users/dev/Projects/crm/.worktrees/ui-refine",
@@ -88,7 +88,7 @@
             "title_kind": "ai",
             "last_prompt": "run the stylesheet diff again",
             "message_count": 42,
-            "resume": "cd -- '/Users/dev/Projects/crm/.worktrees/ui-refine' && claude --resume 0b7e9a52-3c1d-4f6e-9a48-5d2f1c7e8b10"
+            "resume": "cd -- '/Users/dev/Projects/crm/.worktrees/ui-refine' && copilot --resume 0b7e9a52-3c1d-4f6e-9a48-5d2f1c7e8b10"
           },
           "older_sessions": 1
         }

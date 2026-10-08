@@ -289,6 +289,7 @@ fn source_name(s: SourceKind) -> &'static str {
     match s {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     }
 }
 
@@ -384,6 +385,11 @@ mod tests {
             SourceKind::Codex => Backing::CodexThread {
                 db_path: PathBuf::from("/codex.db"),
                 thread_id: id.clone(),
+            },
+            SourceKind::Copilot => Backing::LogFile {
+                dev: u64::MAX,
+                inode: 3,
+                path: PathBuf::from("/events.jsonl"),
             },
         };
         Session {
@@ -706,6 +712,28 @@ mod tests {
         assert!(got("/unscanned", "/A/wA").is_empty());
         assert_eq!(ix.scanned_submodules(Path::new("/A")), Some(false));
         assert_eq!(ix.scanned_submodules(Path::new("/B")), Some(true));
+    }
+
+    #[test]
+    fn a_copilot_session_round_trips_through_the_store() {
+        let (_dir, mut ix) = open_tmp();
+        let s = session(SourceKind::Copilot, ID1, "2026-09-29T09:30:00Z", "/A/wA");
+        let sc = scan(
+            "/A",
+            false,
+            vec![source_scan(SourceKind::Copilot, vec![s.clone()], &[9])],
+            vec![(SourceKind::Copilot, ID1, Some("/A/wA"))],
+            vec![repo_row("/A", RepoKind::Normal, false)],
+        );
+        ix.commit_scan(Path::new("/A"), sc).unwrap();
+        assert_eq!(
+            ix.source_state(SourceKind::Copilot).sessions,
+            vec![s.clone()]
+        );
+        assert_eq!(
+            ix.sessions_for(Path::new("/A"), Path::new("/A/wA")),
+            vec![s]
+        );
     }
 
     #[test]

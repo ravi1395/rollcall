@@ -651,6 +651,7 @@ fn incremental_rows(w: &World, kind: SourceKind) -> Vec<Row> {
                 });
             }
         }
+        SourceKind::Copilot => unreachable!("no Copilot fixtures before P3"),
     }
     rows.retain(|r| !r.groups.is_empty());
     rows
@@ -660,6 +661,7 @@ fn kind_name(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     }
 }
 
@@ -667,6 +669,7 @@ fn resolve_text(w: &World, kind: SourceKind, r: &TextRef) -> Option<String> {
     match kind {
         SourceKind::Claude => claude_source(w).resolve(r),
         SourceKind::Codex => codex_source(w).resolve(r),
+        SourceKind::Copilot => unreachable!("no Copilot fixtures before P3"),
     }
 }
 
@@ -836,11 +839,13 @@ fn assert_final_session(w: &World, kind: SourceKind, only: &str) {
             .filter(|r| r.id == only)
             .map(|r| (r.id.as_str(), r.expect.as_ref()))
             .collect(),
+        SourceKind::Copilot => unreachable!("no Copilot fixtures before P3"),
     };
     let (claude, codex) = (claude_source(w), codex_source(w));
     let source: &dyn SessionSource = match kind {
         SourceKind::Claude => &claude,
         SourceKind::Codex => &codex,
+        SourceKind::Copilot => unreachable!("no Copilot fixtures before P3"),
     };
     assert_eq!(rows.len(), 1, "no fixture {only}");
     for (id, expect) in rows {

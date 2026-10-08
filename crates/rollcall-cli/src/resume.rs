@@ -69,6 +69,7 @@ fn plan(target: &ResumeTarget, env: &EnvPaths) -> Result<Plan, String> {
     let (name, subcommand) = match target.source {
         SourceKind::Claude => ("claude", "--resume"),
         SourceKind::Codex => ("codex", "resume"),
+        SourceKind::Copilot => ("copilot", "--resume"),
     };
     let bin = env
         .path
@@ -112,6 +113,7 @@ fn write_resume_file(
     let source = match target.source {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     };
     let mut bytes = target.cwd.as_os_str().as_bytes().to_vec();
     for field in [source, target.id.as_str()] {
@@ -165,7 +167,7 @@ const POSIX_RC: &str = r#"rc() {
     *) echo "rc: invalid session id" >&2; return 1 ;;
   esac
   case $src in
-    claude | codex) ;;
+    claude | codex | copilot) ;;
     *) echo "rc: unknown agent" >&2; return 1 ;;
   esac
   bin=$(command -v "$src")
@@ -173,10 +175,10 @@ const POSIX_RC: &str = r#"rc() {
     /*) ;;
     *) echo "rc: no absolute path to $src" >&2; return 1 ;;
   esac
-  if [ "$src" = claude ]; then
-    cd -- "$cwd" && "$bin" --resume "$id"
-  else
+  if [ "$src" = codex ]; then
     cd -- "$cwd" && "$bin" resume "$id"
+  else
+    cd -- "$cwd" && "$bin" --resume "$id"
   fi
 }
 "#;
@@ -205,7 +207,7 @@ const FISH_RC: &str = r#"function rc
         echo "rc: invalid session id" >&2
         return 1
     end
-    if test "$src" != claude -a "$src" != codex
+    if test "$src" != claude -a "$src" != codex -a "$src" != copilot
         echo "rc: unknown agent" >&2
         return 1
     end
@@ -214,10 +216,10 @@ const FISH_RC: &str = r#"function rc
         echo "rc: no absolute path to $src" >&2
         return 1
     end
-    if test "$src" = claude
-        cd -- $cwd; and $bin --resume $id
-    else
+    if test "$src" = codex
         cd -- $cwd; and $bin resume $id
+    else
+        cd -- $cwd; and $bin --resume $id
     end
 end
 "#;
@@ -308,6 +310,22 @@ mod tests {
         assert!(got.is_ok());
         let written = std::fs::read(&path).unwrap();
         assert!(written.windows(7).any(|w| w == b"\0codex\0"), "{written:?}");
+    }
+
+    #[test]
+    fn the_copilot_source_is_written_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = resume_file(&tmp, 0o600, b"");
+        let uid = me(tmp.path());
+        let code = resume(
+            &target(tmp.path(), SourceKind::Copilot),
+            &env_with_file(&path),
+            &|| Ok(uid),
+        )
+        .unwrap();
+        assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(10)));
+        let expected = format!("{}\0copilot\0{ID}\0", tmp.path().display());
+        assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
     }
 
     #[test]
@@ -470,6 +488,26 @@ mod tests {
     }
 
     #[test]
+    fn direct_path_plans_the_copilot_argv() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        let copilot = plant(&bin_dir, "copilot");
+        let env = EnvPaths {
+            path: Some(bin_dir.into_os_string()),
+            ..EnvPaths::default()
+        };
+        let cwd = tmp.path();
+        assert_eq!(
+            plan(&target(cwd, SourceKind::Copilot), &env).unwrap(),
+            Plan::Exec {
+                bin: copilot,
+                args: vec!["--resume".into(), ID.into()],
+                cwd: cwd.to_path_buf(),
+            }
+        );
+    }
+
+    #[test]
     fn direct_path_refuses_a_missing_cwd_or_agent_without_calling_uid() {
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
@@ -525,6 +563,87 @@ mod tests {
                 "{name}: {}",
                 String::from_utf8_lossy(&out.stderr)
             );
+        }
+    }
+
+    /// Runs `rc` from `init_script(shell)` with PATH holding only absolute entries: a stub
+    /// `rollcall` copies a resume file naming `agent` into `$ROLLCALL_RESUME_FILE` and exits 10,
+    /// and a stub `copilot` records its cwd and argv. Returns rc's output, the record (`None` when
+    /// the copilot stub never ran) and the canonical cwd the resume file names.
+    fn run_rc(
+        shell: Shell,
+        tool: &Path,
+        agent: &str,
+    ) -> (std::process::Output, Option<Vec<u8>>, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let (bin, cwd) = (tmp.path().join("bin"), tmp.path().join("cwd"));
+        for dir in [&bin, &cwd] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let payload = tmp.path().join("payload");
+        std::fs::write(&payload, format!("{}\0{agent}\0{ID}\0", cwd.display())).unwrap();
+        let record = tmp.path().join("record");
+        let stub = |name: &str, body: String| {
+            let path = bin.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        stub(
+            "rollcall",
+            format!(
+                "cat '{}' > \"$ROLLCALL_RESUME_FILE\"\nexit 10",
+                payload.display()
+            ),
+        );
+        stub(
+            "copilot",
+            format!(
+                "printf '%s\\0' \"$(pwd -P)\" \"$@\" > '{}'",
+                record.display()
+            ),
+        );
+        let script = tmp.path().join("rc-init");
+        std::fs::write(&script, init_script(shell)).unwrap();
+        let call = match shell {
+            Shell::Fish => "source $argv[1]; rc",
+            Shell::Bash | Shell::Zsh => ". \"$0\"; rc",
+        };
+        let out = Command::new(tool)
+            .args(["-c", call])
+            .arg(&script)
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("HOME", tmp.path())
+            .output()
+            .unwrap();
+        let record = std::fs::read(&record).ok();
+        (out, record, std::fs::canonicalize(&cwd).unwrap())
+    }
+
+    #[test]
+    fn rc_resumes_a_copilot_session_in_its_cwd_in_each_shell() {
+        for (shell, name, _) in SHELLS {
+            let Some(tool) = which(name) else { continue };
+            let (out, record, cwd) = run_rc(shell, &tool, "copilot");
+            assert!(
+                out.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let want = format!("{}\0--resume\0{ID}\0", cwd.display());
+            assert_eq!(record.as_deref(), Some(want.as_bytes()), "{name}");
+        }
+    }
+
+    #[test]
+    fn rc_refuses_a_misspelled_agent_before_running_anything_in_each_shell() {
+        for (shell, name, _) in SHELLS {
+            let Some(tool) = which(name) else { continue };
+            let (out, record, _) = run_rc(shell, &tool, "copilt");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{name}");
+            assert!(stderr.contains("rc: unknown agent"), "{name}: {stderr}");
+            assert_eq!(record, None, "{name}: the copilot stub ran");
         }
     }
 
