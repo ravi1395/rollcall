@@ -10,6 +10,7 @@ use rollcall_core::{
     Index, ListStaleDoc, Repo, SCHEMA_VERSION, Session, SessionOut, StaleItem, WhereWasIDoc,
 };
 use rollcall_sessions::SessionSource;
+use rollcall_sessions::copilot::Copilot;
 use rollcall_store::SqliteIndex;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -272,16 +273,12 @@ impl Server<'_> {
 
     /// `output::render_session` with `redact_emails` applied, which the pinned signature cannot take.
     fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 2]) -> SessionOut {
-        let source = sources
+        // ponytail: as in `Builder::session`, unlisted kinds resolve no text.
+        let source: &dyn SessionSource = sources
             .iter()
             .find(|s| s.kind() == session.source)
-            .expect("one source per SourceKind");
-        output::render_with(
-            session,
-            source.as_ref(),
-            self.policy,
-            self.ctx.config.redact_emails,
-        )
+            .map_or(&Copilot, |s| s.as_ref());
+        output::render_with(session, source, self.policy, self.ctx.config.redact_emails)
     }
 }
 

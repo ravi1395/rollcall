@@ -4,6 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use rollcall_core::{
+    Backing, Index, ScanResult, Session, SkippedCounts, SourceDiagnostics, SourceKind, SourceMode,
+    SourceScan, UnmatchedCounts, Uuid,
+};
+use rollcall_store::SqliteIndex;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -900,6 +905,84 @@ fn a_held_scan_lock_with_a_cache_answers_stale_within_the_budget() {
         &[tool(1, "where_was_i", json!({}))],
     );
     assert_eq!(doc(&free.replies[0])["stale"], false);
+}
+
+/// Re-commits the cached scan of `b.root` with one untitled Copilot session matched to `repo`.
+fn commit_copilot_session(b: &Bare, repo: &Path) {
+    const ID: &str = "0a1b2c3d-0000-4000-8000-0123456789ab";
+    let mut ix = SqliteIndex::open(&b.cache_dir()).expect("open the cache");
+    let repos = ix.repos_for_root(&b.root);
+    let diagnostics = ix
+        .last_diagnostics(&b.root)
+        .expect("the first scan left diagnostics");
+    let ts = "2026-09-29T10:00:00Z".parse().unwrap();
+    let id = Uuid::parse(ID).unwrap();
+    let session = Session {
+        source: SourceKind::Copilot,
+        id: id.clone(),
+        cwd: repo.to_path_buf(),
+        branch: Some("main".to_owned()),
+        started_at: ts,
+        ended_at: ts,
+        title: None,
+        last_prompt: None,
+        message_count: 0,
+        backing: Backing::LogFile {
+            dev: 1,
+            inode: 2,
+            path: b.root.join("events.jsonl"),
+        },
+    };
+    let scan = ScanResult {
+        scanned_at: diagnostics.scanned_at.unwrap(),
+        submodules: false,
+        partial: false,
+        repos,
+        sources: vec![SourceScan {
+            files: Vec::new(),
+            sessions: vec![session],
+            diag: SourceDiagnostics {
+                source: SourceKind::Copilot,
+                mode: SourceMode::Jsonl,
+                db_version: None,
+                files: 0,
+                records: 0,
+                skipped: SkippedCounts::default(),
+                sessions: 1,
+                excluded_children: 0,
+                vanished: 0,
+                matched: 1,
+                unmatched: UnmatchedCounts::default(),
+            },
+            notes: Vec::new(),
+        }],
+        matches: vec![(SourceKind::Copilot, id, Some(repo.to_path_buf()))],
+        diagnostics,
+    };
+    ix.commit_scan(&b.root, scan).unwrap();
+}
+
+/// P1 regression: `Server::render` has no Copilot resolver to find (P3 lists one), so a cached
+/// Copilot last session is served through the inert fallback instead of panicking.
+#[test]
+fn a_cached_copilot_session_is_served_without_a_panic() {
+    let b = Bare::with_repos(&["app"]);
+    let seed = spawn_watchdog(b.sb.rollcall(&["scan", p(&b.root)], &[]), RUN_DEADLINE).unwrap();
+    assert_eq!(Run::from(seed).code, 0);
+    commit_copilot_session(&b, &b.root.join("app"));
+
+    let lock = lock_when_free(&b.cache_dir(), &b.root);
+    let held = serve(
+        &b.sb,
+        &["--root", p(&b.root)],
+        &[],
+        &[tool(1, "where_was_i", json!({}))],
+    );
+    drop(lock);
+    assert_eq!(held.run.code, 0, "stderr: {}", held.run.stderr);
+    let d = doc(&held.replies[0]);
+    valid("where_was_i", &d);
+    assert_eq!(d["recent_sessions"][0]["source"], "copilot", "{d}");
 }
 
 /// §10.2 MCP: both tools over the full F, schema-valid and within the cap. F has its own world (cache).

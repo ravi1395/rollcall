@@ -16,6 +16,7 @@ use rollcall_core::{
     StaleReason, StatusDoc, TextRef, Timestamp, TitleKind, Uuid, Worktree, WorktreeState, rank,
 };
 use rollcall_sessions::codex_db;
+use rollcall_sessions::copilot::Copilot;
 use rollcall_sessions::{Claude, Codex, SessionSource};
 
 use crate::cli::StatusFilters;
@@ -246,14 +247,15 @@ impl Builder<'_> {
     }
 
     fn session(&self, session: &Session) -> rollcall_core::SessionOut {
-        let source = self
+        // ponytail: unlisted kinds resolve no text (inert Copilot); P3 lists Copilot.
+        let source: &dyn SessionSource = self
             .sources
             .iter()
             .find(|s| s.kind() == session.source)
-            .expect("one source per SourceKind");
+            .map_or(&Copilot, |s| s.as_ref());
         render_impl(
             session,
-            source.as_ref(),
+            source,
             self.policy,
             self.ctx.config.redact_emails,
             self.decode,
