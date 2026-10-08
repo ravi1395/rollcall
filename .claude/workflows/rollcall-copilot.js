@@ -97,7 +97,7 @@ const gate = (ph, label) => agent(`${COMMON}\nRun the full gate from the repo ro
 
 // The tree is verified clean (outside .claude/) at the start of every stage and item, and work is serial,
 // so every changed path belongs to this step: commit them all, by explicit path.
-const commit = (ph, label, message) => agent(`${COMMON}\nRun git status --short -- ':!.claude' ':!graphify-out'. Stage every listed path (modified, added, deleted, untracked) by explicit path; never git add -A, git add . or anything under .claude/ or graphify-out/. If nothing is listed, return the current HEAD sha and note "nothing to commit". The commit message is the text between the two --- lines, verbatim, followed by a blank line and the trailer line:\n---\n${message}\n---\n${TRAILER}\nAfter committing run graphify update . if graphify is on PATH (ignore if absent). Return the new sha and the committed paths.`,
+const commit = (ph, label, message) => agent(`${COMMON}\nThe author started this workflow and authorized its local commits on ${BRANCH}; this commit step is part of that request, so make it (never push). Run git status --short -- ':!.claude' ':!graphify-out'. Stage every listed path (modified, added, deleted, untracked) by explicit path; never git add -A, git add . or anything under .claude/ or graphify-out/. If nothing is listed, return the current HEAD sha and note "nothing to commit". The commit message is the text between the two --- lines, verbatim, followed by a blank line and the trailer line:\n---\n${message}\n---\n${TRAILER}\nAfter committing run graphify update . if graphify is on PATH (ignore if absent). Return the new sha and the committed paths.`,
   { ...CHEAP, phase: ph, label, schema: COMMIT_S })
 
 async function preflight(ph) {
@@ -152,6 +152,8 @@ async function specReview() {
   const { review, draft } = await reviewSpec(args.since, null, 'rereview:spec', 'rerevise:spec')
   const c = await commit('Spec', 'commit:spec-review',
     'docs(spec): revision 17 review fixes, Copilot CLI session source\n\nSkeptic findings on the rev 17 draft fixed in the spec and\ndocs/superpowers/plans/tasks/copilot/ACCEPTANCE.md. Awaiting author review.')
+  const after = await head('Spec', 'verify:commit:spec-review')
+  if (!after || !after.clean) return { stage: 'spec-review', stopped: 'commit step left the tree dirty', status: after && after.status, commit: c, review }
   return { stage: 'spec-review', since: args.since, commit: c, review_passed: !!(review && review.pass), review,
     open_questions: draft ? draft.open_questions : [], summary: draft ? draft.summary : 'no revision needed',
     next: review && review.pass
@@ -174,6 +176,8 @@ async function spec() {
   const review = out.review
   const c = await commit('Spec', 'commit:spec',
     'docs(spec): revision 17 draft, Copilot CLI session source\n\nNew §5.3 for ~/.copilot/session-state/<id>/events.jsonl, the copilot\nsource kind and COPILOT_HOME, per the 2026-10-07 plan and author\nanswers, with fixed acceptance criteria in\ndocs/superpowers/plans/tasks/copilot/ACCEPTANCE.md. Awaiting author review.')
+  const after = await head('Spec', 'verify:commit:spec')
+  if (!after || !after.clean) return { stage: 'spec', stopped: 'commit step left the tree dirty', status: after && after.status, commit: c, review }
   return { stage: 'spec', commit: c, review_passed: !!(review && review.pass), review, open_questions: draft.open_questions, summary: draft.summary,
     next: review && review.pass
       ? 'STOP: author reviews spec rev 17 and ACCEPTANCE.md. Run stage "implement" with specApproved: true only after approval.'
