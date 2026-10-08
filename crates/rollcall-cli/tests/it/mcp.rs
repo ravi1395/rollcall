@@ -12,7 +12,7 @@ use rollcall_store::SqliteIndex;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::build_sessions::{CodexMode, build_corpora, build_mcp_200};
+use crate::build_sessions::{CodexMode, build_copilot, build_corpora, build_mcp_200};
 use crate::support::{
     Corpus, Run, Sandbox, Which, World, expected, fresh, git_path, lock_when_free, run_rollcall,
     spawn_watchdog, validate,
@@ -962,8 +962,8 @@ fn commit_copilot_session(b: &Bare, repo: &Path) {
     ix.commit_scan(&b.root, scan).unwrap();
 }
 
-/// P1 regression: `Server::render` has no Copilot resolver to find (P3 lists one), so a cached
-/// Copilot last session is served through the inert fallback instead of panicking.
+/// P1 regression: a cached Copilot last session (here with a log that does not exist) is served,
+/// not a panic.
 #[test]
 fn a_cached_copilot_session_is_served_without_a_panic() {
     let b = Bare::with_repos(&["app"]);
@@ -983,6 +983,46 @@ fn a_cached_copilot_session_is_served_without_a_panic() {
     let d = doc(&held.replies[0]);
     valid("where_was_i", &d);
     assert_eq!(d["recent_sessions"][0]["source"], "copilot", "{d}");
+}
+
+/// P3-6: the tool descriptions name GitHub Copilot CLI beside Claude Code and Codex, and a real Copilot log
+/// is served by `where_was_i` (its repo's last session and the recent sessions) in a schema-valid document.
+#[test]
+fn a_scanned_copilot_session_is_served_and_the_descriptions_name_copilot() {
+    let w = fresh(Which::F);
+    build_copilot(&w, &w.sb.copilot_home);
+    let served = serve(
+        &w.sb,
+        &["--root", p(&w.root)],
+        &[],
+        &[
+            request(1, "tools/list", json!({})),
+            tool(2, "where_was_i", json!({"repo": "merged"})),
+        ],
+    );
+    assert_eq!(served.run.code, 0, "stderr: {}", served.run.stderr);
+    let tools = served.replies[0]["result"]["tools"].as_array().unwrap();
+    let wwi = tools.iter().find(|t| t["name"] == "where_was_i").unwrap();
+    let description = wwi["description"].as_str().unwrap();
+    for agent in ["Claude Code", "Codex", "GitHub Copilot CLI"] {
+        assert!(description.contains(agent), "{agent}: {description}");
+    }
+
+    let d = doc(&served.replies[1]);
+    valid("where_was_i", &d);
+    let id = crate::support::manifest().copilot[0].id.as_str();
+    assert_eq!(d["recent_sessions"][0]["source"], "copilot", "{d}");
+    assert_eq!(d["recent_sessions"][0]["id"], id, "{d}");
+    let sessions: Vec<&Value> = d["repos"][0]["worktrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|wt| &wt["last_session"])
+        .filter(|s| !s.is_null())
+        .collect();
+    assert_eq!(sessions.len(), 1, "{d}");
+    assert_eq!(sessions[0]["source"], "copilot");
+    assert_eq!(sessions[0]["id"], id);
 }
 
 /// §10.2 MCP: both tools over the full F, schema-valid and within the cap. F has its own world (cache).

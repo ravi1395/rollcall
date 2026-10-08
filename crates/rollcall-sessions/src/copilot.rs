@@ -1,7 +1,6 @@
 //! GitHub Copilot CLI source: one session per `session-state/<uuid>/events.jsonl` (spec §5.3).
 //!
-//! The `Copilot` source is still the inert placeholder (P3 registers a real one); `scan` and
-//! `resolve` below are the dark parser. Counts follow the Claude reader: `records` is the JSON
+//! `Copilot` roots the `scan` and `resolve` below at `$COPILOT_HOME`. Counts follow the Claude reader: `records` is the JSON
 //! objects read by this scan (unknown types included, malformed and oversize lines not), so an
 //! incremental scan reports only what it appended.
 
@@ -42,36 +41,27 @@ const KNOWN_FAMILIES: [&str; 10] = [
     "model",
 ];
 
-pub struct Copilot;
+pub struct Copilot {
+    copilot_home: PathBuf,
+}
+
+impl Copilot {
+    pub fn new(copilot_home: PathBuf) -> Copilot {
+        Copilot { copilot_home }
+    }
+}
 
 impl SessionSource for Copilot {
     fn kind(&self) -> SourceKind {
         SourceKind::Copilot
     }
 
-    fn scan(&self, _prior: &SourceState) -> SourceScan {
-        SourceScan {
-            files: Vec::new(),
-            sessions: Vec::new(),
-            diag: SourceDiagnostics {
-                source: SourceKind::Copilot,
-                mode: SourceMode::Absent,
-                db_version: None,
-                files: 0,
-                records: 0,
-                skipped: SkippedCounts::default(),
-                sessions: 0,
-                excluded_children: 0,
-                vanished: 0,
-                matched: 0,
-                unmatched: UnmatchedCounts::default(),
-            },
-            notes: Vec::new(),
-        }
+    fn scan(&self, prior: &SourceState) -> SourceScan {
+        scan(&self.copilot_home, prior)
     }
 
-    fn resolve(&self, _r: &TextRef) -> Option<String> {
-        None
+    fn resolve(&self, r: &TextRef) -> Option<String> {
+        resolve(&self.copilot_home, r)
     }
 }
 
@@ -470,8 +460,9 @@ mod tests {
     }
 
     #[test]
-    fn the_inert_source_is_absent_and_resolves_nothing() {
-        let src = Copilot;
+    fn a_source_over_a_missing_root_is_absent_and_resolves_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let src = Copilot::new(tmp.path().join("no-such-copilot-home"));
         assert_eq!(src.kind(), SourceKind::Copilot);
         for prior in [SourceState::default(), busy_prior()] {
             let scan = src.scan(&prior);
@@ -487,7 +478,8 @@ mod tests {
                 (d.files, d.records, d.sessions, d.excluded_children),
                 (0, 0, 0, 0)
             );
-            assert_eq!((d.vanished, d.matched), (0, 0));
+            // A prior session whose log is gone is counted vanished, never kept.
+            assert_eq!((d.vanished, d.matched), (prior.sessions.len() as u32, 0));
             assert_eq!(d.skipped, SkippedCounts::default());
             assert_eq!(d.unmatched, UnmatchedCounts::default());
         }

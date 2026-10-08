@@ -15,7 +15,6 @@ use rollcall_core::{
     WalkOptions, WorktreeCounts, WorktreeKey, match_sessions,
 };
 use rollcall_git::RootCheck;
-use rollcall_sessions::{Claude, Codex, SessionSource};
 use rollcall_store::{ScanLock, SqliteIndex};
 use serde::{Deserialize, Serialize};
 
@@ -393,22 +392,7 @@ fn count(n: usize) -> u32 {
 }
 
 fn scan_sources(ctx: &Ctx, index: &SqliteIndex) -> Vec<SourceScan> {
-    let home = home(ctx);
-    let claude_root = ctx
-        .env
-        .claude_config_dir
-        .clone()
-        .unwrap_or_else(|| home.join(".claude"));
-    let codex_home = ctx
-        .env
-        .codex_home
-        .clone()
-        .unwrap_or_else(|| home.join(".codex"));
-    let sources: [Box<dyn SessionSource>; 2] = [
-        Box::new(Claude::new(claude_root.join("projects"))),
-        Box::new(Codex::new(codex_home)),
-    ];
-    sources
+    crate::output::log_sources(ctx)
         .iter()
         .map(|source| source.scan(&index.source_state(source.kind())))
         .collect()

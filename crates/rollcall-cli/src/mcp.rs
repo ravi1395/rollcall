@@ -10,7 +10,6 @@ use rollcall_core::{
     Index, ListStaleDoc, Repo, SCHEMA_VERSION, Session, SessionOut, StaleItem, WhereWasIDoc,
 };
 use rollcall_sessions::SessionSource;
-use rollcall_sessions::copilot::Copilot;
 use rollcall_store::SqliteIndex;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -272,13 +271,17 @@ impl Server<'_> {
     }
 
     /// `output::render_session` with `redact_emails` applied, which the pinned signature cannot take.
-    fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 2]) -> SessionOut {
-        // ponytail: as in `Builder::session`, unlisted kinds resolve no text.
-        let source: &dyn SessionSource = sources
+    fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 3]) -> SessionOut {
+        let source = sources
             .iter()
             .find(|s| s.kind() == session.source)
-            .map_or(&Copilot, |s| s.as_ref());
-        output::render_with(session, source, self.policy, self.ctx.config.redact_emails)
+            .expect("one source per SourceKind");
+        output::render_with(
+            session,
+            source.as_ref(),
+            self.policy,
+            self.ctx.config.redact_emails,
+        )
     }
 }
 
@@ -332,9 +335,9 @@ fn tool_list() -> Value {
             "name": "where_was_i",
             "description": format!(
                 "Status of the git repos under a root: each repo's worktrees (branch, dirty and \
-                 unpushed counts, staleness) with the latest Claude Code / Codex session in each, \
-                 plus the most recent sessions across the returned repos. Without `repo`, the \
-                 `limit` repos that most need attention. {UNTRUSTED}"
+                 unpushed counts, staleness) with the latest Claude Code / Codex / GitHub Copilot \
+                 CLI session in each, plus the most recent sessions across the returned repos. \
+                 Without `repo`, the `limit` repos that most need attention. {UNTRUSTED}"
             ),
             "inputSchema": {
                 "type": "object",

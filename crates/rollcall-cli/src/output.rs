@@ -176,7 +176,7 @@ struct Builder<'a> {
     root: &'a Path,
     policy: TextPolicy,
     submodules: bool,
-    sources: [Box<dyn SessionSource>; 2],
+    sources: [Box<dyn SessionSource>; 3],
     decode: bool,
     /// `(Repo.path, Worktree.path)` of the worktrees whose admin dir is locked, per repo since
     /// two repos may register the same path: the §7 documents do not carry it, the hint needs it.
@@ -247,15 +247,14 @@ impl Builder<'_> {
     }
 
     fn session(&self, session: &Session) -> rollcall_core::SessionOut {
-        // ponytail: unlisted kinds resolve no text (inert Copilot); P3 lists Copilot.
-        let source: &dyn SessionSource = self
+        let source = self
             .sources
             .iter()
             .find(|s| s.kind() == session.source)
-            .map_or(&Copilot, |s| s.as_ref());
+            .expect("one source per SourceKind");
         render_impl(
             session,
-            source,
+            source.as_ref(),
             self.policy,
             self.ctx.config.redact_emails,
             self.decode,
@@ -293,8 +292,8 @@ fn canonical_lenient(path: &Path) -> PathBuf {
     }
 }
 
-/// The agent log sources, rooted as `scan.rs` roots them.
-pub(crate) fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 2] {
+/// The agent log sources, rooted once for the scan (`scan.rs`) and the renderers.
+pub(crate) fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 3] {
     let home = ctx
         .env
         .home
@@ -310,9 +309,15 @@ pub(crate) fn log_sources(ctx: &Ctx) -> [Box<dyn SessionSource>; 2] {
         .codex_home
         .clone()
         .unwrap_or_else(|| home.join(".codex"));
+    let copilot = ctx
+        .env
+        .copilot_home
+        .clone()
+        .unwrap_or_else(|| home.join(".copilot"));
     [
         Box::new(Claude::new(claude.join("projects"))),
         Box::new(Codex::new(codex)),
+        Box::new(Copilot::new(copilot)),
     ]
 }
 
