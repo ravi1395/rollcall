@@ -1,6 +1,6 @@
 # rollcall
 
-Rust workspace (5 crates, edition 2024, no `unsafe`): a status board for git repos and the Claude/Codex sessions in them.
+Rust workspace (5 crates, edition 2024, no `unsafe`): a status board for git repos and the Claude/Codex/Copilot sessions in them.
 
 - Spec (the contract): `docs/superpowers/specs/2026-09-29-rollcall-design.md`
 - Plan: `docs/superpowers/plans/2026-09-29-rollcall-v0-plan.md` (phase briefs in `docs/superpowers/plans/tasks/v0/`; workers read `WORKER-RULES.md`)

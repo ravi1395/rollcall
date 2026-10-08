@@ -35,7 +35,7 @@
    - e. ACCEPTANCE P3-3's "unit test on EnvPaths" cannot use `std::env::set_var` (R3); reword it to the child-process pattern (`rollcall-store` `fs.rs` `run_child`) or rely on its integration half.
    - f. Cosmetic: CLAUDE.md line 3 still says "Claude/Codex sessions"; §12.1 has no Copilot gating item (Copilot gating lives in ACCEPTANCE.md); P2-3/P2-5/P2-7 tag the `agentId` assumption inconsistently.
    - g. §12.2 now asks the author for a smoke `rollcall resume` on a real Copilot session (Q6 only covered doctor counts): OK?
-   If any edit is wanted: make it (or have the main loop make it), commit, then `{stage: "spec-review", since: "485dfe6"}` to re-gate. Then record the approval verbatim under the answers section as `- Spec rev 17 approval: …`.
+   **Decided 2026-10-08** (author interview; answers at the bottom under "Spec rev 17 review decisions"), applied to the spec, ACCEPTANCE.md and CLAUDE.md, then re-gated with `{stage: "spec-review", since: "485dfe6"}`. Remaining: the author's explicit approval, recorded verbatim under the answers section as `- Spec rev 17 approval: …`.
 4. After approval: `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: tiered implementer tests-first → full gate → commit → Opus `breaker` (if `Has logic: yes`) → guard keeps test code only → tiered fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Stops at the first phase not accepted. P4 is not in ACCEPTANCE.md (Q1=a).
 5. Main loop afterwards: audit `git log`/`git status`; P5 real-data check on the author's 3 real sessions (`COPILOT_HOME` = real store read-only, scratch cache; counts only, never prompt text), including `skipped.unknown_type == 0` and `skipped.malformed == 0` for copilot, and that the `/cd` session's cwd is the post-`/cd` dir (compare paths by equality, print only true/false); update this handoff; answer AMBIGUOUS breaker items with the author; **ask before pushing** `impl/copilot`.
 
@@ -89,3 +89,12 @@
 - Q6 (real sample): "I'll install + run one" — author installs Copilot CLI and runs one throwaway session; P5 runs in the main loop on it (read-only, counts only, never prompt text). Sample taken session 15 (3 sessions incl. one resumed with `/cd`, CLI 1.0.93); the probe results under step 1b are binding format facts for spec rev 17: skip dot-dirs such as `.session-operation-locks/` uncounted; `parentAgentTaskId` is not a sub-agent marker (exclude on envelope `agentId` only); add `model.*` and `session.usage_checkpoint` to the known types; `session.start`/`session.resume` `.data.context` and settled `session.context_changed.data` = `branch,cwd,gitRoot` are confirmed, as is the `pendingGitContext:true` pending event; resume appends to the same log after a `session.shutdown`; a session can have zero `user.message` (spec decides per §5.0); `agentId`, `isAutopilotContinuation` and rewind truncation remain *(assumption)*.
 - Q7 (schema_version): "Additive = compatible" — keep `schema_version` 1; spec note that new enum values are compatible and consumers must tolerate unknown sources.
 - R1 approval (SourceKind::Copilot, pub mod copilot, EnvPaths.copilot_home): "Approve all three" — approved. Any other structural edit still stops and reports.
+- Spec rev 17 review decisions (author interview, 2026-10-08; applied in the commit after `fc7c478`):
+  - (a) Sub-agent own `session-state/<uuid>/`: "Wait for real data" — stays *assumption*, no rule until P5 or a later probe shows one.
+  - (b) Detached HEAD: "Same as Claude" — branch `"HEAD"` → `null` (§5.1); new criterion P2-18.
+  - (c) Bad envelope `timestamp`: "Malformed, like Claude" — non-string or non-RFC-3339 → malformed; absent/`null` → line used without a timestamp (`claude.rs:114-117`); new criterion P2-19.
+  - (d) `files`/`records`: "Define inline, Claude semantics" — §5.3 doctor bullet; new criterion P2-20.
+  - (e) P3-3: "Integration test only" — unit-test clause dropped (R3 forbids `set_var`). Note: no existing test covers `CODEX_HOME=""`; P3-3 is the first such test.
+  - (f) Cosmetic: "CLAUDE.md line 3" only — now "Claude/Codex/Copilot sessions". Not taken: a §12.1 Copilot gating item; consistent `agentId` (assumption) tags.
+  - (g) §12.2 manual `rollcall resume` smoke on a real Copilot session: "Keep it".
+
