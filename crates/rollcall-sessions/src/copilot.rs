@@ -73,9 +73,11 @@ fn is_known(kind: &str) -> bool {
     kind == "abort" || KNOWN_FAMILIES.contains(&kind.split('.').next().unwrap_or_default())
 }
 
-/// Sub-agent events carry an envelope `agentId` (assumption, §5.3).
+/// Sub-agent events carry a non-empty string envelope `agentId` (§5.3); any other value is human.
 fn has_agent(v: &Value) -> bool {
-    v.get("agentId").is_some_and(|a| !a.is_null())
+    v.get("agentId")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty())
 }
 
 /// The `(cwd, branch)` pair a line records, if it is a settled context object (§5.3).
@@ -118,6 +120,42 @@ enum Skip {
     Unknown,
 }
 
+/// RFC 3339 shape (`YYYY-MM-DDTHH:MM:SS[.f+](Z|±HH:MM)`, `T`/`Z` either case, §5.3). jiff has no
+/// strict parser and takes looser forms, so this runs first; jiff then checks the ranges.
+fn is_rfc3339(s: &str) -> bool {
+    let b = s.as_bytes();
+    let digits =
+        |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    let at = |i: usize, c: u8| b.get(i) == Some(&c);
+    if !(digits(0..4) && at(4, b'-') && digits(5..7) && at(7, b'-') && digits(8..10)) {
+        return false;
+    }
+    if !(b.get(10).is_some_and(|c| c.eq_ignore_ascii_case(&b'T'))
+        && digits(11..13)
+        && at(13, b':')
+        && digits(14..16)
+        && at(16, b':')
+        && digits(17..19))
+    {
+        return false;
+    }
+    let mut i = 19;
+    if at(i, b'.') {
+        let frac = b[i + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if frac == 0 {
+            return false;
+        }
+        i += 1 + frac;
+    }
+    match b.get(i) {
+        Some(b'Z' | b'z') => i + 1 == b.len(),
+        Some(b'+' | b'-') => {
+            i + 6 == b.len() && digits(i + 1..i + 3) && at(i + 3, b':') && digits(i + 4..i + 6)
+        }
+        _ => false,
+    }
+}
+
 struct Record {
     value: Value,
     timestamp: Option<Timestamp>,
@@ -134,7 +172,8 @@ fn parse_record(bytes: &[u8]) -> Result<Record, Skip> {
     }
     let timestamp = match value.get("timestamp") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) => Some(s.parse().map_err(|_| Skip::Malformed)?),
+        Some(Value::String(s)) if is_rfc3339(s) => Some(s.parse().map_err(|_| Skip::Malformed)?),
+        Some(Value::String(_)) => return Err(Skip::Malformed),
         Some(_) => return Err(Skip::Malformed),
     };
     Ok(Record { value, timestamp })
@@ -1149,6 +1188,64 @@ mod tests {
         let mut lines = base(user(3, "u2"));
         lines.push(json!({"type":"made.up","timestamp":"yesterday","data":{}}));
         assert_eq!(run(lines), (0, 1, 4, 2, ts(3)));
+    }
+
+    /// P2-19(e): strict RFC 3339 for the envelope timestamp. The real ms-precision `Z` form and a
+    /// numeric offset are read; looser shapes jiff would take are malformed, like case (a).
+    #[test]
+    fn the_envelope_timestamp_is_strict_rfc_3339() {
+        let run = |stamp: &str| {
+            let mut u = user(3, "u2");
+            u["timestamp"] = json!(stamp);
+            let h = Home::new();
+            h.put(S1, &[start(1, "/A", "main"), user(2, "u1"), u]);
+            let scan = h.fresh();
+            let s = only(&scan);
+            (
+                scan.diag.skipped.malformed,
+                scan.diag.records,
+                s.message_count,
+                s.ended_at,
+            )
+        };
+        let at = |s: &str| s.parse::<Timestamp>().unwrap();
+        let read = at("2026-10-07T18:04:00Z");
+        assert_eq!(
+            run("2026-10-07T18:04:00.123Z"),
+            (0, 3, 2, at("2026-10-07T18:04:00.123Z"))
+        );
+        assert_eq!(run("2026-10-07t18:04:00.123z").0, 0);
+        assert_eq!(run("2026-10-07T23:34:00+05:30"), (0, 3, 2, read));
+        assert_eq!(run("2026-10-07T13:04:00-05:00"), (0, 3, 2, read));
+        for bad in [
+            "2026-10-07T18:04Z",
+            "20261007T180400Z",
+            "2026-10-07T18:04:00Z[UTC]",
+            "2026-10-07T18:04:00",
+            "2026-10-07T18:04:00.Z",
+            "2026-10-07T18:04:00+0530",
+            "2026-10-07 18:04:00Z",
+            "2026-10-07T18:04:00Z ",
+            "2026-10-07T25:04:00Z",
+        ] {
+            assert_eq!(run(bad), (1, 2, 1, ts(2)), "{bad}");
+        }
+    }
+
+    /// P2-21: only a non-empty string `agentId` marks sub-agent work.
+    #[test]
+    fn only_a_non_empty_string_agent_id_marks_a_sub_agent() {
+        let count = |id: Value| {
+            let mut u = user(3, "u2");
+            u["agentId"] = id;
+            let h = Home::new();
+            h.put(S1, &[start(1, "/A", "main"), user(2, "u1"), u]);
+            only(&h.fresh()).message_count
+        };
+        for human in [json!(""), json!(null), json!(7)] {
+            assert_eq!(count(human.clone()), 2, "{human}");
+        }
+        assert_eq!(count(json!("a1")), 1);
     }
 
     #[test]

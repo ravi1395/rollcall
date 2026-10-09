@@ -283,7 +283,6 @@ fn breaker_copilot_resolve_refuses_a_different_file() {
 /// §5.3 "a string that is not RFC 3339 → malformed". `2026-10-07T18:04Z` (no seconds) is not
 /// RFC 3339; the reader uses the shared timestamp parser, which may accept it.
 #[test]
-#[ignore = "AMBIGUOUS (reported to orchestrator): jiff accepts 2026-10-07T18:04Z"]
 fn breaker_copilot_ambiguous_non_rfc3339_timestamp_is_malformed() {
     let mut accepted = Vec::new();
     for bad in [
@@ -304,7 +303,6 @@ fn breaker_copilot_ambiguous_non_rfc3339_timestamp_is_malformed() {
 
 /// §5.3 "no envelope agentId": is `"agentId": ""` an agent line? The reader says yes.
 #[test]
-#[ignore = "AMBIGUOUS (reported to orchestrator): agentId \"\" is treated as an agent"]
 fn breaker_copilot_ambiguous_empty_agent_id_is_not_an_agent() {
     let mut u = user(2, "hi");
     u["agentId"] = json!("");
