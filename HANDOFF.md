@@ -1,77 +1,46 @@
-# HANDOFF — 2026-10-08 impl/copilot (~/Projects/rollcall), end of session 15 (spec stage done)
+# HANDOFF — 2026-10-09 impl/copilot (~/Projects/rollcall), end of session 16 (implementation done)
 
-**Status: ACTIVE.** Supersedes session 14 (byte copy: `.handoffs/20261007-231419-superseded-HANDOFF.md`; v1 author decisions live in `.handoffs/20261006-235942-superseded-HANDOFF.md`).
+**Status: ACTIVE.** Supersedes session 15 (byte copy: `.handoffs/20261009-120750-consumed-HANDOFF.md`; Copilot probe results, step 1b, live there).
 
-**Next session: run the whole remaining workflow (author, 2026-10-08: "approved, handoff the execution of the whole workflow to the next session please").** Spec rev 17 is approved at `88a464a`; run steps 4 and 5 below end to end without stopping for a new go-ahead, except where step 5 says to ask (push) or a stage stops on its own (blocked phase, AMBIGUOUS breaker item, dirty tree).
-
-1. **Author answers recorded** (session 15 interview, 2026-10-07): Q1–Q7 and R1 are filled in the section `## Author answers 2026-10-07 (Copilot plan)` at the bottom, committed. The workflow preflight parses that exact heading; it also stops on a dirty tree (outside `.claude/` and `graphify-out/`). Q1=(a) means P4 is not run; Q6 means P5 waits for the author's throwaway Copilot session.
-1b. **Copilot CLI installed** (author, 2026-10-07): Homebrew cask `copilot-cli` → `/opt/homebrew/bin/copilot`, `GitHub Copilot CLI 1.0.93.` (Session 15 trap: the Homebrew *formula* `copilot` is AWS Copilot, 1.34.1, the same binary name; it had taken the symlink, so it was uninstalled and the cask reinstalled. Check with `copilot --version`.) As of session 15 `~/.copilot` still has no `session-state/` (`config.json ide logs mcp-config.json`), so no real session exists yet. The research's fixture shapes come from a 1.0.68 capture; 1.0.93 is close, but expect some drift. Key-set probe (re-run it after any Copilot upgrade) so spec rev 17 states confirmed shapes instead of *(assumption)*. It prints key names and event types only, never values or prompt text:
-   ```bash
-   for f in ~/.copilot/session-state/*/events.jsonl; do jq -cR 'fromjson? | [.type, (if (.data|type)=="object" then (.data|keys) else (.data|type) end)]' "$f"; done | sort | uniq -c
-   for f in ~/.copilot/session-state/*/events.jsonl; do jq -cR 'fromjson? | keys' "$f"; done | sort | uniq -c
-   ls ~/.copilot/session-state/*/ | sort | uniq -c
-   ```
-   Record the output in this handoff and pass it to the spec stage (it covers research R§9 unknowns 1, 2, 5 and 6). P5 still runs after implementation for the `rollcall doctor` counts.
-   **Probe run, session 15** (2 real sessions, GitHub Copilot CLI 1.0.93; types, key names and non-prompt enum values only):
-   - Store: `session-state/<uuid>/` holds `events.jsonl`, `workspace.yaml`, `checkpoints/`, `files/`, `research/`, `rewind-file-snapshots/`. Dir name == `session.start.data.sessionId`. No flat `*.jsonl`, no `history-session-state/`. A hidden sibling dir `.session-operation-locks/` holds `<uuid>.lock` files (not `inuse.<pid>.lock` inside the session dir, as the research had it). **Discovery must skip dot-dirs without counting `non_uuid`**, or every user gets a permanent `non_uuid: 1`.
-   - Lines: 22 per file, 0 malformed, last byte `\n`. Envelope keys always `data,id,parentId,timestamp,type`; `timestamp` is an RFC 3339 UTC string with ms (`9999-99-99T99:99:99.999Z`). No `agentId`/`ephemeral` seen (no sub-agent ran).
-   - `session.start.data`: `alreadyInUse,context,contextTier,copilotVersion,producer,remoteSteerable,sessionId,startTime,version` (`version` 1, `producer` "copilot-agent", `copilotVersion` "1.0.93"); `context` = `branch,cwd,gitRoot` (branch a string).
-   - `user.message.data`: `content` (string), `delivery` ("idle"), `interactionId,messageId,parentAgentTaskId,supportedNativeDocumentMimeTypes,transformedContent,turnId`. **`parentAgentTaskId` is a non-empty 36-char id on a real human prompt: it is not a sub-agent marker.** Q4 exclusion keys on the envelope `agentId` only. No `isAutopilotContinuation` key seen (no autopilot ran).
-   - Other types seen: `assistant.message/turn_start/turn_end`, `model.*` (8 kinds), `session.error` (`errorType` "mcp"), `session.info` (`infoType` "authentication"/"model"), `session.model_change`, `session.shutdown` (`shutdownType` "routine"), `session.usage_checkpoint`, `system.message`. `model.*` and `session.usage_checkpoint` are not in the plan's known-type list; they would count `unknown_type` on every session, so the spec should add them.
-   - `workspace.yaml` top-level keys: `id cwd git_root branch client_name name user_named summary_count fork_count created_at updated_at remote_steerable mc_task_id mc_session_id mc_last_event_id` (Q1=(a), so unused).
-   **Probe re-run, session 15, after the author resumed a session and used `/cd`** (3 sessions: 22, 29 and 3 lines; 0 malformed; all end in `\n`):
-   - **Resume appends to the same `events.jsonl`:** `session.shutdown` (line 22) → `session.resume` (23) → `session.context_changed` ×2 (26, 27) → `session.shutdown` (29). One log can hold several `shutdown`s; `ended_at` = max `timestamp` still holds. `session.resume.data` = `alreadyInUse,context,contextTier,eventCount,eventsFileSizeBytes,reasoningEffort,resumeTime,selectedModel,sessionLimits`; its `context` = `branch,cwd,gitRoot`.
-   - **`/cd` pending/settled pair confirmed:** `session.context_changed{cwd, pendingGitContext:true}` (no branch key), then `session.context_changed{branch,cwd,gitRoot}` (branch a string), both with a cwd different from the start. No `ephemeral` key on either.
-   - **Zero-prompt session:** the 3-line session has `session.start` and `session.model_change` but no `user.message`. The spec must say whether a session with no human prompt is listed (follow the existing Claude/Codex §5.0 behaviour).
-   - Locks: `.session-operation-locks/` holds 3 `<uuid>.lock` files, one per session, including the shut-down ones. Lock presence is not liveness (Q2 is out of scope anyway). No `inuse.*` files anywhere.
-   - **Still *(assumption)*:** sub-agent envelope `agentId`, `isAutopilotContinuation`, rewind truncation.
-   - **Exact on-disk `.type` strings** (session 16 re-check, type names only): `"session.context_changed"` ×2, `"session.resume"` ×1, `"session.shutdown"` ×3. The event name `session.context_changed` (with the `session.` prefix) is confirmed, not an assumption; earlier shorthand in this file wrote it without the prefix.
-2. ~~Spec stage~~ **done** (see Done). The workflow now also has `{stage: "spec-review", since: "<commit before the draft>"}` to re-review a committed draft.
-3. ~~Author approval of spec rev 17~~ **approved 2026-10-08** (verbatim at the bottom); final text `88a464a`, last gate `wf_c7508f2e-957` passed S1–S6 on round 1.
-   Optional wording notes left by the last gate (not acceptance failures; fix only if the author wants): §5.3 says the open "refuses" a FIFO (it is the open + fstat in `jsonl.rs:52-63`); "not RFC 3339" vs the Claude reader's `s.parse()` may differ on edge strings; ordering of non-object `data` vs a bad timestamp on a known-type line is unstated; the Status line and §5.3 intro credit only the 2026-10-07 answers; spec line ~638 (README MCP registration) still names only Claude/Codex; ACCEPTANCE sharpens the plan's criteria rather than copying them verbatim.
-4. **Run first:** check `git branch --show-current` = `impl/copilot` and `git status --short` shows only `?? graphify-out/`, then run workflow `rollcall-copilot` (`.claude/workflows/rollcall-copilot.js`) with `args: {stage: "implement", specApproved: true}` (optional `items: ["P1", ...]`). Per phase, serially: tiered implementer tests-first → full gate → commit → Opus `breaker` (if `Has logic: yes`) → guard keeps test code only → tiered fixes → Opus `skeptical-reviewer` (≤ 3 rounds) → next phase; final Opus skeptic over the range. Stops at the first phase not accepted. P4 is not in ACCEPTANCE.md (Q1=a). If it stops: read the returned `results[].reason` and the run's `journal.jsonl`, fix the cause (or bring a real decision to the author), then resume with `Workflow({scriptPath, resumeFromRunId, args})` or re-run with `items: ["<remaining phase>", …]`. If a commit agent refuses or leaves the tree dirty, commit the step's files by explicit path from the main loop (as `aa13a5b` did).
-5. Main loop afterwards: audit `git log`/`git status`; P5 real-data check on the author's 3 real sessions (`COPILOT_HOME` = real store read-only, scratch cache; counts only, never prompt text), including `skipped.unknown_type == 0` and `skipped.malformed == 0` for copilot, the §12.2 manual smoke `rollcall resume` on one real Copilot session (Q-g: kept; the author runs the resumed `copilot` interactively), and that the `/cd` session's cwd is the post-`/cd` dir (compare paths by equality, print only true/false); update this handoff; answer AMBIGUOUS breaker items with the author; **ask before pushing** `impl/copilot`.
+## Next step
+1. **Author:** §12.2 manual smoke (Q-g, non-gating): in zsh, `eval "$(~/Projects/rollcall/target/debug/rollcall init zsh)"`, then `rc <dir holding the /cd session's repo>`, select the copilot row, press `R`; `copilot` should resume that session in its post-`/cd` cwd. Not run by Claude (interactive).
+2. **Author:** approve `git push -u origin impl/copilot` (branch has no upstream; never bare `git push`), then open a PR to `main`.
+3. Optional (skeptic notes, not acceptance failures): re-add a one-line `:60 → :59` pin to `copilot::tests::the_envelope_timestamp_is_strict_rfc_3339` (the ignored probe was deleted per answer (l), so a jiff bump that stops clamping has no test); `copilot.rs:299-302` counts a log that turned into a FIFO/symlink as `vanished` while still adding to `files` (same as `claude.rs`).
 
 ## Done (verified)
-- **Branch `impl/copilot` created** from `origin/main` `474cf23` (`git fetch` confirmed it is current) with `git cherry-pick origin/main..impl/v0` → `818ddef e99869b 3203a8e b8810bb 22bff5d` (the 5 session 13–14 docs commits, clean picks). **Upstream unset** (`switch -c … origin/main` had set it to track `origin/main`, so a bare `git push` would have targeted main); `git rev-parse impl/copilot@{upstream}` → `fatal: no upstream configured`. Push later with `git push -u origin impl/copilot`.
-- **Workflow tiers** (author request 2026-10-07, committed with this handoff): `TIER = { P1: haiku/xhigh, P2: sonnet/high, P3: sonnet/high, P4: sonnet/high }` drives the implement agent and every fix (gate, breaker, review). A Haiku phase escalates to Sonnet high from fix round 2. Breaker and skeptic stay Opus; spec drafting stays Opus; mechanical agents (head, gate, commit, guard, answers/criteria loaders) stay Sonnet low. Evidence: wrapped `node --check` → exit 0; stubbed-hook run of `{stage:"implement", items:["P1"]}` reaches `implement:P1` as `haiku/xhigh` (the same run on the first draft failed `Cannot access 'impl' before initialization`: a local `const impl` shadowed the helper, so it is now `implOpts`); tier assertion script (`implOpts('P1')`=haiku/xhigh, `implOpts('P1',2)`=sonnet/high, `implOpts('P2')`/`implOpts('P4',3)`/unknown id = sonnet/high) → `tier ok`.
-- **Spec stage run** (workflow `rollcall-copilot` `{stage:"spec"}`, run `wf_d835ff17-520`, 8 agents, ~32 min): Opus draft → skeptic r1 → revise → skeptic r2 (S1 unmet, S2 unverified) → revise → commit `cad3ec1`. **Flaw found:** that loop committed a revision no reviewer had seen. S2 was caused by the handoff's shorthand `context_changed`; the logs record `"session.context_changed"` (re-checked, type names only).
-- **Workflow fixed** (`485dfe6`): the spec review loop always ends on a verdict (≤ 3 rounds) and returns `review_passed`; new stage `spec-review` (`args.since` required, validated as a sha). Evidence: stubbed-hook runs of spec (never-pass → `review:spec:3 > commit`; pass r2 → `review:spec:2 > commit`), spec-review (pass r1; never-pass ends `rereview:spec:3 > commit`; missing `since` → error), and implement (`implement:P1:haiku/xhigh`) all as expected.
-- **Spec re-review** (`{stage:"spec-review", since:"00cf969"}`, run `wf_599a739b-dc7`, 8 agents, ~23 min): rereview r1 → revise → r2 → revise → **r3 pass, S1–S6 all met** → commit `f0c7ddb`. Diff since `00cf969`: `CLAUDE.md` 1 line, `ACCEPTANCE.md` +79 (new), spec +86/−21. The skeptic's open items are under Next step 3.
-- **Author decisions on the skeptic's open items** (interview 2026-10-08) applied in `15b8432`; gate `wf_fd3810aa-956` passed r2, but its commit agent **refused to commit** ("the computed task text carries no user authority"), leaving the reviewed fixes dirty; committed by the main loop as `aa13a5b`. Tightenings from the gate's optional notes, all under the author's "like Claude" decisions (type checked before timestamp, bad-timestamp line not a record, doctor `jsonl` whenever a log is found; `claude.rs:113-117, :308, :343-349, :439`): `296d68f`, gate `wf_9bfc4efa-4e9` passed r1. P2-19/P2-20 wording disambiguated: `88a464a`, gate `wf_c7508f2e-957` passed r1 (S1–S6 met, nothing to commit).
-- **Workflow commit guard** (`296d68f`): the commit prompt states the author authorized local commits on `impl/copilot` (never push); both spec stages re-check `git status` after committing and return `stopped: "commit step left the tree dirty"` if not clean. Evidence: stubbed run with a dirty post-commit tree → `stopped`; clean → `passed true`; `node --check` on the wrapped script → ok.
-- Carried: PR https://github.com/ravi1395/rollcall/pull/6 merged (`4f102a7`); gate on `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (session 13).
+- **Implement stage** (workflow `rollcall-copilot` `{stage:"implement", specApproved:true}`, run `wf_b1032c95-609`, 32 agents, ~113 min): P1 accepted (r2), P2 accepted (r1), P3 accepted (r1). Commits `c760836 762c9fe 4edc032 93d58e4 2966977 33a669e 0fcc758`. Its final skeptic failed only P1-12/P3-11 (6 ignored vs 4: two AMBIGUOUS breaker tests left `#[ignore]`d).
+- **Author answers (h)–(l)** (below) applied: `32ab23a` (strict RFC 3339 Copilot timestamps, non-empty-string `agentId`, store-root tests for all three sources; spec §5.0/§5.3 + Status, ACCEPTANCE P2-19(e)/P2-21/P3-12). Breaker r3 (Fable) on `32ab23a`: 3 BROKEN (fraction > 9 digits rejected; offset hour 24/25 accepted) fixed in `df310da`, tests kept in `crates/rollcall-sessions/tests/breaker_copilot_r3.rs`.
+- **Final gate (Fable skeptic) PASS** on `d943c95..df310da`: P1-1..12, P2-1..21, P3-1..12 all met; mutation probes on the offset-hour bound, fraction cut and `has_agent` each turned a named test red; Cargo files unchanged; only R1-approved structural edits.
+- **R2 gate** (main loop, `df310da`): `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked` → exit 0, 1077 passed / 0 failed / 4 ignored.
+- **P5 real data** (main loop; real `~/.copilot` read-only via `COPILOT_HOME`, scratch HOME/XDG/CLAUDE/CODEX dirs, counts only, no prompt text): copilot doctor `{mode jsonl, files 3, records 54, sessions 3, malformed 0, unknown_type 0, oversize 0, non_uuid 0, excluded_children 0}` (records = 22+29+3 lines), identical after `df310da`; `/cd` session via `status --json` on its git root: found 1, cwd == post-`/cd` settled cwd **true**, branch equal **true**, resume plan present, `title_kind` prompt, `message_count` 1.
 
 ## In progress
-- Nothing half-edited. `git status --short`: `?? graphify-out/` only (never commit `graphify-out/`). `impl/v0` untouched (local). `impl/copilot` is local and unpushed, with no upstream.
+- Nothing. `git status --short` after this handoff's commit: `?? graphify-out/` only (never commit it).
 
 ## Decisions + why
-- **Tier by complexity, fixed in the script, not in ACCEPTANCE.md:** P1 is enum arms + schema enums (plan tags them mech) → Haiku xhigh. P2 (events.jsonl parser, incremental reads), P3 (two source lists, env, test sandbox; a miss reads the real `~/.copilot`) and P4 (resolve-time `TextRef`, hand-rolled reader) → Sonnet high. Escalation covers a Haiku phase that stalls.
-- **Edited `rollcall-copilot.js`, no new workflow:** it already had the Opus breaker/skeptic loop, preflight and serial phases; only the implementer model changed.
-- **Spec reviewed against the probe, not just the research:** where they disagree the probe wins (real 1.0.93 data); *assumption* marks remain only on `agentId`, `isAutopilotContinuation`, rewind, sub-agent placement and planner counting choices.
-- **Optional carry-overs left out of the workflow:** all are non-blocking skeptic observations with no criteria; listed under Not started.
-- Earlier (session 14): Copilot CLI only; reuse `Backing::LogFile`/`TextRef::LogLine`/`SourceMode::Jsonl`; phase cut keeps each merge green.
+- Fixes after the workflow ran in the main loop (one Sonnet worker, Fable breaker + skeptic), not a workflow resume: the implement stage had finished and would only replay cached agents.
+- Answer (c) (timestamp "like Claude") is superseded by (h) for strictness; the Claude reader still uses jiff `parse`.
+- jiff 0.2.37 has no strict RFC 3339 parser, so `copilot.rs` `is_rfc3339` checks the shape and `nanos` cuts fraction digits past the ninth before jiff parses.
+- P3-12(d) (case-differing ids) skips on case-insensitive APFS; verified twice on a scratch case-sensitive APFS image (3 passed each time). Linux still never run.
 
 ## Test state
-- No code changed since `origin/main` `474cf23` → 973 passed / 0 failed / 4 ignored (ignored by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`). Gate not re-run this session (docs/workflow only).
-- CI: billing-blocked (every job 0 steps). Linux untested.
+- `df310da` → 1077 passed / 0 failed / 4 ignored (by design: `materialize_perf`, `materialize_demo`, `fs.rs::modes_child`, `fs.rs::lock_child`).
+- CI billing-blocked (every job 0 steps).
 
 ## Gotchas
-- **Haiku `xhigh` effort is new for this repo's workflows:** if the runtime rejects it for Haiku, change `HAIKU` to `effort: 'high'` (one line).
-- Real Copilot sessions exist (3, CLI 1.0.93; probed in step 1b); only `agentId`, `isAutopilotContinuation`, rewind and sub-agent placement stay *(assumption)*. Never print prompt text from `~/.copilot`; never read `~/.config/github-copilot/apps.json` (tokens).
-- `"copilot"` is 7 chars (one more than `"claude"`): P1 checks TUI/plain column budgets.
-- Two source lists must stay in sync: `scan.rs` `scan_sources` and the `output.rs` resolver list.
-- Test sandbox `crates/rollcall-cli/tests/it/support.rs` must set `COPILOT_HOME` in P3.
-- Local `main` is stale (`f7ada95`); always use `origin/main`.
-- `ubuntu-latest` → Ubuntu 26 from 2026-10-19; consider pinning `ubuntu-24.04` (author decision, not asked).
-- Carried: CI annotations via `gh api repos/ravi1395/rollcall/check-runs/<job id>/annotations`; scratch `HOME` for manual runs (macOS cache ignores `XDG_CACHE_HOME`); `git config handoff.auto false`; stage explicit paths.
+- `impl/copilot` is local with **no upstream**; push with `-u origin impl/copilot`.
+- Local `main` is stale (`f7ada95`); use `origin/main`.
+- Homebrew formula `copilot` is AWS Copilot (same binary name); GitHub Copilot CLI is the cask `copilot-cli`.
+- Never print prompt text from `~/.copilot`; never read `~/.config/github-copilot/apps.json` (tokens).
+- The bash safety check blocks `rm -rf "$VAR/home"`-style paths; use fresh scratch dirs.
+- Haiku `xhigh` worked for P1 in the workflow.
 
 ## Suggested skills
-- `brief`, then the author Q&A; `gate-record-audit` before approving spec rev 17; `verify-ledger` for P5; `ci-divergence-triage` once CI runs.
+- `finishing-a-development-branch` / PR flow after push approval; `verify-ledger` for the §12.2 smoke; `ci-divergence-triage` once CI runs.
 
 ## Not started
-- Copilot plan P0–P5 (all of it).
-- Author actions: run one throwaway Copilot CLI session (GitHub Copilot CLI 1.0.93 installed; ideally in a scratch git repo, `cd` to a second dir mid-session, then `copilot --resume` it once so `session.resume` and `session.context_changed` get exercised; Q6, unblocks the key-set probe and P5); fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release.
+- Copilot plan P4 (not run, Q1=(a)).
+- Author actions: fix CI billing and re-run CI on `main`; create `ravi1395/homebrew-rollcall`, add `HOMEBREW_TAP_TOKEN`, tag a release; consider pinning `ubuntu-24.04` (`ubuntu-latest` → 26 from 2026-10-19).
 - Optional carry-overs (non-blocking): `lock_when_free` fork-race window; full-F MCP reply has 0 `recent_sessions`; `scripts/probe-gix-p15b/sample.py` prints `first>320MiB`; non-UTF-8 missing-worktree lock key collides with its twin; macOS cache ignores `XDG_CACHE_HOME`.
 
 ## Author answers 2026-10-07 (Copilot plan)
@@ -87,9 +56,15 @@
 - Spec rev 17 review decisions (author interview, 2026-10-08; applied in the commit after `fc7c478`):
   - (a) Sub-agent own `session-state/<uuid>/`: "Wait for real data" — stays *assumption*, no rule until P5 or a later probe shows one.
   - (b) Detached HEAD: "Same as Claude" — branch `"HEAD"` → `null` (§5.1); new criterion P2-18.
-  - (c) Bad envelope `timestamp`: "Malformed, like Claude" — non-string or non-RFC-3339 → malformed; absent/`null` → line used without a timestamp (`claude.rs:114-117`); new criterion P2-19.
+  - (c) Bad envelope `timestamp`: "Malformed, like Claude" — non-string or non-RFC-3339 → malformed; absent/`null` → line used without a timestamp (`claude.rs:114-117`); new criterion P2-19. *Strictness superseded by (h) 2026-10-09: Copilot timestamps are strict RFC 3339, the Claude reader keeps jiff `parse`.*
   - (d) `files`/`records`: "Define inline, Claude semantics" — §5.3 doctor bullet; new criterion P2-20.
   - (e) P3-3: "Integration test only" — unit-test clause dropped (R3 forbids `set_var`). Note: no existing test covers `CODEX_HOME=""`; P3-3 is the first such test.
   - (f) Cosmetic: "CLAUDE.md line 3" only — now "Claude/Codex/Copilot sessions". Not taken: a §12.1 Copilot gating item; consistent `agentId` (assumption) tags.
   - (g) §12.2 manual `rollcall resume` smoke on a real Copilot session: "Keep it".
 - Spec rev 17 approval (2026-10-08, verbatim): "approved, handoff the execution of the whole workflow to the next session please" — approves the spec and ACCEPTANCE.md at `88a464a`; the implement stage may run with `specApproved: true`.
+- Implement-stage AMBIGUOUS answers (author interview, 2026-10-09; run `wf_b1032c95-609`):
+  - (h) Envelope `timestamp` edge strings: "Strict RFC 3339" — Copilot only (Claude stays on jiff `parse`): `2026-10-07T18:04Z`, `20261007T180400Z`, `2026-10-07T18:04:00Z[UTC]` are malformed; un-ignore `breaker_copilot_ambiguous_non_rfc3339_timestamp_is_malformed`.
+  - (i) Envelope `agentId: ""`: "Non-empty only" — only a non-empty string marks sub-agent work; `""` and `null` are human; un-ignore `breaker_copilot_ambiguous_empty_agent_id_is_not_an_agent`.
+  - (j) Store-root edges, all three sources: "Specify + test now", each as current behaviour: UUID dirs differing only by case → two ids (id = dir name as written); relative `COPILOT_HOME`/`CODEX_HOME`/`CLAUDE_CONFIG_DIR` → resolved against the process cwd; a symlinked store root (env dir or its `session-state`/`sessions`/`projects` dir) is followed, entries inside stay never-followed.
+  - (l) Breaker r3 on `32ab23a` (author 2026-10-09): second `60` → "Accept, clamp" (read as `:59`; the ignored test was deleted); whitespace-only `agentId` → "Keep literal" (sub-agent work). BROKEN items fixed in code: fraction digits past the ninth are cut (were malformed), offset hour > 23 is malformed (was accepted).
+  - (k) P1 breaker item (cached Copilot row before P3): resolved by the P1 review fix `4edc032` (fallback lookup); P3 restored the hard `expect` once the list held three sources. Recorded, no action.
