@@ -150,9 +150,26 @@ fn is_rfc3339(s: &str) -> bool {
     match b.get(i) {
         Some(b'Z' | b'z') => i + 1 == b.len(),
         Some(b'+' | b'-') => {
-            i + 6 == b.len() && digits(i + 1..i + 3) && at(i + 3, b':') && digits(i + 4..i + 6)
+            i + 6 == b.len()
+                && digits(i + 1..i + 3)
+                && b[i + 1..i + 3] <= b"23"[..]
+                && at(i + 3, b':')
+                && digits(i + 4..i + 6)
         }
         _ => false,
+    }
+}
+
+/// RFC 3339 allows any fraction length; jiff stops at nanoseconds, so digits past the ninth are
+/// cut. Only called after `is_rfc3339`, so the string is ASCII and byte 19 starts any fraction.
+fn nanos(s: &str) -> std::borrow::Cow<'_, str> {
+    let frac = s
+        .get(20..)
+        .map_or(0, |r| r.bytes().take_while(u8::is_ascii_digit).count());
+    if s.as_bytes().get(19) == Some(&b'.') && frac > 9 {
+        format!("{}{}", &s[..29], &s[20 + frac..]).into()
+    } else {
+        s.into()
     }
 }
 
@@ -172,7 +189,9 @@ fn parse_record(bytes: &[u8]) -> Result<Record, Skip> {
     }
     let timestamp = match value.get("timestamp") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) if is_rfc3339(s) => Some(s.parse().map_err(|_| Skip::Malformed)?),
+        Some(Value::String(s)) if is_rfc3339(s) => {
+            Some(nanos(s).parse().map_err(|_| Skip::Malformed)?)
+        }
         Some(Value::String(_)) => return Err(Skip::Malformed),
         Some(_) => return Err(Skip::Malformed),
     };
