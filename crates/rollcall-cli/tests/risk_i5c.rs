@@ -56,7 +56,9 @@ impl Sb {
         };
         Sb {
             home: sub("home"),
-            root: sub("home/work"),
+            // Longer than the 40-column cap on its own, so `{r3}` is over-cap on every OS (a short
+            // Linux `/tmp/.tmpXXXX` base would otherwise widen the name column).
+            root: sub("home/work-dir-named-to-exceed-the-forty-column-cap"),
             _dir: dir,
             base,
         }

@@ -777,7 +777,12 @@ pub struct World {
 impl World {
     /// An empty world: directories and tokens only; `build_root` fills it.
     fn empty(which: Which) -> World {
-        let tmp = tempfile::tempdir().expect("create temp dir");
+        // The prefix alone is past the 40-column plain-status cap (§8.2), so every sandbox path is
+        // an over-cap cell on every OS, not only under macOS's long `/var/folders/...` TMPDIR.
+        let tmp = tempfile::Builder::new()
+            .prefix(".tmp-rollcall-world-padded-past-the-forty-column-cap-")
+            .tempdir()
+            .expect("create temp dir");
         let base = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
         let mkdir = |name: &str| {
             let p = base.join(name);
