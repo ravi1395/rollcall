@@ -477,7 +477,7 @@ thread_local! {
     static REBUILDS: Cell<u32> = const { Cell::new(0) };
 }
 
-fn paths() -> MutexGuard<'static, PathIndex> {
+pub(crate) fn paths() -> MutexGuard<'static, PathIndex> {
     // A poisoned cache is still a valid hint map.
     PATHS
         .get_or_init(Mutex::default)
@@ -486,7 +486,7 @@ fn paths() -> MutexGuard<'static, PathIndex> {
 }
 
 /// Replaces everything indexed for `projects_dir`, dropping entries for files that are gone.
-fn store_index(projects_dir: &Path, found: HashMap<(u64, u64), PathBuf>) {
+pub(crate) fn store_index(projects_dir: &Path, found: HashMap<(u64, u64), PathBuf>) {
     let mut index = paths();
     index.retain(|(dir, _, _), _| dir != projects_dir);
     index.extend(
@@ -496,7 +496,7 @@ fn store_index(projects_dir: &Path, found: HashMap<(u64, u64), PathBuf>) {
     );
 }
 
-fn is_file_at(path: &Path, dev: u64, inode: u64) -> bool {
+pub(crate) fn is_file_at(path: &Path, dev: u64, inode: u64) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.dev() == dev && m.ino() == inode)
 }
 

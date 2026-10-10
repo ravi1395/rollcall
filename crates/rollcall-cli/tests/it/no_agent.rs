@@ -53,7 +53,14 @@ fn no_agent_dirs_leave_every_session_null() {
             )
         })
         .collect();
-    assert_eq!(modes, [("claude", "absent"), ("codex", "absent")]);
+    assert_eq!(
+        modes,
+        [
+            ("claude", "absent"),
+            ("codex", "absent"),
+            ("copilot", "absent")
+        ]
+    );
 }
 
 #[test]

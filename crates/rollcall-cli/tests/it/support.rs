@@ -31,6 +31,8 @@ pub struct Manifest {
     pub claude: Vec<Claude>,
     pub codex_thread: Vec<CodexThread>,
     pub codex_rollout: Vec<CodexRollout>,
+    #[serde(default)]
+    pub copilot: Vec<CopilotSession>,
     pub big_log: Vec<BigLog>,
     pub expect_counts: ExpectCounts,
     pub matching: Matching,
@@ -346,6 +348,17 @@ pub struct CodexRollout {
     pub covers: Vec<String>,
 }
 
+/// One Copilot CLI session: `<copilot_home>/session-state/<id>/events.jsonl`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopilotSession {
+    pub id: String,
+    #[serde(default)]
+    pub lines: Vec<String>,
+    pub expect: Expect,
+    pub worktree: WorktreeRef,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BigLog {
@@ -589,6 +602,7 @@ pub struct Sandbox {
     pub xdg_state: PathBuf,
     pub claude_config_dir: PathBuf,
     pub codex_home: PathBuf,
+    pub copilot_home: PathBuf,
 }
 
 impl Sandbox {
@@ -607,6 +621,7 @@ impl Sandbox {
             xdg_state: sub("xdg/state"),
             claude_config_dir: sub("claude"),
             codex_home: sub("codex"),
+            copilot_home: sub("copilot"),
         }
     }
 
@@ -628,6 +643,7 @@ impl Sandbox {
             .env("XDG_STATE_HOME", &self.xdg_state)
             .env("CLAUDE_CONFIG_DIR", &self.claude_config_dir)
             .env("CODEX_HOME", &self.codex_home)
+            .env("COPILOT_HOME", &self.copilot_home)
             .env("ROLLCALL_NOW", &manifest().meta.now)
             .env("PATH", path);
         cmd
@@ -676,7 +692,7 @@ pub fn run_rollcall_with(
 
 // ------------------------------------------------------------ path tokens
 
-/// Path tokens (`$F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS`, builders add `$DEMO`) and `$FIFO:<name>`.
+/// Path tokens (`$F $EXT $H $HOME $CODEX_HOME $COPILOT_HOME $CLAUDE_PROJECTS`, builders add `$DEMO`) and `$FIFO:<name>`.
 pub struct Tokens {
     map: Vec<(String, PathBuf)>,
     fifo_dir: PathBuf,
@@ -776,6 +792,7 @@ impl World {
         tokens.add("$EXT", ext.clone());
         tokens.add("$HOME", sb.home.clone());
         tokens.add("$CODEX_HOME", sb.codex_home.clone());
+        tokens.add("$COPILOT_HOME", sb.copilot_home.clone());
         tokens.add("$CLAUDE_PROJECTS", sb.claude_projects());
         World {
             _tmp: tmp,

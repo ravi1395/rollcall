@@ -4,10 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use rollcall_core::{
+    Backing, Index, ScanResult, Session, SkippedCounts, SourceDiagnostics, SourceKind, SourceMode,
+    SourceScan, UnmatchedCounts, Uuid,
+};
+use rollcall_store::SqliteIndex;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::build_sessions::{CodexMode, build_corpora, build_mcp_200};
+use crate::build_sessions::{CodexMode, build_copilot, build_corpora, build_mcp_200};
 use crate::support::{
     Corpus, Run, Sandbox, Which, World, expected, fresh, git_path, lock_when_free, run_rollcall,
     spawn_watchdog, validate,
@@ -900,6 +905,124 @@ fn a_held_scan_lock_with_a_cache_answers_stale_within_the_budget() {
         &[tool(1, "where_was_i", json!({}))],
     );
     assert_eq!(doc(&free.replies[0])["stale"], false);
+}
+
+/// Re-commits the cached scan of `b.root` with one untitled Copilot session matched to `repo`.
+fn commit_copilot_session(b: &Bare, repo: &Path) {
+    const ID: &str = "0a1b2c3d-0000-4000-8000-0123456789ab";
+    let mut ix = SqliteIndex::open(&b.cache_dir()).expect("open the cache");
+    let repos = ix.repos_for_root(&b.root);
+    let diagnostics = ix
+        .last_diagnostics(&b.root)
+        .expect("the first scan left diagnostics");
+    let ts = "2026-09-29T10:00:00Z".parse().unwrap();
+    let id = Uuid::parse(ID).unwrap();
+    let session = Session {
+        source: SourceKind::Copilot,
+        id: id.clone(),
+        cwd: repo.to_path_buf(),
+        branch: Some("main".to_owned()),
+        started_at: ts,
+        ended_at: ts,
+        title: None,
+        last_prompt: None,
+        message_count: 0,
+        backing: Backing::LogFile {
+            dev: 1,
+            inode: 2,
+            path: b.root.join("events.jsonl"),
+        },
+    };
+    let scan = ScanResult {
+        scanned_at: diagnostics.scanned_at.unwrap(),
+        submodules: false,
+        partial: false,
+        repos,
+        sources: vec![SourceScan {
+            files: Vec::new(),
+            sessions: vec![session],
+            diag: SourceDiagnostics {
+                source: SourceKind::Copilot,
+                mode: SourceMode::Jsonl,
+                db_version: None,
+                files: 0,
+                records: 0,
+                skipped: SkippedCounts::default(),
+                sessions: 1,
+                excluded_children: 0,
+                vanished: 0,
+                matched: 1,
+                unmatched: UnmatchedCounts::default(),
+            },
+            notes: Vec::new(),
+        }],
+        matches: vec![(SourceKind::Copilot, id, Some(repo.to_path_buf()))],
+        diagnostics,
+    };
+    ix.commit_scan(&b.root, scan).unwrap();
+}
+
+/// P1 regression: a cached Copilot last session (here with a log that does not exist) is served,
+/// not a panic.
+#[test]
+fn a_cached_copilot_session_is_served_without_a_panic() {
+    let b = Bare::with_repos(&["app"]);
+    let seed = spawn_watchdog(b.sb.rollcall(&["scan", p(&b.root)], &[]), RUN_DEADLINE).unwrap();
+    assert_eq!(Run::from(seed).code, 0);
+    commit_copilot_session(&b, &b.root.join("app"));
+
+    let lock = lock_when_free(&b.cache_dir(), &b.root);
+    let held = serve(
+        &b.sb,
+        &["--root", p(&b.root)],
+        &[],
+        &[tool(1, "where_was_i", json!({}))],
+    );
+    drop(lock);
+    assert_eq!(held.run.code, 0, "stderr: {}", held.run.stderr);
+    let d = doc(&held.replies[0]);
+    valid("where_was_i", &d);
+    assert_eq!(d["recent_sessions"][0]["source"], "copilot", "{d}");
+}
+
+/// P3-6: the tool descriptions name GitHub Copilot CLI beside Claude Code and Codex, and a real Copilot log
+/// is served by `where_was_i` (its repo's last session and the recent sessions) in a schema-valid document.
+#[test]
+fn a_scanned_copilot_session_is_served_and_the_descriptions_name_copilot() {
+    let w = fresh(Which::F);
+    build_copilot(&w, &w.sb.copilot_home);
+    let served = serve(
+        &w.sb,
+        &["--root", p(&w.root)],
+        &[],
+        &[
+            request(1, "tools/list", json!({})),
+            tool(2, "where_was_i", json!({"repo": "merged"})),
+        ],
+    );
+    assert_eq!(served.run.code, 0, "stderr: {}", served.run.stderr);
+    let tools = served.replies[0]["result"]["tools"].as_array().unwrap();
+    let wwi = tools.iter().find(|t| t["name"] == "where_was_i").unwrap();
+    let description = wwi["description"].as_str().unwrap();
+    for agent in ["Claude Code", "Codex", "GitHub Copilot CLI"] {
+        assert!(description.contains(agent), "{agent}: {description}");
+    }
+
+    let d = doc(&served.replies[1]);
+    valid("where_was_i", &d);
+    let id = crate::support::manifest().copilot[0].id.as_str();
+    assert_eq!(d["recent_sessions"][0]["source"], "copilot", "{d}");
+    assert_eq!(d["recent_sessions"][0]["id"], id, "{d}");
+    let sessions: Vec<&Value> = d["repos"][0]["worktrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|wt| &wt["last_session"])
+        .filter(|s| !s.is_null())
+        .collect();
+    assert_eq!(sessions.len(), 1, "{d}");
+    assert_eq!(sessions[0]["source"], "copilot");
+    assert_eq!(sessions[0]["id"], id);
 }
 
 /// §10.2 MCP: both tools over the full F, schema-valid and within the cap. F has its own world (cache).

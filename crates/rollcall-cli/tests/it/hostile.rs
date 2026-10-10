@@ -17,13 +17,13 @@ const SCAN_RSS_LIMIT: u64 = 512_000_000;
 const SCAN_WATCHDOG: Duration = Duration::from_secs(180);
 const MARKER_PREFIX: &str = "marker-";
 /// Each fake binary writes `marker-path-<name>` under the scan root when something runs it.
-const FAKE_TOOLS: [&str; 4] = ["git", "git-lfs", "claude", "codex"];
+const FAKE_TOOLS: [&str; 5] = ["git", "git-lfs", "claude", "codex", "copilot"];
 const UNTRUSTED_GIT_DIR: &str = "untrusted git dir";
 const UNTRUSTED_WORKTREE: &str = "untrusted worktree path";
 const TREE_TOO_LARGE: &str = "git error: HEAD tree too large";
 
 /// The §10.2 global gitconfig (`filter.lfs.*`, `safe.directory=*`) in the world's sandbox `HOME`, and the fake
-/// `git`, `git-lfs`, `claude`, `codex` first on the returned `PATH`.
+/// `git`, `git-lfs`, `claude`, `codex`, `copilot` first on the returned `PATH`.
 fn arm(w: &World) -> String {
     let root = w.root.display();
     // Double-quoted: an unquoted `;` starts a comment in a gitconfig value. Git prefers `process` over

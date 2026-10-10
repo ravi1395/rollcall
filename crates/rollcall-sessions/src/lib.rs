@@ -5,6 +5,7 @@ use rollcall_core::{SourceKind, SourceScan, SourceState, TextRef};
 pub mod claude;
 pub mod codex_db;
 pub mod codex_rollout;
+pub mod copilot;
 pub mod jsonl;
 
 /// Bumped whenever extraction changes; a mismatch forces a full re-read (§6.3).

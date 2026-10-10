@@ -1,7 +1,7 @@
 //! §12.1 #11 (P39): shell safety and resume end-to-end. The `c` / `Y` fragments run under `sh -c`, the `rc`
 //! function runs in bash, zsh and fish, and `R` is driven through a real PTY with stub agents that record their
 //! argv and cwd. Every spawned process runs under a deadline with a scratch `HOME` and cache.
-use crate::build_sessions::{CodexMode, build_corpora};
+use crate::build_sessions::{CodexMode, build_copilot, build_corpora};
 use crate::support::{
     Corpus, RUN_DEADLINE, Which, World, fresh, git_path, require_tool, run_rollcall, spawn_watchdog,
 };
@@ -82,23 +82,37 @@ struct Rig {
 fn rig() -> &'static Rig {
     static RIG: OnceLock<Rig> = OnceLock::new();
     RIG.get_or_init(|| {
-        let w = fresh(Which::F);
-        build_corpora(&w, &[Corpus::Shell], CodexMode::Db);
-        let bin = w.base.join("bin");
-        let stubs = w.base.join("stubs");
-        for dir in [&bin, &stubs] {
-            std::fs::create_dir_all(dir).expect("create rig dir");
-        }
-        std::os::unix::fs::symlink(ROLLCALL_BIN, bin.join("rollcall")).expect("link rollcall");
-        for name in ["claude", "codex"] {
-            write_executable(&stubs.join(name), STUB);
-        }
-        write_executable(&stubs.join("mktemp"), MKTEMP_STUB);
-        let out = run_rollcall(&w, &["status", w.root.to_str().unwrap(), "--json"]);
-        let doc = serde_json::from_str(&out.stdout)
-            .unwrap_or_else(|e| panic!("status --json: {e}\n{}", out.stderr));
-        Rig { w, doc, bin, stubs }
+        make_rig(
+            |w| build_corpora(w, &[Corpus::Shell], CodexMode::Db),
+            &["claude", "codex"],
+        )
     })
+}
+
+/// An `F` world whose only agent data is the manifest's Copilot session (cwd `$F/merged`), with a recording
+/// `copilot` stub. Copilot sessions get their own rig so the `shell` corpus keeps its newest-session assertions.
+fn copilot_rig() -> &'static Rig {
+    static RIG: OnceLock<Rig> = OnceLock::new();
+    RIG.get_or_init(|| make_rig(|w| build_copilot(w, &w.sb.copilot_home), &["copilot"]))
+}
+
+fn make_rig(build: impl FnOnce(&World), agents: &[&str]) -> Rig {
+    let w = fresh(Which::F);
+    build(&w);
+    let bin = w.base.join("bin");
+    let stubs = w.base.join("stubs");
+    for dir in [&bin, &stubs] {
+        std::fs::create_dir_all(dir).expect("create rig dir");
+    }
+    std::os::unix::fs::symlink(ROLLCALL_BIN, bin.join("rollcall")).expect("link rollcall");
+    for name in agents {
+        write_executable(&stubs.join(name), STUB);
+    }
+    write_executable(&stubs.join("mktemp"), MKTEMP_STUB);
+    let out = run_rollcall(&w, &["status", w.root.to_str().unwrap(), "--json"]);
+    let doc = serde_json::from_str(&out.stdout)
+        .unwrap_or_else(|e| panic!("status --json: {e}\n{}", out.stderr));
+    Rig { w, doc, bin, stubs }
 }
 
 fn write_executable(path: &Path, script: &str) {
@@ -477,8 +491,13 @@ fn spawn_pty(cmd: Command) -> OsSession {
 /// Waits for the first frame, filters to the `shell` repo (the only one matching), and presses `R`: the
 /// cursor is then on the main worktree. Returns when the PTY child has exited.
 fn resume_main_worktree(p: &mut OsSession) {
+    resume_filtered(p, "/shell");
+}
+
+/// As above for the repo `filter` (`/name`) selects.
+fn resume_filtered(p: &mut OsSession, filter: &str) {
     p.expect("rollcall").expect("the TUI never drew");
-    p.send("/shell").expect("type the filter");
+    p.send(filter).expect("type the filter");
     p.send("\r").expect("end the filter");
     p.send("R").expect("press R");
     p.expect(Eof).expect("the process never exited after R");
@@ -551,6 +570,86 @@ fn tui_r_execs_the_absolute_stub_in_the_session_cwd_and_ignores_a_relative_path_
     assert_no_marker(r, scratch.path());
 }
 
+/// The repo filter that leaves only `merged`, whose main worktree holds the Copilot session.
+const COPILOT_FILTER: &str = "/merged";
+
+fn copilot_session() -> &'static crate::support::CopilotSession {
+    &crate::support::manifest().copilot[0]
+}
+
+fn assert_copilot_session_record(r: &Rig, scratch: &Path) {
+    assert_eq!(
+        read_record(scratch),
+        [
+            "copilot",
+            r.w.root.join("merged").to_str().unwrap(),
+            "--resume",
+            copilot_session().id.as_str()
+        ]
+    );
+}
+
+#[test]
+fn the_copilot_fixture_has_exactly_one_repo_matching_its_filter() {
+    let r = copilot_rig();
+    let mut model = r.model();
+    press(&mut model, '/');
+    for c in COPILOT_FILTER.chars().skip(1) {
+        press(&mut model, c);
+    }
+    let visible = rollcall_cli::tui::visible_repos(&model);
+    assert_eq!(
+        visible.iter().map(|v| &v.name).collect::<Vec<_>>(),
+        ["merged"]
+    );
+    let main = &visible[0].worktrees[0];
+    assert_eq!(Path::new(&main.path), r.w.root.join("merged"));
+    let session = main.last_session.as_ref().expect("a Copilot session");
+    assert_eq!(
+        (session.source, session.id.as_str()),
+        (
+            rollcall_core::SourceKind::Copilot,
+            copilot_session().id.as_str()
+        )
+    );
+}
+
+/// P3-5: `R` on a Copilot session with `ROLLCALL_RESUME_FILE` writes `<cwd>\0copilot\0<id>\0` and exits 10.
+#[test]
+fn tui_r_on_a_copilot_session_writes_the_resume_file_and_exits_10() {
+    let r = copilot_rig();
+    let scratch = r.w.scratch();
+    r.warm_cache(scratch.path());
+    // The `rc` function hands over a private file (mode 0600) it made with `mktemp`.
+    let file = scratch.path().join("resume-file");
+    std::fs::write(&file, b"").expect("create resume file");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let mut cmd = r.command(ROLLCALL_BIN, scratch.path());
+    cmd.arg(r.w.root.to_str().unwrap())
+        .current_dir(scratch.path())
+        .env("ROLLCALL_RESUME_FILE", &file);
+    let mut p = spawn_pty(cmd);
+    resume_filtered(&mut p, COPILOT_FILTER);
+    let status = format!("{:?}", p.get_process_mut().wait().expect("wait"));
+    assert!(
+        status.starts_with("Exited(") && status.ends_with(", 10)"),
+        "{status}"
+    );
+    let want = format!(
+        "{}\0copilot\0{}\0",
+        r.w.root.join("merged").display(),
+        copilot_session().id
+    );
+    assert_eq!(
+        std::fs::read(&file).expect("read resume file"),
+        want.as_bytes()
+    );
+    assert!(
+        !record_path(scratch.path()).exists(),
+        "the stub ran: R must only write the file"
+    );
+}
+
 macro_rules! rc_shell_tests {
     ($module:ident, $sh:expr) => {
         mod $module {
@@ -583,6 +682,21 @@ macro_rules! rc_shell_tests {
                 let mut p = spawn_pty(cmd);
                 resume_main_worktree(&mut p);
                 assert_main_session_record(r, scratch.path());
+                assert_no_marker(r, scratch.path());
+            }
+
+            #[test]
+            fn rc_r_lands_in_the_copilot_session_cwd_with_resume_argv() {
+                let r = copilot_rig();
+                let Some(tool) = require_tool($sh.name()) else {
+                    return;
+                };
+                let scratch = r.w.scratch();
+                r.warm_cache(scratch.path());
+                let cmd = $sh.rc_command(r, &tool, scratch.path(), &[r.w.root.to_str().unwrap()]);
+                let mut p = spawn_pty(cmd);
+                resume_filtered(&mut p, COPILOT_FILTER);
+                assert_copilot_session_record(r, scratch.path());
                 assert_no_marker(r, scratch.path());
             }
         }

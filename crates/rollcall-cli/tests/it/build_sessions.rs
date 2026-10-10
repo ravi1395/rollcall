@@ -269,6 +269,14 @@ fn thread_rollout_path(d: &Dest, m: &Manifest, t: &crate::support::CodexThread) 
     path.to_string_lossy().into_owned()
 }
 
+/// Every `[[copilot]]` row as `<home>/session-state/<id>/events.jsonl`.
+pub fn build_copilot(w: &World, home: &Path) {
+    for r in &manifest().copilot {
+        let path = home.join("session-state").join(&r.id).join("events.jsonl");
+        write_file(&path, &log_bytes(&w.tokens, &r.lines));
+    }
+}
+
 /// `[[big_log]]`: one Claude project dir holding a single `bytes`-long line without a newline.
 pub fn build_big_log(w: &World) {
     let d = Dest::of(w);

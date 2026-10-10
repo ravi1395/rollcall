@@ -271,7 +271,7 @@ impl Server<'_> {
     }
 
     /// `output::render_session` with `redact_emails` applied, which the pinned signature cannot take.
-    fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 2]) -> SessionOut {
+    fn render(&self, session: &Session, sources: &[Box<dyn SessionSource>; 3]) -> SessionOut {
         let source = sources
             .iter()
             .find(|s| s.kind() == session.source)
@@ -335,9 +335,9 @@ fn tool_list() -> Value {
             "name": "where_was_i",
             "description": format!(
                 "Status of the git repos under a root: each repo's worktrees (branch, dirty and \
-                 unpushed counts, staleness) with the latest Claude Code / Codex session in each, \
-                 plus the most recent sessions across the returned repos. Without `repo`, the \
-                 `limit` repos that most need attention. {UNTRUSTED}"
+                 unpushed counts, staleness) with the latest Claude Code / Codex / GitHub Copilot \
+                 CLI session in each, plus the most recent sessions across the returned repos. \
+                 Without `repo`, the `limit` repos that most need attention. {UNTRUSTED}"
             ),
             "inputSchema": {
                 "type": "object",

@@ -63,7 +63,7 @@
           "excluded_children", "vanished", "matched", "unmatched"
         ],
         "properties": {
-          "source": { "enum": ["claude", "codex"] },
+          "source": { "enum": ["claude", "codex", "copilot"] },
           "mode": { "enum": ["jsonl", "db", "rollouts", "absent"] },
           "db_version": { "type": ["integer", "null"] },
           "files": { "type": "integer", "minimum": 0 },

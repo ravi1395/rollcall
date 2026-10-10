@@ -16,8 +16,10 @@
 # [home]       files { relpath = content } for the sandboxed HOME; expected_suggestions (refused-root list).
 # [[claude]] [[codex_thread]] [[codex_rollout]] [[big_log]] [matching] [perf] [mcp_200] [demo]: P08; keys and rules in
 #   "Session-fixture conventions" below.
+# [[copilot]]   id | worktree { repo, path } | expect (as [[claude]]) | lines: one Copilot CLI session, written to
+#   `$COPILOT_HOME/session-state/<id>/events.jsonl` (plan P3; table at the end of the file).
 # [expect_counts]  hand-counted F_repos, F_worktrees and claude_sessions, codex_db_sessions, codex_rollout_sessions (below).
-# Path tokens in any value: $F $EXT $H $HOME $CODEX_HOME $CLAUDE_PROJECTS $DEMO and $FIFO:<name> (a FIFO the harness creates).
+# Path tokens in any value: $F $EXT $H $HOME $CODEX_HOME $COPILOT_HOME $CLAUDE_PROJECTS $DEMO and $FIFO:<name> (a FIFO the harness creates).
 # special enum: fifo_git symlink_fanout symlink_out_of_root unreadable_dir corrupted bad_gitdir untrusted_path drivers
 #   submodule_lfs worktree_escape commondir_escape symlinked_files worktree_config_symlink big_object hang_probe
 #   hang_probe_worktree_config enclosing_root tree_bomb tree_bomb_long excludes_file   (excludes_file added by P07, spec rev 11)
@@ -3322,3 +3324,23 @@ git_branch = "main"
 archived = false
 first_user_message = "rotate the staging config values"
 
+# ============================== Copilot CLI (spec rev 17, plan P3) ==============================
+# One session of GitHub Copilot CLI: `$COPILOT_HOME/session-state/<id>/events.jsonl`, written by the harness
+# (`build_copilot`) in the key sets the session-15 probe confirmed (HANDOFF.md step 1b). Not in [matching] or
+# [expect_counts]: only the Copilot gates read it. `worktree` is the F worktree its cwd names; `expect` pins what
+# `status --json` prints for it (the first prompt is the title, `last_prompt` the second).
+[[copilot]]
+id = "c0b10001-0000-4000-8000-000000000001"
+worktree = { repo = "f-merged", path = "$F/merged" }
+expect = { title = "PROMPT-MARKER pick up the merged work", title_kind = "prompt", last_prompt = "PROMPT-MARKER second copilot prompt", branch = "main", cwd = "$F/merged", message_count = 2, started_at = "2026-09-27T09:00:00Z", ended_at = "2026-09-27T09:20:00Z" }
+lines = [
+  '{"type":"session.start","data":{"alreadyInUse":false,"context":{"branch":"main","cwd":"$F/merged","gitRoot":"$F/merged"},"contextTier":"default","copilotVersion":"1.0.93","producer":"copilot-agent","remoteSteerable":false,"sessionId":"c0b10001-0000-4000-8000-000000000001","startTime":"2026-09-27T09:00:00.000Z","version":1},"id":"e0000000-0000-4000-8000-000000000001","parentId":null,"timestamp":"2026-09-27T09:00:00.000Z"}',
+  '{"type":"session.model_change","data":{"newModel":"model-x"},"id":"e0000000-0000-4000-8000-000000000002","parentId":"e0000000-0000-4000-8000-000000000001","timestamp":"2026-09-27T09:00:01.000Z"}',
+  '{"type":"user.message","data":{"content":"PROMPT-MARKER pick up the merged work","delivery":"idle","interactionId":"i0","messageId":"m0","parentAgentTaskId":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","supportedNativeDocumentMimeTypes":[],"transformedContent":"PROMPT-MARKER pick up the merged work","turnId":"0"},"id":"e0000000-0000-4000-8000-000000000003","parentId":"e0000000-0000-4000-8000-000000000002","timestamp":"2026-09-27T09:01:00.000Z"}',
+  '{"type":"assistant.turn_start","data":{"turnId":"0"},"id":"e0000000-0000-4000-8000-000000000004","parentId":"e0000000-0000-4000-8000-000000000003","timestamp":"2026-09-27T09:01:01.000Z"}',
+  '{"type":"assistant.message","data":{"messageId":"a0","content":"ok"},"id":"e0000000-0000-4000-8000-000000000005","parentId":"e0000000-0000-4000-8000-000000000004","timestamp":"2026-09-27T09:01:05.000Z"}',
+  '{"type":"assistant.turn_end","data":{"turnId":"0"},"id":"e0000000-0000-4000-8000-000000000006","parentId":"e0000000-0000-4000-8000-000000000005","timestamp":"2026-09-27T09:01:06.000Z"}',
+  '{"type":"user.message","data":{"content":"PROMPT-MARKER second copilot prompt","delivery":"idle","interactionId":"i1","messageId":"m1","parentAgentTaskId":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","supportedNativeDocumentMimeTypes":[],"transformedContent":"PROMPT-MARKER second copilot prompt","turnId":"1"},"id":"e0000000-0000-4000-8000-000000000007","parentId":"e0000000-0000-4000-8000-000000000006","timestamp":"2026-09-27T09:10:00.000Z"}',
+  '{"type":"assistant.message","data":{"messageId":"a1","content":"ok"},"id":"e0000000-0000-4000-8000-000000000008","parentId":"e0000000-0000-4000-8000-000000000007","timestamp":"2026-09-27T09:10:30.000Z"}',
+  '{"type":"session.shutdown","data":{"shutdownType":"routine"},"id":"e0000000-0000-4000-8000-000000000009","parentId":"e0000000-0000-4000-8000-000000000008","timestamp":"2026-09-27T09:20:00.000Z"}',
+]

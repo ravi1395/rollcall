@@ -453,6 +453,7 @@ fn agent_name(source: SourceKind) -> &'static str {
     match source {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     }
 }
 
@@ -802,6 +803,21 @@ mod tests {
         let keys = rows(&buf).pop().unwrap();
         assert!(keys.contains("j/k move"), "{keys}");
         assert!(!keys.contains('R') && !keys.contains('Y'), "{keys}");
+    }
+
+    #[test]
+    fn a_copilot_session_row_shows_the_whole_agent_name() {
+        let mut m = with_sessions();
+        let dirty = &mut m.doc.repos[0].worktrees[1];
+        let last = dirty.last_session.as_mut().unwrap();
+        last.source = SourceKind::Copilot;
+        last.title = Some("fix e2e".to_owned());
+        let buf = render(&m);
+        let row = rows(&buf)
+            .into_iter()
+            .find(|r| r.contains("ui-refine/css"))
+            .unwrap();
+        assert!(row.contains("copilot 2h \"fix e2e\""), "{row}");
     }
 
     #[test]

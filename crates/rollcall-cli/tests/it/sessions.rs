@@ -9,10 +9,10 @@
 //! Units that #7 cites rather than repeats: inode reuse and `parser_version` bumps are P22 unit tests that inject a
 //! prior `FileState` (`jsonl::tests::plan_rereads_for_a_different_inode`, `plan_rereads_when_head_changes`,
 //! `plan_rereads_on_older_parser_version`, `resolve_is_none_for_a_new_inode`).
-use super::build_sessions::{CodexMode, build_big_log, build_corpora, log_bytes};
+use super::build_sessions::{CodexMode, build_big_log, build_copilot, build_corpora, log_bytes};
 use super::support::{
-    Corpus, Expect, Op, Run, Step, StepExpect, StepTo, Tokens, Which, World, expected, fresh,
-    manifest, peak_rss, require_tool, run_rollcall, validate,
+    Corpus, Expect, Op, RUN_DEADLINE, Run, Sandbox, Step, StepExpect, StepTo, Tokens, Which, World,
+    expected, fresh, manifest, peak_rss, require_tool, run_rollcall, spawn_watchdog, validate,
 };
 use rollcall_cli::output::{TextPolicy, render_session};
 use rollcall_core::{Backing, Index, SourceKind, SourceState, TextRef};
@@ -651,6 +651,7 @@ fn incremental_rows(w: &World, kind: SourceKind) -> Vec<Row> {
                 });
             }
         }
+        SourceKind::Copilot => unreachable!("no Copilot incremental steps in the manifest"),
     }
     rows.retain(|r| !r.groups.is_empty());
     rows
@@ -660,6 +661,7 @@ fn kind_name(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Claude => "claude",
         SourceKind::Codex => "codex",
+        SourceKind::Copilot => "copilot",
     }
 }
 
@@ -667,6 +669,7 @@ fn resolve_text(w: &World, kind: SourceKind, r: &TextRef) -> Option<String> {
     match kind {
         SourceKind::Claude => claude_source(w).resolve(r),
         SourceKind::Codex => codex_source(w).resolve(r),
+        SourceKind::Copilot => unreachable!("no Copilot incremental steps in the manifest"),
     }
 }
 
@@ -836,11 +839,13 @@ fn assert_final_session(w: &World, kind: SourceKind, only: &str) {
             .filter(|r| r.id == only)
             .map(|r| (r.id.as_str(), r.expect.as_ref()))
             .collect(),
+        SourceKind::Copilot => unreachable!("no Copilot incremental steps in the manifest"),
     };
     let (claude, codex) = (claude_source(w), codex_source(w));
     let source: &dyn SessionSource = match kind {
         SourceKind::Claude => &claude,
         SourceKind::Codex => &codex,
+        SourceKind::Copilot => unreachable!("no Copilot incremental steps in the manifest"),
     };
     assert_eq!(rows.len(), 1, "no fixture {only}");
     for (id, expect) in rows {
@@ -1011,4 +1016,306 @@ fn a_64_mib_single_line_log_scans_under_the_rss_bound() {
     assert_eq!(num(claude, "files"), 1);
     assert_eq!(num(claude, "sessions"), 0);
     assert_eq!(num(claude, "records"), 0);
+}
+
+// ------------------------------------------------------- Copilot CLI (plan P3)
+
+/// The worktree of the manifest's `[[copilot]]` row in a status document.
+fn copilot_worktree<'a>(w: &World, status: &'a Value) -> &'a Value {
+    let path = w.tokens.subst(&manifest().copilot[0].worktree.path);
+    status["repos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|repo| repo["worktrees"].as_array().into_iter().flatten())
+        .find(|wt| wt["path"] == path.as_str())
+        .unwrap_or_else(|| panic!("status has no worktree at {path}"))
+}
+
+/// P3-2: a Copilot log under `COPILOT_HOME` reaches `status` (source, id, prompt title, count, resume line)
+/// and `doctor` (jsonl mode, one session, matched). The non-null title proves the resolver list holds Copilot.
+#[test]
+fn copilot_session_reaches_status_and_doctor() {
+    let w = fresh(Which::F);
+    build_copilot(&w, &w.sb.copilot_home);
+    let row = &manifest().copilot[0];
+    let want = &row.expect;
+
+    let root = root_arg(&w.root);
+    let status = valid(
+        "status",
+        parse(&run_rollcall(&w, &["status", root, "--json"]), "status"),
+    );
+    let wt = copilot_worktree(&w, &status);
+    let s = &wt["last_session"];
+    let cwd = w.tokens.subst(want.cwd.as_deref().unwrap());
+    assert_eq!(s["source"], "copilot", "{s}");
+    assert_eq!(s["id"], row.id.as_str());
+    assert_eq!(s["title"], want.title.as_deref().unwrap());
+    assert_eq!(s["title_kind"], want.title_kind.as_deref().unwrap());
+    assert_eq!(s["last_prompt"], want.last_prompt.as_deref().unwrap());
+    assert_eq!(s["branch"], want.branch.as_deref().unwrap());
+    assert_eq!(s["cwd"], cwd.as_str());
+    assert_eq!(s["message_count"], want.message_count.unwrap());
+    assert_eq!(s["started_at"], want.started_at.as_deref().unwrap());
+    assert_eq!(s["ended_at"], want.ended_at.as_deref().unwrap());
+    assert_eq!(
+        s["resume"],
+        format!("cd -- '{cwd}' && copilot --resume {}", row.id).as_str()
+    );
+
+    let diag = doctor(&w, &w.root, &["--no-scan"]);
+    let copilot = source(&diag, "copilot");
+    assert_eq!(copilot["mode"], "jsonl", "{copilot}");
+    assert_eq!(num(copilot, "sessions"), 1);
+    assert_eq!(num(copilot, "matched"), 1);
+}
+
+/// P3-3: `COPILOT_HOME=""` and an unset `COPILOT_HOME` both fall back to `$HOME/.copilot`. The control run keeps
+/// the sandbox's non-empty `COPILOT_HOME` (an empty directory) and must not see the session, so a fallback that
+/// ignored the variable's value would not pass either way.
+#[test]
+fn copilot_home_empty_or_unset_falls_back_to_home_dot_copilot() {
+    let w = fresh(Which::F);
+    build_copilot(&w, &w.sb.home.join(".copilot"));
+    let root = empty_root(&w);
+    let sessions_seen = |case: &str, empty: bool, unset: bool| -> u64 {
+        let cache = w.scratch();
+        let cache_dir = cache.path().to_str().expect("temp paths are UTF-8");
+        let env: &[(&str, &str)] = if empty {
+            &[("XDG_CACHE_HOME", cache_dir), ("COPILOT_HOME", "")]
+        } else {
+            &[("XDG_CACHE_HOME", cache_dir)]
+        };
+        let mut cmd = w.sb.rollcall(&["doctor", root_arg(&root), "--json"], env);
+        if unset {
+            cmd.env_remove("COPILOT_HOME");
+        }
+        let out =
+            spawn_watchdog(cmd, RUN_DEADLINE).unwrap_or_else(|e| panic!("doctor ({case}): {e}"));
+        let doc = valid("doctor", parse(&Run::from(out), case));
+        num(source(&doc, "copilot"), "sessions")
+    };
+    assert_eq!(sessions_seen("sandbox value", false, false), 0);
+    assert_eq!(sessions_seen("empty value", true, false), 1);
+    assert_eq!(sessions_seen("unset", false, true), 1);
+}
+
+// ------------------------------------------------ store-root edges (spec 5.0, P3-12)
+
+/// One source's store layout: its env variable, the source name in `doctor`, and the directory under the
+/// variable's value that holds the logs.
+#[derive(Clone, Copy)]
+struct Store {
+    kind: SourceKind,
+    name: &'static str,
+    var: &'static str,
+    inner: &'static str,
+}
+
+const CLAUDE_STORE: Store = Store {
+    kind: SourceKind::Claude,
+    name: "claude",
+    var: "CLAUDE_CONFIG_DIR",
+    inner: "projects",
+};
+const CODEX_STORE: Store = Store {
+    kind: SourceKind::Codex,
+    name: "codex",
+    var: "CODEX_HOME",
+    inner: "sessions",
+};
+const COPILOT_STORE: Store = Store {
+    kind: SourceKind::Copilot,
+    name: "copilot",
+    var: "COPILOT_HOME",
+    inner: "session-state",
+};
+const EDGE_ID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+impl Store {
+    /// Where the log of session `id` sits inside the inner directory `dir`.
+    fn log_path(&self, dir: &Path, id: &str) -> PathBuf {
+        match self.kind {
+            SourceKind::Claude => dir.join("p").join(format!("{id}.jsonl")),
+            SourceKind::Codex => dir
+                .join("2026/09/27")
+                .join(format!("rollout-2026-09-27T15-00-00-{id}.jsonl")),
+            SourceKind::Copilot => dir.join(id).join("events.jsonl"),
+        }
+    }
+
+    /// A one-prompt session `id` in the inner directory `dir`; returns its log.
+    fn write_session(&self, dir: &Path, id: &str) -> PathBuf {
+        let (cwd, at) = ("/work/edge", "2026-09-27T15:00:00.000Z");
+        let lines = match self.kind {
+            SourceKind::Claude => vec![
+                json!({"type":"user","sessionId":id,"timestamp":at,"cwd":cwd,
+                "gitBranch":"main","isSidechain":false,
+                "message":{"role":"user","content":"PROMPT-MARKER edge"}}),
+            ],
+            SourceKind::Codex => vec![
+                json!({"timestamp":at,"type":"session_meta","payload":{"id":id,"timestamp":at,"cwd":cwd,
+                    "git":{"branch":"main"}}}),
+                json!({"timestamp":at,"type":"event_msg",
+                    "payload":{"type":"user_message","message":"PROMPT-MARKER edge"}}),
+            ],
+            SourceKind::Copilot => vec![
+                json!({"type":"session.start","timestamp":at,"data":{"sessionId":id,"version":1,
+                    "context":{"branch":"main","cwd":cwd,"gitRoot":cwd}}}),
+                json!({"type":"user.message","timestamp":at,
+                    "data":{"content":"PROMPT-MARKER edge","delivery":"idle"}}),
+            ],
+        };
+        let path = self.log_path(dir, id);
+        fs::create_dir_all(path.parent().unwrap()).expect("create the session dir");
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        fs::write(&path, text).expect("write the session log");
+        path
+    }
+
+    /// `doctor --json` of the real binary with `var` set to `value` (and `cwd`, when given) over a fresh cache
+    /// and an empty scan root; returns the source's `sessions` count and the cache's session ids.
+    fn doctor_sessions(
+        &self,
+        tmp: &Path,
+        value: &Path,
+        cwd: Option<&Path>,
+    ) -> (u64, BTreeSet<String>) {
+        let sb = Sandbox::new(&tmp.join("sandbox"));
+        let (cache, root) = (tmp.join("cache"), tmp.join("scan-root"));
+        fs::create_dir_all(&root).expect("create the scan root");
+        let mut cmd = sb.rollcall(
+            &["doctor", root_arg(&root), "--json"],
+            &[("XDG_CACHE_HOME", root_arg(&cache))],
+        );
+        cmd.env(self.var, value);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        let out = spawn_watchdog(cmd, RUN_DEADLINE)
+            .unwrap_or_else(|e| panic!("{} doctor: {e}", self.name));
+        let doc = valid("doctor", parse(&Run::from(out), self.name));
+        let index = SqliteIndex::open(&rollcall_store::cache_dir(&sb.home, Some(&cache)))
+            .expect("open the scan cache");
+        let ids = index
+            .source_state(self.kind)
+            .sessions
+            .iter()
+            .map(|s| s.id.as_str().to_owned())
+            .collect();
+        (num(source(&doc, self.name), "sessions"), ids)
+    }
+
+    /// (a) A relative variable resolves against the process cwd: found from the directory holding the store,
+    /// not found from the one above it.
+    fn relative_env_dir_resolves_against_the_cwd(&self) {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let tmp = fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let (parent, store) = (tmp.join("rel"), tmp.join("rel/store"));
+        self.write_session(&store.join(self.inner), EDGE_ID);
+        let rel = Path::new("store");
+        assert_eq!(self.doctor_sessions(&tmp, rel, Some(&parent)).0, 1);
+        assert_eq!(self.doctor_sessions(&tmp, rel, Some(&tmp)).0, 0);
+    }
+
+    /// (b) The variable's directory may itself be a symlink to the store.
+    fn symlinked_env_dir_is_followed(&self) {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let tmp = fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        self.write_session(&tmp.join("real").join(self.inner), EDGE_ID);
+        std::os::unix::fs::symlink(tmp.join("real"), tmp.join("link"))
+            .expect("symlink the env dir");
+        assert_eq!(self.doctor_sessions(&tmp, &tmp.join("link"), None).0, 1);
+    }
+
+    /// (c) The inner directory (`projects` / `sessions` / `session-state`) may be a symlink to a real one.
+    fn symlinked_inner_dir_is_followed(&self) {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let tmp = fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        self.write_session(&tmp.join("real-inner"), EDGE_ID);
+        let env = tmp.join("env");
+        fs::create_dir_all(&env).expect("create the env dir");
+        std::os::unix::fs::symlink(tmp.join("real-inner"), env.join(self.inner))
+            .expect("symlink the inner dir");
+        assert_eq!(self.doctor_sessions(&tmp, &env, None).0, 1);
+    }
+
+    /// (d) Ids differing only by letter case are two sessions, each id as written. Skipped on a
+    /// case-insensitive filesystem, where the second name aliases the first.
+    fn ids_differing_by_case_are_two_sessions(&self) {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let tmp = fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let inner = tmp.join("env").join(self.inner);
+        let (upper, lower) = (EDGE_ID.to_ascii_uppercase(), EDGE_ID);
+        self.write_session(&inner, &upper);
+        if self.log_path(&inner, lower).exists() {
+            eprintln!("skipped: case-insensitive filesystem");
+            return;
+        }
+        self.write_session(&inner, lower);
+        let (n, ids) = self.doctor_sessions(&tmp, &tmp.join("env"), None);
+        assert_eq!(n, 2);
+        assert_eq!(ids, BTreeSet::from([upper, lower.to_owned()]));
+    }
+}
+
+#[test]
+fn claude_relative_config_dir_resolves_against_the_cwd() {
+    CLAUDE_STORE.relative_env_dir_resolves_against_the_cwd();
+}
+
+#[test]
+fn codex_relative_home_resolves_against_the_cwd() {
+    CODEX_STORE.relative_env_dir_resolves_against_the_cwd();
+}
+
+#[test]
+fn copilot_relative_home_resolves_against_the_cwd() {
+    COPILOT_STORE.relative_env_dir_resolves_against_the_cwd();
+}
+
+#[test]
+fn claude_symlinked_config_dir_is_followed() {
+    CLAUDE_STORE.symlinked_env_dir_is_followed();
+}
+
+#[test]
+fn codex_symlinked_home_is_followed() {
+    CODEX_STORE.symlinked_env_dir_is_followed();
+}
+
+#[test]
+fn copilot_symlinked_home_is_followed() {
+    COPILOT_STORE.symlinked_env_dir_is_followed();
+}
+
+#[test]
+fn claude_symlinked_projects_dir_is_followed() {
+    CLAUDE_STORE.symlinked_inner_dir_is_followed();
+}
+
+#[test]
+fn codex_symlinked_sessions_dir_is_followed() {
+    CODEX_STORE.symlinked_inner_dir_is_followed();
+}
+
+#[test]
+fn copilot_symlinked_session_state_dir_is_followed() {
+    COPILOT_STORE.symlinked_inner_dir_is_followed();
+}
+
+#[test]
+fn claude_session_ids_differing_by_case_are_two_sessions() {
+    CLAUDE_STORE.ids_differing_by_case_are_two_sessions();
+}
+
+#[test]
+fn codex_session_ids_differing_by_case_are_two_sessions() {
+    CODEX_STORE.ids_differing_by_case_are_two_sessions();
+}
+
+#[test]
+fn copilot_session_ids_differing_by_case_are_two_sessions() {
+    COPILOT_STORE.ids_differing_by_case_are_two_sessions();
 }

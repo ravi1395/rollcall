@@ -18,6 +18,7 @@ pub struct EnvPaths {
     pub xdg_cache_home: Option<PathBuf>,
     pub claude_config_dir: Option<PathBuf>,
     pub codex_home: Option<PathBuf>,
+    pub copilot_home: Option<PathBuf>,
     /// Raw `PATH`; `resume::find_agent` keeps only its absolute entries.
     pub path: Option<OsString>,
     pub visual: Option<OsString>,
@@ -40,6 +41,7 @@ impl EnvPaths {
             xdg_cache_home: path("XDG_CACHE_HOME"),
             claude_config_dir: path("CLAUDE_CONFIG_DIR"),
             codex_home: path("CODEX_HOME"),
+            copilot_home: path("COPILOT_HOME"),
             path: std::env::var_os("PATH"),
             visual: nonempty("VISUAL"),
             editor: nonempty("EDITOR"),

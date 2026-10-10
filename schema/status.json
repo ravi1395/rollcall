@@ -74,7 +74,7 @@
         "last_prompt", "message_count", "resume"
       ],
       "properties": {
-        "source": { "enum": ["claude", "codex"] },
+        "source": { "enum": ["claude", "codex", "copilot"] },
         "id": { "type": "string" },
         "branch": { "type": ["string", "null"] },
         "cwd": { "type": "string" },

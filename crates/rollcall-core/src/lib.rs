@@ -69,6 +69,7 @@ impl From<Uuid> for String {
 pub enum SourceKind {
     Claude,
     Codex,
+    Copilot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -998,10 +999,23 @@ mod tests {
             (s(&RepoKind::ExternalMain), "external_main"),
             (s(&SourceKind::Claude), "claude"),
             (s(&SourceKind::Codex), "codex"),
+            (s(&SourceKind::Copilot), "copilot"),
             (s(&SourceMode::Absent), "absent"),
         ] {
             assert_eq!(got, json!(want));
         }
+    }
+
+    #[test]
+    fn copilot_source_kind_round_trips_by_name() {
+        assert_eq!(
+            serde_json::to_value(SourceKind::Copilot).unwrap(),
+            json!("copilot")
+        );
+        assert_eq!(
+            serde_json::from_value::<SourceKind>(json!("copilot")).unwrap(),
+            SourceKind::Copilot
+        );
     }
 
     mod erased {
