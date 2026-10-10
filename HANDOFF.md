@@ -3,15 +3,16 @@
 **Status: ACTIVE.** Supersedes session 15 (byte copy: `.handoffs/20261009-120750-consumed-HANDOFF.md`; Copilot probe results, step 1b, live there).
 
 ## Next step
-1. **Author:** §12.2 manual smoke (Q-g, non-gating): in zsh, `eval "$(~/Projects/rollcall/target/debug/rollcall init zsh)"`, then `rc <dir holding the /cd session's repo>`, select the copilot row, press `R`; `copilot` should resume that session in its post-`/cd` cwd. Not run by Claude (interactive).
-2. **Author:** approve `git push -u origin impl/copilot` (branch has no upstream; never bare `git push`), then open a PR to `main`.
-3. Optional (skeptic notes, not acceptance failures): re-add a one-line `:60 → :59` pin to `copilot::tests::the_envelope_timestamp_is_strict_rfc_3339` (the ignored probe was deleted per answer (l), so a jiff bump that stops clamping has no test); `copilot.rs:299-302` counts a log that turned into a FIFO/symlink as `vanished` while still adding to `files` (same as `claude.rs`).
+1. **Review and merge the PR** `impl/copilot` → `main` (`gh pr view impl/copilot --web`). CI is billing-blocked, so its checks will not run.
+2. Optional (skeptic notes, not acceptance failures): re-add a one-line `:60 → :59` pin to `copilot::tests::the_envelope_timestamp_is_strict_rfc_3339` (the ignored probe was deleted per answer (l), so a jiff bump that stops clamping has no test); `copilot.rs:299-302` counts a log that turned into a FIFO/symlink as `vanished` while still adding to `files` (same as `claude.rs`).
 
 ## Done (verified)
 - **Implement stage** (workflow `rollcall-copilot` `{stage:"implement", specApproved:true}`, run `wf_b1032c95-609`, 32 agents, ~113 min): P1 accepted (r2), P2 accepted (r1), P3 accepted (r1). Commits `c760836 762c9fe 4edc032 93d58e4 2966977 33a669e 0fcc758`. Its final skeptic failed only P1-12/P3-11 (6 ignored vs 4: two AMBIGUOUS breaker tests left `#[ignore]`d).
 - **Author answers (h)–(l)** (below) applied: `32ab23a` (strict RFC 3339 Copilot timestamps, non-empty-string `agentId`, store-root tests for all three sources; spec §5.0/§5.3 + Status, ACCEPTANCE P2-19(e)/P2-21/P3-12). Breaker r3 (Fable) on `32ab23a`: 3 BROKEN (fraction > 9 digits rejected; offset hour 24/25 accepted) fixed in `df310da`, tests kept in `crates/rollcall-sessions/tests/breaker_copilot_r3.rs`.
 - **Final gate (Fable skeptic) PASS** on `d943c95..df310da`: P1-1..12, P2-1..21, P3-1..12 all met; mutation probes on the offset-hour bound, fraction cut and `has_agent` each turned a named test red; Cargo files unchanged; only R1-approved structural edits.
 - **R2 gate** (main loop, `df310da`): `cargo fmt --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked` → exit 0, 1077 passed / 0 failed / 4 ignored.
+- **§12.2 author smoke passed** (2026-10-10): in a Terminal panel tab, `PATH=<repo>/target/debug:$PATH`, `eval "$(rollcall init zsh)"`, `rc ~/Projects/scrath`; the TUI showed `scrath/main` with last session `copilot b254628…` (the `/cd` session; 2 older), `R` resumed it in `copilot`, author confirmed "it resumed". Note: `rc` runs `command rollcall`, and `~/.cargo/bin/rollcall` is an older claude/codex-only build; until it is reinstalled (`cargo install --path crates/rollcall-cli --locked --force`) it shows `quiet —` for Copilot-only worktrees. `R` resumes the selected worktree's last session only.
+- **Pushed** `impl/copilot` to `origin` by the author (2026-10-09), upstream `origin/impl/copilot`.
 - **P5 real data** (main loop; real `~/.copilot` read-only via `COPILOT_HOME`, scratch HOME/XDG/CLAUDE/CODEX dirs, counts only, no prompt text): copilot doctor `{mode jsonl, files 3, records 54, sessions 3, malformed 0, unknown_type 0, oversize 0, non_uuid 0, excluded_children 0}` (records = 22+29+3 lines), identical after `df310da`; `/cd` session via `status --json` on its git root: found 1, cwd == post-`/cd` settled cwd **true**, branch equal **true**, resume plan present, `title_kind` prompt, `message_count` 1.
 
 ## In progress
@@ -28,7 +29,7 @@
 - CI billing-blocked (every job 0 steps).
 
 ## Gotchas
-- `impl/copilot` is local with **no upstream**; push with `-u origin impl/copilot`.
+- Installed `~/.cargo/bin/rollcall` predates Copilot support; reinstall after merge.
 - Local `main` is stale (`f7ada95`); use `origin/main`.
 - Homebrew formula `copilot` is AWS Copilot (same binary name); GitHub Copilot CLI is the cask `copilot-cli`.
 - Never print prompt text from `~/.copilot`; never read `~/.config/github-copilot/apps.json` (tokens).
