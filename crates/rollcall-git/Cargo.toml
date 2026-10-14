@@ -14,7 +14,7 @@ test-hooks = []
 
 [dependencies]
 rollcall-core = { path = "../rollcall-core" }
-gix = { version = "0.88", default-features = false, features = ["sha1", "status", "revision"] }
+gix = { version = "0.89", default-features = false, features = ["sha1", "status", "revision"] }
 libc = "0.2"
 
 [dev-dependencies]
